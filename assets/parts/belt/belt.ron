@@ -1,0 +1,19 @@
+PartConfig (
+    name: "Belt",
+    typ: Belt(
+        speed: 1.0,
+    ),
+    ports: [
+            (
+                typ: Input,
+                flow: 1.0,
+                snap_position: (0.0, 0.0, -0.5),
+            ),
+            (
+                typ: Output,
+                flow: 1.0,
+                snap_position: (0.0, 0.0, 0.5),
+            ),
+        ],
+    location: Factory,
+)

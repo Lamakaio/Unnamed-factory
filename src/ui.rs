@@ -5,7 +5,7 @@ use bevy::{
     prelude::*,
 };
 
-use crate::parts::{setup_parts, Part, PartId, PartIdMap};
+use crate::parts::{PartId, Parts, setup_parts};
 pub struct UFGUiPlugin;
 
 impl Plugin for UFGUiPlugin {
@@ -23,7 +23,7 @@ pub struct PartButton {
     part_id: PartId,
 }
 
-fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<PartIdMap>) {
+fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<Parts>) {
     // root node
     commands
         .spawn(Node {
@@ -79,9 +79,9 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<P
                                 })
                                 .with_children(|parent| {
                                     // List items
-                                    let mut parts_vec : Vec<(&PartId, &Part)>= parts.0.iter().collect();
-                                    parts_vec.sort_by(|(_, p1), (_, p2)| p1.name.cmp(&p2.name));
-                                    for (pid, p) in parts_vec {
+                                    let mut parts_vec = parts.0.clone();
+                                    parts_vec.sort_by(|p1, p2| p1.config.name.cmp(&p2.config.name));
+                                    for p in parts_vec {
                                         parent
                                             .spawn((
                                                 Button,
@@ -95,12 +95,14 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<P
                                                     should_block_lower: false,
                                                     ..default()
                                                 },
-                                                PartButton {part_id: *pid}
+                                                PartButton {
+                                                    part_id: PartId(p.clone()),
+                                                },
                                             ))
                                             .with_children(|parent| {
                                                 parent
                                                     .spawn((
-                                                        Text(format!("Item {:}", p.name)),
+                                                        Text(format!("Item {:}", p.config.name)),
                                                         TextFont {
                                                             font: asset_server
                                                                 .load("fonts/FiraSans-Bold.ttf"),
@@ -125,10 +127,10 @@ pub fn update_scroll_position(
     mut mouse_wheel_events: EventReader<MouseWheel>,
     hover_map: Res<HoverMap>,
     mut scrolled_node_query: Query<&mut ScrollPosition>,
-    keyboard_input: Res<ButtonInput<KeyCode>>,
+    //keyboard_input: Res<ButtonInput<KeyCode>>,
 ) {
     for mouse_wheel_event in mouse_wheel_events.read() {
-        let (mut dx, mut dy) = match mouse_wheel_event.unit {
+        let (_, dy) = match mouse_wheel_event.unit {
             MouseScrollUnit::Line => (
                 mouse_wheel_event.x * LINE_HEIGHT,
                 mouse_wheel_event.y * LINE_HEIGHT,
@@ -136,16 +138,9 @@ pub fn update_scroll_position(
             MouseScrollUnit::Pixel => (mouse_wheel_event.x, mouse_wheel_event.y),
         };
 
-        if keyboard_input.pressed(KeyCode::ControlLeft)
-            || keyboard_input.pressed(KeyCode::ControlRight)
-        {
-            std::mem::swap(&mut dx, &mut dy);
-        }
-
         for (_pointer, pointer_map) in hover_map.iter() {
             for (entity, _hit) in pointer_map.iter() {
                 if let Ok(mut scroll_position) = scrolled_node_query.get_mut(*entity) {
-                    scroll_position.offset_x -= dx;
                     scroll_position.offset_y -= dy;
                 }
             }
@@ -160,7 +155,12 @@ const PRESSED_BUTTON: Color = Color::srgb(0.35, 0.75, 0.35);
 fn button_system(
     mut commands: Commands,
     mut interaction_query: Query<
-        (&Interaction, &mut BackgroundColor, &mut BorderColor, &PartButton),
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &PartButton,
+        ),
         (Changed<Interaction>, With<Button>),
     >,
 ) {
@@ -169,7 +169,7 @@ fn button_system(
             Interaction::Pressed => {
                 *color = PRESSED_BUTTON.into();
                 border_color.0 = RED.into();
-                commands.spawn(part_button.part_id);
+                commands.spawn(part_button.part_id.clone());
             }
             Interaction::Hovered => {
                 *color = HOVERED_BUTTON.into();

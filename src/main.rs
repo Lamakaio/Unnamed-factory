@@ -124,11 +124,10 @@ fn orbit(
 
     let current_distance = camera.translation.distance(target);
     let delta_scroll = mouse_scroll.delta.y;
-    let distance = (current_distance
-        + delta_scroll
-            * camera_settings.zoom_speed * current_distance).clamp(
-                camera_settings.orbit_distance.start,
-                camera_settings.orbit_distance.end,
-            );
+    let distance =
+        (current_distance + delta_scroll * camera_settings.zoom_speed * current_distance).clamp(
+            camera_settings.orbit_distance.start,
+            camera_settings.orbit_distance.end,
+        );
     camera.translation = target - camera.forward() * distance;
 }

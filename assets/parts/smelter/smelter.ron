@@ -1,0 +1,19 @@
+PartConfig (
+    name: "Smelter",
+    typ: Machine(
+        recipe_typ: Smelt,
+    ),
+    ports: [
+            (
+                typ: Input,
+                flow: 1.0,
+                snap_position: (0.0, 0.0, -0.5),
+            ),
+            (
+                typ: Output,
+                flow: 1.0,
+                snap_position: (0.0, 0.0, 0.5),
+            ),
+        ],
+    location: Factory,
+)
