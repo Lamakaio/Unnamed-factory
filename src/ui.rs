@@ -5,7 +5,7 @@ use bevy::{
     prelude::*,
 };
 
-use crate::parts::{PartId, Parts, setup_parts};
+use crate::parts::{BuildId, Buildings, setup_parts};
 pub struct UFGUiPlugin;
 
 impl Plugin for UFGUiPlugin {
@@ -20,10 +20,10 @@ const LINE_HEIGHT: f32 = 21.;
 
 #[derive(Component)]
 pub struct PartButton {
-    part_id: PartId,
+    part_id: BuildId,
 }
 
-fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<Parts>) {
+fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<Buildings>) {
     // root node
     commands
         .spawn(Node {
@@ -96,7 +96,7 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<P
                                                     ..default()
                                                 },
                                                 PartButton {
-                                                    part_id: PartId(p.clone()),
+                                                    part_id: BuildId(p.clone()),
                                                 },
                                             ))
                                             .with_children(|parent| {
@@ -179,6 +179,7 @@ fn button_system(
                 *color = NORMAL_BUTTON.into();
                 border_color.0 = Color::BLACK;
             }
+            
         }
     }
 }

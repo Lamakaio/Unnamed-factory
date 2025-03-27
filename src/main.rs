@@ -9,7 +9,7 @@ use bevy::{
     pbr::wireframe::{WireframeConfig, WireframePlugin},
     prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin},
 };
-use parts::PartsPlugin;
+use parts::BuildPlugin;
 use ui::UFGUiPlugin;
 
 fn main() {
@@ -22,7 +22,7 @@ fn main() {
     .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, setup_3d)
-    .add_plugins((PartsPlugin, UFGUiPlugin))
+    .add_plugins((BuildPlugin, UFGUiPlugin))
     .add_systems(Update, (toggle_wireframe, orbit));
 
     app.run();
@@ -56,8 +56,8 @@ impl Default for CameraSettings {
 
 fn setup_3d(
     mut commands: Commands,
-    //mut meshes: ResMut<Assets<Mesh>>,
-    //mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn((
         PointLight {
@@ -70,11 +70,11 @@ fn setup_3d(
         Transform::from_xyz(8.0, 16.0, 8.0),
     ));
 
-    // ground plane
-    // commands.spawn((
-    //     Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0).subdivisions(10))),
-    //     MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
-    // ));
+    //ground plane
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0, 500.0).subdivisions(100))),
+        MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
+    ));
 
     commands.spawn((
         Camera3d::default(),

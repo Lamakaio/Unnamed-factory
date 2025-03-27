@@ -1,118 +1,74 @@
-use std::{fs::File, sync::Arc};
+use std::sync::Arc;
 
 use bevy::{
-    asset::RenderAssetUsages,
-    prelude::*,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    scene::SceneInstance,
+    asset::RenderAssetUsages, math::NormedVectorSpace, pbr::wireframe::{Wireframe, WireframeColor}, prelude::*, render::{
+        primitives::Aabb,
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
+    }, scene::SceneInstance
 };
-use ron::de::from_reader;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Component)]
-pub struct PartId(pub Arc<Part>);
+pub struct BuildId(pub Arc<Building>);
 
 #[derive(Component)]
-pub struct SelectedPart;
-pub struct PartsPlugin;
+pub struct SelectedBuild {
+    resizable: bool,
+}
 
-impl Plugin for PartsPlugin {
+pub struct BuildPlugin;
+
+impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_parts);
         app.add_systems(
             Update,
-            (spawn_parts_from_part_id, part_follow_cursor, place_part),
+            (spawn_build_from_part_id, build_follow_cursor, place_build),
         );
-        app.insert_resource(Parts::default());
+        app.insert_resource(Buildings::default());
+        app.insert_resource(SavedShapes::default());
     }
 }
 
-pub struct Part {
-    model: PartModelType,
-    pub config: PartConfig,
+pub struct Building {
+    pub typ: BuildingType,
+    pub config: BuildConfig,
 }
 
-pub enum PartModelType {
+pub enum BuildModelType {
     Scene(Handle<Scene>),
     MeshMaterial(Handle<Mesh>, Handle<StandardMaterial>),
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum PortType {
-    Input,
-    Output,
+pub enum BuildingType {
+    Zone { color: Color },
+    Single { model: BuildModelType },
 }
-
 #[derive(Serialize, Deserialize)]
-pub struct Port {
-    pub typ: PortType,
-    pub flow: f32,
-    pub snap_position: Vec3,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum PartType {
-    Belt { speed: f32 },
-    Machine { recipe_typ: RecipeTyp },
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum RecipeTyp {
-    Smelt,
-    Craft,
-    Mine,
-    None,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum PartLocation {
-    Factory,
-    Way,
-    Vehicle,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct PartConfig {
+pub struct BuildConfig {
     pub name: String,
-    pub typ: PartType,
-    pub ports: Vec<Port>,
-    pub location: PartLocation,
 }
 
-impl PartConfig {
+impl BuildConfig {
     fn placeholder(i: usize) -> Self {
         Self {
             name: format!("placeholder {i}"),
-            typ: PartType::Machine {
-                recipe_typ: RecipeTyp::None,
-            },
-            ports: vec![],
-            location: PartLocation::Factory,
         }
     }
 }
 
-fn load_part(name: String, asset_server: &AssetServer, parts: &mut Parts) -> anyhow::Result<()> {
-    let handle: Handle<Scene> =
-        asset_server.load(GltfAssetLabel::Scene(0).from_asset(format!("parts/{name}/{name}.glb")));
-    let f = File::open(format!("assets/parts/{name}/{name}.ron"))?; //TODO : do that async somehow
-    let config: PartConfig = from_reader(f)?;
-    let part = Arc::new(Part {
-        model: PartModelType::Scene(handle),
-        config,
-    });
-    parts.0.push(part.clone());
-    Ok(())
-}
+#[derive(Resource, Default)]
+pub struct Buildings(pub Vec<Arc<Building>>);
 
 #[derive(Resource, Default)]
-pub struct Parts(pub Vec<Arc<Part>>);
+pub struct SavedShapes(Vec<Handle<Mesh>>);
 
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut parts: ResMut<Parts>,
-    asset_server: Res<AssetServer>,
+    mut parts: ResMut<Buildings>,
+    mut shapes: ResMut<SavedShapes>,
+    //asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let debug_material = materials.add(StandardMaterial {
@@ -120,17 +76,20 @@ pub fn setup_parts(
         ..default()
     });
 
-    let shapes = [
-        meshes.add(Cuboid::default()),
-        meshes.add(Tetrahedron::default()),
-        meshes.add(Capsule3d::default()),
-        meshes.add(Torus::default()),
-        meshes.add(Cylinder::default()),
-        meshes.add(Cone::default()),
-        meshes.add(ConicalFrustum::default()),
-        meshes.add(Sphere::default().mesh().ico(5).unwrap()),
-        meshes.add(Sphere::default().mesh().uv(32, 18)),
-    ];
+    shapes.0.push(meshes.add(Cuboid::default()));
+
+    shapes.0.push(meshes.add(Tetrahedron::default()));
+    shapes.0.push(meshes.add(Capsule3d::default()));
+    shapes.0.push(meshes.add(Torus::default()));
+    shapes.0.push(meshes.add(Cylinder::default()));
+    shapes.0.push(meshes.add(Cone::default()));
+    shapes.0.push(meshes.add(ConicalFrustum::default()));
+    shapes
+        .0
+        .push(meshes.add(Sphere::default().mesh().ico(5).unwrap()));
+    shapes
+        .0
+        .push(meshes.add(Sphere::default().mesh().uv(32, 18)));
 
     let extrusions = [
         meshes.add(Extrusion::new(Rectangle::default(), 1.)),
@@ -142,16 +101,29 @@ pub fn setup_parts(
         meshes.add(Extrusion::new(Triangle2d::default(), 1.)),
     ];
 
-    for (i, shape) in shapes.into_iter().chain(extrusions.into_iter()).enumerate() {
-        parts.0.push(Arc::new(Part {
-            model: PartModelType::MeshMaterial(shape.clone(), debug_material.clone()),
-            config: PartConfig::placeholder(i),
+    for (i, shape) in shapes
+        .0
+        .iter()
+        .cloned()
+        .chain(extrusions.into_iter())
+        .enumerate()
+    {
+        parts.0.push(Arc::new(Building {
+            typ: BuildingType::Single {
+                model: BuildModelType::MeshMaterial(shape.clone(), debug_material.clone()),
+            },
+            config: BuildConfig::placeholder(i),
         }));
     }
 
-    load_part("belt".into(), &*asset_server, &mut *parts).unwrap();
-    load_part("miner".into(), &*asset_server, &mut *parts).unwrap();
-    load_part("smelter".into(), &*asset_server, &mut *parts).unwrap();
+    parts.0.push(Arc::new(Building {
+        typ: BuildingType::Zone {
+            color: Color::from(bevy::color::palettes::css::LIGHT_GREEN),
+        },
+        config: BuildConfig {
+            name: "a_zonetest".into(),
+        },
+    }))
 }
 
 /// Creates a colorful test pattern
@@ -183,24 +155,42 @@ fn uv_debug_texture() -> Image {
     )
 }
 
-fn spawn_parts_from_part_id(
+fn spawn_build_from_part_id(
     mut commands: Commands,
-    interaction_query: Query<(Entity, &PartId), Without<Transform>>,
+    shapes: Res<SavedShapes>,
+    interaction_query: Query<(Entity, &BuildId), Without<Transform>>,
+    button: Res<ButtonInput<MouseButton>>,
 ) {
+    if button.pressed(MouseButton::Left) {
+        return;
+    }
     for (e, p) in &interaction_query {
         let part = &p.0;
 
-        match &part.model {
-            PartModelType::Scene(scene) => commands.entity(e).insert((
+        match &part.typ {
+            BuildingType::Single {
+                model: BuildModelType::Scene(scene),
+            } => commands.entity(e).insert((
                 SceneRoot(scene.clone()),
                 Transform::default(),
-                SelectedPart,
+                SelectedBuild { resizable: false },
             )),
-            PartModelType::MeshMaterial(mesh, mat) => commands.entity(e).insert((
+            BuildingType::Single {
+                model: BuildModelType::MeshMaterial(mesh, mat),
+            } => commands.entity(e).insert((
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(mat.clone()),
                 Transform::default(),
-                SelectedPart,
+                SelectedBuild { resizable: false },
+            )),
+            BuildingType::Zone { color } => commands.entity(e).insert((
+                Mesh3d(shapes.0[0].clone()),
+                Wireframe,
+                WireframeColor {
+                    color: color.clone(),
+                },
+                Transform::default(),
+                SelectedBuild { resizable: true },
             )),
         };
     }
@@ -208,14 +198,13 @@ fn spawn_parts_from_part_id(
 
 //const DEFAULT_RAY_DISTANCE: f32 = 10.;
 
-fn part_follow_cursor(
+fn build_follow_cursor(
     mut ray_cast: MeshRayCast,
     scene_spawner: Res<SceneSpawner>,
     camera_query: Single<(&Camera, &GlobalTransform)>,
     windows: Single<&Window>,
-    selected_part_query: Option<
-        Single<(Entity, &mut Transform, Option<&SceneInstance>), With<SelectedPart>>,
-    >,
+    selected_part_query: Option<Single<(Entity, &mut Transform, &SelectedBuild, &Aabb)>>,
+    button: Res<ButtonInput<MouseButton>>,
 ) {
     let Some(selpart) = selected_part_query else {
         return;
@@ -230,27 +219,15 @@ fn part_follow_cursor(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
         return;
     };
-    let (e, mut part_transform, scene_instance) = selpart.into_inner();
+    let (e, mut part_transform, selected_build, aabb) = selpart.into_inner();
 
     // Cast the ray to get hit to the nearest different object
-    // In case current component is a scene, the ray needs to ignore every entity in that scene
-    let hits = if let Some(scene_instance) = scene_instance {
-        let filter = |entity: Entity| {
-            scene_spawner
-                .iter_instance_entities(**scene_instance)
-                .all(|e| e != entity)
-        };
-        let settings = RayCastSettings::default()
-            .always_early_exit()
-            .with_filter(&filter);
-        ray_cast.cast_ray(ray, &settings)
-    } else {
-        let filter = |entity: Entity| entity != e;
-        let settings = RayCastSettings::default()
-            .always_early_exit()
-            .with_filter(&filter);
-        ray_cast.cast_ray(ray, &settings)
-    };
+
+    let filter = |entity: Entity| entity != e;
+    let settings = RayCastSettings::default()
+        .always_early_exit()
+        .with_filter(&filter);
+    let hits = ray_cast.cast_ray(ray, &settings);
 
     let (point, normal) = if let Some((_, hit)) = hits.first() {
         (hit.point, hit.normal.normalize())
@@ -258,19 +235,27 @@ fn part_follow_cursor(
         (Vec3::ZERO, Vec3::Y)
     };
 
-    part_transform.translation = point;
-    part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+    if selected_build.resizable && button.pressed(MouseButton::Left) {
+
+    }
+    else {
+        dbg!(point, aabb.half_extents);
+        let he = Vec3::from(aabb.half_extents);
+        part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+        part_transform.translation = point + part_transform.rotation.mul_vec3(he);
+    }
+
 }
 
-fn place_part(
+fn place_build(
     mut commands: Commands,
-    selected_part_query: Option<Single<(Entity,), With<SelectedPart>>>,
+    selected_part_query: Option<Single<(Entity,), With<SelectedBuild>>>,
     button: Res<ButtonInput<MouseButton>>,
 ) {
-    if button.just_pressed(MouseButton::Left) {
+    if button.just_released(MouseButton::Left) {
         if let Some(query) = selected_part_query {
             let (e,) = *query;
-            commands.entity(e).remove::<SelectedPart>();
+            commands.entity(e).remove::<SelectedBuild>();
         }
     }
 }
