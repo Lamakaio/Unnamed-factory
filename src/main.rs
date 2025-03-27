@@ -7,7 +7,7 @@ use std::{f32::consts::FRAC_PI_2, ops::Range};
 use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     pbr::wireframe::{WireframeConfig, WireframePlugin},
-    prelude::*,
+    prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin},
 };
 use parts::PartsPlugin;
 use ui::UFGUiPlugin;
@@ -18,6 +18,8 @@ fn main() {
         DefaultPlugins.set(ImagePlugin::default_nearest()),
         WireframePlugin,
     ))
+    .add_plugins(RemotePlugin::default())
+    .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, setup_3d)
     .add_plugins((PartsPlugin, UFGUiPlugin))
