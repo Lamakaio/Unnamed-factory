@@ -1,10 +1,17 @@
-use std::sync::Arc;
+use std::{default, sync::Arc};
 
 use bevy::{
-    asset::RenderAssetUsages, math::NormedVectorSpace, pbr::wireframe::{Wireframe, WireframeColor}, prelude::*, render::{
+    asset::RenderAssetUsages,
+    ecs::world,
+    math::{I64Vec2, NormedVectorSpace},
+    pbr::wireframe::{Wireframe, WireframeColor},
+    prelude::*,
+    render::{
         primitives::Aabb,
         render_resource::{Extent3d, TextureDimension, TextureFormat},
-    }, scene::SceneInstance
+    },
+    scene::SceneInstance,
+    utils::HashMap,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +21,65 @@ pub struct BuildId(pub Arc<Building>);
 #[derive(Component)]
 pub struct SelectedBuild {
     resizable: bool,
+}
+
+const GRID_SQUARE_SIZE: f32 = 1.;
+
+pub struct SquareContent {}
+
+pub struct GridSquare {
+    content: Arc<SquareContent>,
+}
+
+pub struct Chunk {
+    grid: [[GridSquare; Self::CHUNK_SIZE]; Self::CHUNK_SIZE],
+    entities: Vec<Arc<SquareContent>>,
+    chunk_position: I64Vec2,
+}
+
+impl Chunk {
+    const CHUNK_SIZE: usize = 64;
+    fn spawn_chunk(
+        self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+    ) {
+        let world_chunk_size = Self::CHUNK_SIZE as f32 * GRID_SQUARE_SIZE;
+        let world_chunk_pos = Vec3::new(
+            self.chunk_position.x as f32,
+            0.,
+            self.chunk_position.y as f32,
+        ) * world_chunk_size;
+
+        commands.spawn((
+            Mesh3d(
+                meshes.add(
+                    Plane3d::default()
+                        .mesh()
+                        .size(world_chunk_size, world_chunk_size)
+                        .subdivisions(Self::CHUNK_SIZE as u32),
+                ),
+            ),
+            MeshMaterial3d(
+                materials.add(Color::from(bevy::color::palettes::css::LIGHT_STEEL_BLUE)),
+            ),
+            Transform::from_translation(world_chunk_pos),
+        ));
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct Map {
+    chunks: HashMap<I64Vec2, Chunk>,
+}
+
+#[derive(Resource)]
+pub enum Snapping {
+    None,
+    One,
+    Two,
+    Four,
 }
 
 pub struct BuildPlugin;
@@ -27,6 +93,7 @@ impl Plugin for BuildPlugin {
         );
         app.insert_resource(Buildings::default());
         app.insert_resource(SavedShapes::default());
+        app.insert_resource(Snapping::One);
     }
 }
 
@@ -160,8 +227,9 @@ fn spawn_build_from_part_id(
     shapes: Res<SavedShapes>,
     interaction_query: Query<(Entity, &BuildId), Without<Transform>>,
     button: Res<ButtonInput<MouseButton>>,
+    selected_part_query: Option<Single<&SelectedBuild>>,
 ) {
-    if button.pressed(MouseButton::Left) {
+    if button.pressed(MouseButton::Left) || selected_part_query.is_some() {
         return;
     }
     for (e, p) in &interaction_query {
@@ -174,6 +242,7 @@ fn spawn_build_from_part_id(
                 SceneRoot(scene.clone()),
                 Transform::default(),
                 SelectedBuild { resizable: false },
+                Visibility::Hidden,
             )),
             BuildingType::Single {
                 model: BuildModelType::MeshMaterial(mesh, mat),
@@ -182,6 +251,7 @@ fn spawn_build_from_part_id(
                 MeshMaterial3d(mat.clone()),
                 Transform::default(),
                 SelectedBuild { resizable: false },
+                Visibility::Hidden,
             )),
             BuildingType::Zone { color } => commands.entity(e).insert((
                 Mesh3d(shapes.0[0].clone()),
@@ -191,6 +261,7 @@ fn spawn_build_from_part_id(
                 },
                 Transform::default(),
                 SelectedBuild { resizable: true },
+                Visibility::Hidden,
             )),
         };
     }
@@ -200,11 +271,20 @@ fn spawn_build_from_part_id(
 
 fn build_follow_cursor(
     mut ray_cast: MeshRayCast,
-    scene_spawner: Res<SceneSpawner>,
     camera_query: Single<(&Camera, &GlobalTransform)>,
     windows: Single<&Window>,
-    selected_part_query: Option<Single<(Entity, &mut Transform, &SelectedBuild, &Aabb)>>,
+    selected_part_query: Option<
+        Single<(
+            Entity,
+            &mut Transform,
+            &SelectedBuild,
+            &Aabb,
+            &mut Visibility,
+        )>,
+    >,
     button: Res<ButtonInput<MouseButton>>,
+    snapping: Res<Snapping>,
+    mut place_point: Local<Vec3>,
 ) {
     let Some(selpart) = selected_part_query else {
         return;
@@ -219,7 +299,7 @@ fn build_follow_cursor(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
         return;
     };
-    let (e, mut part_transform, selected_build, aabb) = selpart.into_inner();
+    let (e, mut part_transform, selected_build, aabb, mut visibility) = selpart.into_inner();
 
     // Cast the ray to get hit to the nearest different object
 
@@ -230,21 +310,36 @@ fn build_follow_cursor(
     let hits = ray_cast.cast_ray(ray, &settings);
 
     let (point, normal) = if let Some((_, hit)) = hits.first() {
+        *visibility = Visibility::Visible;
         (hit.point, hit.normal.normalize())
     } else {
+        *visibility = Visibility::Hidden;
         (Vec3::ZERO, Vec3::Y)
     };
 
+    let point = match *snapping {
+        Snapping::None => point,
+        Snapping::One => (point / GRID_SQUARE_SIZE).round() * GRID_SQUARE_SIZE,
+        Snapping::Two => (point / (2. * GRID_SQUARE_SIZE)).round() * 2. * GRID_SQUARE_SIZE,
+        Snapping::Four => (point / (4. * GRID_SQUARE_SIZE)).round() * 4. * GRID_SQUARE_SIZE,
+    };
+
+    let he = part_transform
+        .rotation
+        .mul_vec3(Vec3::from(aabb.half_extents));
+    let he_proj = part_transform
+        .rotation
+        .mul_vec3(Vec3::from(aabb.half_extents))
+        .project_onto(normal);
     if selected_build.resizable && button.pressed(MouseButton::Left) {
-
-    }
-    else {
-        dbg!(point, aabb.half_extents);
-        let he = Vec3::from(aabb.half_extents);
+        let scale = point - *place_point + Vec3::new(1., 1., 1.);
+        part_transform.scale = scale;
+        part_transform.translation = *place_point + he * scale - he + he_proj;
+    } else if !button.just_released(MouseButton::Left) {
+        *place_point = point;
         part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-        part_transform.translation = point + part_transform.rotation.mul_vec3(he);
+        part_transform.translation = *place_point + he_proj;
     }
-
 }
 
 fn place_build(
