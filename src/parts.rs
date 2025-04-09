@@ -1,4 +1,4 @@
-use std::{default, sync::Arc};
+use std::{default, f32::EPSILON, sync::Arc};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -89,7 +89,12 @@ impl Plugin for BuildPlugin {
         app.add_systems(Startup, setup_parts);
         app.add_systems(
             Update,
-            (spawn_build_from_part_id, build_follow_cursor, place_build),
+            (
+                spawn_build_from_part_id,
+                build_follow_cursor,
+                place_build,
+                snapping_mode,
+            ),
         );
         app.insert_resource(Buildings::default());
         app.insert_resource(SavedShapes::default());
@@ -284,7 +289,7 @@ fn build_follow_cursor(
     >,
     button: Res<ButtonInput<MouseButton>>,
     snapping: Res<Snapping>,
-    mut place_point: Local<Vec3>,
+    mut place_point: Local<Vec2>,
 ) {
     let Some(selpart) = selected_part_query else {
         return;
@@ -317,11 +322,13 @@ fn build_follow_cursor(
         (Vec3::ZERO, Vec3::Y)
     };
 
-    let point = match *snapping {
-        Snapping::None => point,
-        Snapping::One => (point / GRID_SQUARE_SIZE).round() * GRID_SQUARE_SIZE,
-        Snapping::Two => (point / (2. * GRID_SQUARE_SIZE)).round() * 2. * GRID_SQUARE_SIZE,
-        Snapping::Four => (point / (4. * GRID_SQUARE_SIZE)).round() * 4. * GRID_SQUARE_SIZE,
+    let point2d = Vec2::new(point.x, point.z);
+
+    let point2d = match *snapping {
+        Snapping::None => point2d,
+        Snapping::One => (point2d / GRID_SQUARE_SIZE).round() * GRID_SQUARE_SIZE,
+        Snapping::Two => (point2d / (2. * GRID_SQUARE_SIZE)).round() * 2. * GRID_SQUARE_SIZE,
+        Snapping::Four => (point2d / (4. * GRID_SQUARE_SIZE)).round() * 4. * GRID_SQUARE_SIZE,
     };
 
     let he = part_transform
@@ -331,14 +338,18 @@ fn build_follow_cursor(
         .rotation
         .mul_vec3(Vec3::from(aabb.half_extents))
         .project_onto(normal);
-    if selected_build.resizable && button.pressed(MouseButton::Left) {
-        let scale = point - *place_point + Vec3::new(1., 1., 1.);
-        part_transform.scale = scale;
-        part_transform.translation = *place_point + he * scale - he + he_proj;
+    if selected_build.resizable
+        && (button.pressed(MouseButton::Left) || button.just_pressed(MouseButton::Left))
+    {
+        let scale = point2d - *place_point;
+        let scale = scale.abs().max(Vec2::new(0.1, 0.1)) * scale.signum();
+        part_transform.scale = Vec3::new(scale.x, 1., scale.y);
+        part_transform.translation =
+            Vec3::new(place_point.x, 0., place_point.y) + he * part_transform.scale;
     } else if !button.just_released(MouseButton::Left) {
-        *place_point = point;
+        *place_point = point2d;
         part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-        part_transform.translation = *place_point + he_proj;
+        part_transform.translation = Vec3::new(place_point.x, 0., place_point.y) + he_proj;
     }
 }
 
@@ -351,6 +362,17 @@ fn place_build(
         if let Some(query) = selected_part_query {
             let (e,) = *query;
             commands.entity(e).remove::<SelectedBuild>();
+        }
+    }
+}
+
+fn snapping_mode(mut snapping: ResMut<Snapping>, keyboard_input: Res<ButtonInput<KeyCode>>) {
+    if keyboard_input.just_pressed(KeyCode::KeyS) {
+        *snapping = match &*snapping {
+            Snapping::None => Snapping::One,
+            Snapping::One => Snapping::Two,
+            Snapping::Two => Snapping::Four,
+            Snapping::Four => Snapping::None,
         }
     }
 }
