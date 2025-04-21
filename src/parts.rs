@@ -1,77 +1,25 @@
-use std::{default, f32::EPSILON, sync::Arc};
+use std::sync::Arc;
 
 use bevy::{
     asset::RenderAssetUsages,
-    ecs::world,
-    math::{I64Vec2, NormedVectorSpace},
+    math::I64Vec2,
     pbr::wireframe::{Wireframe, WireframeColor},
     prelude::*,
     render::{
         primitives::Aabb,
         render_resource::{Extent3d, TextureDimension, TextureFormat},
     },
-    scene::SceneInstance,
-    utils::HashMap,
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Component)]
+use crate::map::GRID_SQUARE_SIZE;
+
+#[derive(Clone, Component, PartialEq)]
 pub struct BuildId(pub Arc<Building>);
 
 #[derive(Component)]
 pub struct SelectedBuild {
     resizable: bool,
-}
-
-const GRID_SQUARE_SIZE: f32 = 1.;
-
-pub struct SquareContent {}
-
-pub struct GridSquare {
-    content: Arc<SquareContent>,
-}
-
-pub struct Chunk {
-    grid: [[GridSquare; Self::CHUNK_SIZE]; Self::CHUNK_SIZE],
-    entities: Vec<Arc<SquareContent>>,
-    chunk_position: I64Vec2,
-}
-
-impl Chunk {
-    const CHUNK_SIZE: usize = 64;
-    fn spawn_chunk(
-        self,
-        commands: &mut Commands,
-        meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
-    ) {
-        let world_chunk_size = Self::CHUNK_SIZE as f32 * GRID_SQUARE_SIZE;
-        let world_chunk_pos = Vec3::new(
-            self.chunk_position.x as f32,
-            0.,
-            self.chunk_position.y as f32,
-        ) * world_chunk_size;
-
-        commands.spawn((
-            Mesh3d(
-                meshes.add(
-                    Plane3d::default()
-                        .mesh()
-                        .size(world_chunk_size, world_chunk_size)
-                        .subdivisions(Self::CHUNK_SIZE as u32),
-                ),
-            ),
-            MeshMaterial3d(
-                materials.add(Color::from(bevy::color::palettes::css::LIGHT_STEEL_BLUE)),
-            ),
-            Transform::from_translation(world_chunk_pos),
-        ));
-    }
-}
-
-#[derive(Resource, Default)]
-pub struct Map {
-    chunks: HashMap<I64Vec2, Chunk>,
 }
 
 #[derive(Resource)]
@@ -105,6 +53,13 @@ impl Plugin for BuildPlugin {
 pub struct Building {
     pub typ: BuildingType,
     pub config: BuildConfig,
+    pub size: I64Vec2,
+}
+
+impl PartialEq for Building {
+    fn eq(&self, other: &Self) -> bool {
+        self.config.name == other.config.name
+    }
 }
 
 pub enum BuildModelType {
@@ -185,6 +140,7 @@ pub fn setup_parts(
                 model: BuildModelType::MeshMaterial(shape.clone(), debug_material.clone()),
             },
             config: BuildConfig::placeholder(i),
+            size: (1, 1).into(),
         }));
     }
 
@@ -195,6 +151,7 @@ pub fn setup_parts(
         config: BuildConfig {
             name: "a_zonetest".into(),
         },
+        size: (0, 0).into(),
     }))
 }
 

@@ -8,6 +8,7 @@ bevy = { version = "0.15", features = ["bevy_remote"]}
 ron = "0.9"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
+kdtree-collisions = {path = "../kdtree-collisions"}
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]

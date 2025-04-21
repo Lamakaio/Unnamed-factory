@@ -1,6 +1,5 @@
-//! This example illustrates scrolling in Bevy UI.
-
 pub mod parts;
+pub mod map;
 pub mod ui;
 use std::{f32::consts::FRAC_PI_2, ops::Range};
 
@@ -11,6 +10,7 @@ use bevy::{
 };
 use parts::BuildPlugin;
 use ui::UFGUiPlugin;
+use map::MapPlugin;
 
 fn main() {
     let mut app = App::new();
@@ -22,7 +22,7 @@ fn main() {
     .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, setup_3d)
-    .add_plugins((BuildPlugin, UFGUiPlugin))
+    .add_plugins((BuildPlugin, UFGUiPlugin, MapPlugin))
     .add_systems(Update, (toggle_wireframe, orbit));
 
     app.run();
