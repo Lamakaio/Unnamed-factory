@@ -9,25 +9,26 @@ use bevy::{
     prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin},
 };
 use parts::BuildPlugin;
-use ui::UFGUiPlugin;
+use ui::UiPlugin;
 use map::MapPlugin;
 
 fn main() {
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins.set(ImagePlugin::default_nearest()),
-        WireframePlugin,
+        WireframePlugin::default(),
     ))
     .add_plugins(RemotePlugin::default())
     .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, setup_3d)
-    .add_plugins((BuildPlugin, UFGUiPlugin, MapPlugin))
+    .add_plugins((BuildPlugin, UiPlugin, MapPlugin))
     .add_systems(Update, (toggle_wireframe, orbit));
 
     app.run();
 }
 
+/// Settings for the orientable camera
 #[derive(Debug, Resource)]
 struct CameraSettings {
     pub orbit_distance: Range<f32>,
@@ -54,6 +55,7 @@ impl Default for CameraSettings {
     }
 }
 
+/// Setup the 3D environnement. Mostly a placeholder.
 fn setup_3d(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -83,6 +85,7 @@ fn setup_3d(
     ));
 }
 
+/// Toggle wireframe on pressing space, for debugging purposes
 fn toggle_wireframe(
     mut wireframe_config: ResMut<WireframeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -92,6 +95,8 @@ fn toggle_wireframe(
     }
 }
 
+
+/// Orbiting camera handling
 fn orbit(
     mut camera: Single<&mut Transform, With<Camera>>,
     camera_settings: Res<CameraSettings>,

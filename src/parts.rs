@@ -14,14 +14,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::GRID_SQUARE_SIZE;
 
+/// An id for a building, serve to identify which building corresponds to a mesh.
 #[derive(Clone, Component, PartialEq)]
 pub struct BuildId(pub Arc<Building>);
 
+/// The part currently selected, that follow the mouse
 #[derive(Component)]
 pub struct SelectedBuild {
     resizable: bool,
 }
 
+/// Multiples of grid square the selection snaps to
 #[derive(Resource)]
 pub enum Snapping {
     None,
@@ -50,6 +53,7 @@ impl Plugin for BuildPlugin {
     }
 }
 
+/// A building (to be modifed with everything needed)
 pub struct Building {
     pub typ: BuildingType,
     pub config: BuildConfig,
@@ -62,15 +66,19 @@ impl PartialEq for Building {
     }
 }
 
-pub enum BuildModelType {
-    Scene(Handle<Scene>),
-    MeshMaterial(Handle<Mesh>, Handle<StandardMaterial>),
+/// Contains the material and mesh for a building. (and maybe pther things in the future)
+pub struct BuildModel {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
 }
 
+/// Split between zoning and individual buildings (and maybe fmroe things in the future, e.g. roads)
 pub enum BuildingType {
     Zone { color: Color },
-    Single { model: BuildModelType },
+    Single { model: BuildModel },
 }
+
+/// in theory, whatever is used to store the building as an asset on disk. Might change in the future.
 #[derive(Serialize, Deserialize)]
 pub struct BuildConfig {
     pub name: String,
@@ -83,13 +91,15 @@ impl BuildConfig {
         }
     }
 }
-
+/// A collection of all buildings in the game.
 #[derive(Resource, Default)]
 pub struct Buildings(pub Vec<Arc<Building>>);
 
 #[derive(Resource, Default)]
 pub struct SavedShapes(Vec<Handle<Mesh>>);
 
+
+/// Generate the parts, that will later serve to generate the buttons.
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
@@ -137,7 +147,10 @@ pub fn setup_parts(
     {
         parts.0.push(Arc::new(Building {
             typ: BuildingType::Single {
-                model: BuildModelType::MeshMaterial(shape.clone(), debug_material.clone()),
+                model: BuildModel {
+                    mesh: shape.clone(),
+                    material: debug_material.clone(),
+                },
             },
             config: BuildConfig::placeholder(i),
             size: (1, 1).into(),
@@ -184,6 +197,8 @@ fn uv_debug_texture() -> Image {
     )
 }
 
+
+/// Spawn the actual building mesh when a BuildId is spawned
 fn spawn_build_from_part_id(
     mut commands: Commands,
     shapes: Res<SavedShapes>,
@@ -198,19 +213,9 @@ fn spawn_build_from_part_id(
         let part = &p.0;
 
         match &part.typ {
-            BuildingType::Single {
-                model: BuildModelType::Scene(scene),
-            } => commands.entity(e).insert((
-                SceneRoot(scene.clone()),
-                Transform::default(),
-                SelectedBuild { resizable: false },
-                Visibility::Hidden,
-            )),
-            BuildingType::Single {
-                model: BuildModelType::MeshMaterial(mesh, mat),
-            } => commands.entity(e).insert((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(mat.clone()),
+            BuildingType::Single { model } => commands.entity(e).insert((
+                Mesh3d(model.mesh.clone()),
+                MeshMaterial3d(model.material.clone()),
                 Transform::default(),
                 SelectedBuild { resizable: false },
                 Visibility::Hidden,
@@ -231,6 +236,7 @@ fn spawn_build_from_part_id(
 
 //const DEFAULT_RAY_DISTANCE: f32 = 10.;
 
+/// Make the selected part follow the cursor
 fn build_follow_cursor(
     mut ray_cast: MeshRayCast,
     camera_query: Single<(&Camera, &GlobalTransform)>,
@@ -266,7 +272,7 @@ fn build_follow_cursor(
     // Cast the ray to get hit to the nearest different object
 
     let filter = |entity: Entity| entity != e;
-    let settings = RayCastSettings::default()
+    let settings = MeshRayCastSettings::default()
         .always_early_exit()
         .with_filter(&filter);
     let hits = ray_cast.cast_ray(ray, &settings);
@@ -310,6 +316,8 @@ fn build_follow_cursor(
     }
 }
 
+
+/// Actually place a part on click
 fn place_build(
     mut commands: Commands,
     selected_part_query: Option<Single<(Entity,), With<SelectedBuild>>>,
@@ -323,6 +331,8 @@ fn place_build(
     }
 }
 
+
+/// Change the snapping mode by cycling on pressing S
 fn snapping_mode(mut snapping: ResMut<Snapping>, keyboard_input: Res<ButtonInput<KeyCode>>) {
     if keyboard_input.just_pressed(KeyCode::KeyS) {
         *snapping = match &*snapping {

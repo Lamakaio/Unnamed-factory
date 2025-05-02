@@ -1,15 +1,16 @@
 use bevy::{
     color::palettes::basic::*,
     input::mouse::{MouseScrollUnit, MouseWheel},
-    picking::focus::HoverMap,
+    picking::hover::HoverMap,
     prelude::*,
 };
 
 use crate::parts::{BuildId, Buildings, setup_parts};
-pub struct UFGUiPlugin;
+pub struct UiPlugin;
 
-impl Plugin for UFGUiPlugin {
+impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
+        //setup ui needs the parts list first
         app.add_systems(Startup, setup_ui.after(setup_parts));
         app.add_systems(Update, (update_scroll_position, button_system));
     }
@@ -33,7 +34,7 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<B
             flex_direction: FlexDirection::Column,
             ..default()
         })
-        .insert(PickingBehavior::IGNORE)
+        .insert(Pickable::IGNORE)
         .with_children(|parent| {
             // container for all other examples
             parent
@@ -91,7 +92,7 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<B
                                                     border: UiRect::all(Val::Px(5.0)),
                                                     ..default()
                                                 },
-                                                PickingBehavior {
+                                                Pickable {
                                                     should_block_lower: false,
                                                     ..default()
                                                 },
@@ -110,7 +111,7 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<B
                                                         },
                                                         Label,
                                                     ))
-                                                    .insert(PickingBehavior {
+                                                    .insert(Pickable {
                                                         should_block_lower: false,
                                                         ..default()
                                                     });
@@ -152,6 +153,7 @@ const NORMAL_BUTTON: Color = Color::srgb(0.15, 0.15, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.25, 0.25, 0.25);
 const PRESSED_BUTTON: Color = Color::srgb(0.35, 0.75, 0.35);
 
+/// Change the button appearance when it is pressed. 
 fn button_system(
     mut commands: Commands,
     mut interaction_query: Query<
