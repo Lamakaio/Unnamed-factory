@@ -8,14 +8,13 @@ use std::{
 };
 
 use bevy::{
-    core_pipeline::experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
+    core_pipeline::{experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing}, prepass::DepthPrepass},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     pbr::{
-        ExtendedMaterial,
-        wireframe::{WireframeConfig, WireframePlugin},
+        decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt}, wireframe::{WireframeConfig, WireframePlugin}, ExtendedMaterial
     },
     prelude::*,
-    remote::{RemotePlugin, http::RemoteHttpPlugin},
+    remote::{http::RemoteHttpPlugin, RemotePlugin},
 };
 use map::MapPlugin;
 use maptext::TerrainShader;
@@ -73,8 +72,7 @@ impl Default for CameraSettings {
 /// Setup the 3D environnement. Mostly a placeholder.
 fn setup_3d(
     mut commands: Commands,
-    //mut meshes: ResMut<Assets<Mesh>>,
-    //mut materials: ResMut<Assets<StandardMaterial>>,
+
 ) {
     commands.spawn((
         DirectionalLight {
@@ -90,15 +88,18 @@ fn setup_3d(
         },
     ));
 
+
     // //ground plane
     // commands.spawn((
     //     Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0, 500.0).subdivisions(100))),
     //     MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
+    //     Transform::from_scale(Vec3::splat(44.0)).with_translation(Vec3::new(0., 10., 0.)).with_rotation(Quat::from_axis_angle(Vec3::Z, PI/4.))
     // ));
 
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection::default()),
+        DepthPrepass,
         Msaa::Off,
         TemporalAntiAliasing::default(),
         IsDefaultUiCamera,

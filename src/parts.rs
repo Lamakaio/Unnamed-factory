@@ -3,7 +3,10 @@ use std::sync::Arc;
 use bevy::{
     asset::RenderAssetUsages,
     math::I64Vec2,
-    pbr::wireframe::{Wireframe, WireframeColor},
+    pbr::{
+        decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
+        wireframe::{Wireframe, WireframeColor},
+    },
     prelude::*,
     render::{
         primitives::Aabb,
@@ -12,7 +15,7 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::map::GRID_SQUARE_SIZE;
+use crate::map::{Chunk, Map, PatchOp, GRID_SQUARE_SIZE};
 
 /// An id for a building, serve to identify which building corresponds to a mesh.
 #[derive(Clone, Component, PartialEq)]
@@ -76,6 +79,7 @@ pub struct BuildModel {
 pub enum BuildingType {
     Zone { color: Color },
     Single { model: BuildModel },
+    Tool { op: PatchOp },
 }
 
 /// in theory, whatever is used to store the building as an asset on disk. Might change in the future.
@@ -164,7 +168,15 @@ pub fn setup_parts(
             name: "a_zonetest".into(),
         },
         size: (0, 0).into(),
-    }))
+    }));
+
+    parts.0.push(Arc::new(Building {
+        typ: BuildingType::Tool { op: PatchOp::Up },
+        config: BuildConfig {
+            name: "patch up".into(),
+        },
+        size: (0, 0).into(),
+    }));
 }
 
 /// Creates a colorful test pattern
@@ -196,6 +208,13 @@ fn uv_debug_texture() -> Image {
     )
 }
 
+#[derive(Component)]
+struct ToolInstance {
+    op: PatchOp,
+    radius: f32,
+    strength: f32,
+}
+
 /// Spawn the actual building mesh when a BuildId is spawned
 fn spawn_build_from_part_id(
     mut commands: Commands,
@@ -203,6 +222,8 @@ fn spawn_build_from_part_id(
     interaction_query: Query<(Entity, &BuildId), Without<Transform>>,
     button: Res<ButtonInput<MouseButton>>,
     selected_part_query: Option<Single<&SelectedBuild>>,
+    asset_server: Res<AssetServer>,
+    mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
 ) {
     if button.pressed(MouseButton::Left) || selected_part_query.is_some() {
         return;
@@ -226,6 +247,28 @@ fn spawn_build_from_part_id(
                 },
                 Transform::default(),
                 SelectedBuild { resizable: true },
+                Visibility::Hidden,
+            )),
+            BuildingType::Tool { op } => commands.entity(e).insert((
+                ToolInstance {
+                    op: *op,
+                    radius: 5.0,
+                    strength: 1.0,
+                },
+                ForwardDecal,
+                MeshMaterial3d(decal_standard_materials.add(ForwardDecalMaterial {
+                    base: StandardMaterial {
+                        base_color_texture: Some(asset_server.load("img/circle.png")),
+                        alpha_mode: AlphaMode::Blend,
+                        base_color: bevy::color::palettes::css::RED.into(),
+                        ..default()
+                    },
+                    extension: ForwardDecalMaterialExt {
+                        depth_fade_factor: 1.0,
+                    },
+                })),
+                Transform::from_scale(Vec3::splat(10.0)),
+                SelectedBuild { resizable: false },
                 Visibility::Hidden,
             )),
         };
@@ -318,13 +361,23 @@ fn build_follow_cursor(
 /// Actually place a part on click
 fn place_build(
     mut commands: Commands,
-    selected_part_query: Option<Single<(Entity,), With<SelectedBuild>>>,
+    selected_part_query: Option<Single<(Entity, &Transform, Option<&ToolInstance>), With<SelectedBuild>>>,
+    mut map: ResMut<Map>,
     button: Res<ButtonInput<MouseButton>>,
+    mut meshes: ResMut<Assets<Mesh>>
 ) {
     if button.just_released(MouseButton::Left) {
         if let Some(query) = selected_part_query {
-            let (e,) = *query;
-            commands.entity(e).remove::<SelectedBuild>();
+            let (e, transform, tool) = *query;
+            if let Some(ti) = tool {
+                let chunk_pos_x = (transform.translation.x / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
+                let chunk_pos_y = (transform.translation.y / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
+                let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_y).into());
+                chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
+            }
+            else {
+                commands.entity(e).remove::<SelectedBuild>();
+            }
         }
     }
 }

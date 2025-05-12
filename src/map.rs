@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use bevy::{
     asset::RenderAssetUsages,
-    math::{I64Vec2, IVec2},
+    math::{I64Vec2, IVec2, NormedVectorSpace},
     pbr::{
         ExtendedMaterial, OpaqueRendererMethod,
         wireframe::{Wireframe, WireframeColor},
     },
     platform::collections::HashMap,
     prelude::*,
-    render::mesh::{Indices, PrimitiveTopology},
+    render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
 };
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{
@@ -102,12 +102,21 @@ type NoiseT = Noise<(
     NoiseCurve<Smoothstep>,
 )>;
 
+#[derive(Clone, Copy)]
+pub enum PatchOp {
+    Up,
+    Down,
+    Flatten,
+    Smooth,
+}
+
 #[derive(Component)]
 pub struct ChunkMarker(pub I64Vec2);
 
 impl Chunk {
-    const CHUNK_SIZE: u32 = 64;
-    const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
+    pub const CHUNK_SIZE: u32 = 64;
+    pub const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
+    pub const SCALE_Y: f32 = 20.;
 
     fn get_noise(seed: u32) -> NoiseT {
         //let base_noise = OpenSimplex::new(seed as u32);
@@ -167,7 +176,6 @@ impl Chunk {
     /// Generates the mesh for a chunk.
     // TODO: a way to regenerate mesh on terrain change
     fn make_mesh(&self) -> Mesh {
-        const SCALE_Y: f32 = 20.;
         let mut vertex_positions = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
         let mut uv = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
         let mut indices = Vec::with_capacity(((Self::CHUNK_SIZE - 1).pow(2) * 6) as usize);
@@ -175,7 +183,7 @@ impl Chunk {
         for (i, sq) in self.grid.iter().enumerate() {
             let x = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
             let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
-            vertex_positions.push([x + offset, sq.height * SCALE_Y, z + offset]);
+            vertex_positions.push([x + offset, sq.height * Self::SCALE_Y, z + offset]);
             let uv_x = sq.height;
             let uv_y = (x + z / 50. + rand::random_range(-0.1..0.1)).fract();
             uv.push([uv_x as f32, uv_y]);
@@ -212,6 +220,65 @@ impl Chunk {
             mesh
         }
     }
+
+    fn get_mesh_mut<'a>(&mut self, meshes: &'a mut Assets<Mesh>) -> &'a mut Mesh {
+        let handle = self.get_mesh(meshes);
+        meshes.get_mut(&handle).expect("Mesh not found")
+    }
+
+    pub fn patch(
+        &mut self,
+        meshes: &mut Assets<Mesh>,
+        pos: &Vec3,
+        radius: f32,
+        operation: PatchOp,
+    ) {
+        let mesh = self.get_mesh_mut(meshes);
+        let attrs = mesh.attributes_mut();
+        let mut attrs = attrs.filter(|(s, _)| {
+            s.id == Mesh::ATTRIBUTE_POSITION.id || s.id == Mesh::ATTRIBUTE_UV_0.id
+        });
+        let fst = attrs.next().unwrap();
+        let snd = attrs.next().unwrap();
+        let (v_pos, v_uv) = if fst.0.id == Mesh::ATTRIBUTE_POSITION.id {
+            (fst.1, snd.1)
+        } else {
+            (snd.1, fst.1)
+        };
+        if let (VertexAttributeValues::Float32x3(vertex), VertexAttributeValues::Float32x2(uvs)) = (v_pos, v_uv) {
+            let local_pos = (pos - self.get_world_pos() + Self::WORLD_CHUNK_SIZE/2.).xz();
+            let x_min = (local_pos.x - radius)
+                .ceil()
+                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
+            let x_max = (local_pos.x + radius)
+                .floor()
+                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
+            let y_min = (local_pos.y - radius)
+                .ceil()
+                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
+            let y_max = (local_pos.y + radius)
+                .floor()
+                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
+            match operation {
+                PatchOp::Up => {
+                    for x in x_min..=x_max {
+                        for y in y_min..=y_max {
+                            if (local_pos - Vec2::new(x as f32, y as f32)).norm() <= radius {
+                                let index = (x * Chunk::CHUNK_SIZE + y) as usize;
+                                let delta = 0.1;
+                                vertex[index][1] += delta * Self::SCALE_Y;
+                                self.grid[index].height += delta;
+                                uvs[index][0] += delta;
+                            }
+                        }
+                    }
+                }
+                PatchOp::Down => todo!(),
+                PatchOp::Flatten => todo!(),
+                PatchOp::Smooth => todo!(),
+            }
+        }
+    }
 }
 
 /// The whole map. Contains chunks, and a kd-tree of building instances in the map.
@@ -225,7 +292,7 @@ pub struct Map {
 
 impl Map {
     /// Get a mutable reference to a chunk (and make/ load it if it doesnt already exists)
-    fn get_chunk_mut<'a>(&'a mut self, pos: &I64Vec2) -> &'a mut Chunk {
+    pub fn get_chunk_mut<'a>(&'a mut self, pos: &I64Vec2) -> &'a mut Chunk {
         //Apparently it's the best way to insert an element if it doesnt already exists, and get a mut ref to the result.
         self.chunks
             .raw_entry_mut()
@@ -329,6 +396,7 @@ pub fn spawn_chunk(
                             build.size.y as f32 * GRID_SQUARE_SIZE,
                         )),
                     )),
+                    BuildingType::Tool { op } => todo!(),
                 };
             }
         }
