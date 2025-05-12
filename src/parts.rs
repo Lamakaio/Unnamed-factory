@@ -98,7 +98,6 @@ pub struct Buildings(pub Vec<Arc<Building>>);
 #[derive(Resource, Default)]
 pub struct SavedShapes(Vec<Handle<Mesh>>);
 
-
 /// Generate the parts, that will later serve to generate the buttons.
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
@@ -197,7 +196,6 @@ fn uv_debug_texture() -> Image {
     )
 }
 
-
 /// Spawn the actual building mesh when a BuildId is spawned
 fn spawn_build_from_part_id(
     mut commands: Commands,
@@ -250,6 +248,7 @@ fn build_follow_cursor(
             &mut Visibility,
         )>,
     >,
+    //map: Res<Map>,
     button: Res<ButtonInput<MouseButton>>,
     snapping: Res<Snapping>,
     mut place_point: Local<Vec2>,
@@ -312,10 +311,9 @@ fn build_follow_cursor(
     } else if !button.just_released(MouseButton::Left) {
         *place_point = point2d;
         part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-        part_transform.translation = Vec3::new(place_point.x, 0., place_point.y) + he_proj;
+        part_transform.translation = Vec3::new(place_point.x, point.y, place_point.y) + he_proj;
     }
 }
-
 
 /// Actually place a part on click
 fn place_build(
@@ -330,7 +328,6 @@ fn place_build(
         }
     }
 }
-
 
 /// Change the snapping mode by cycling on pressing S
 fn snapping_mode(mut snapping: ResMut<Snapping>, keyboard_input: Res<ButtonInput<KeyCode>>) {

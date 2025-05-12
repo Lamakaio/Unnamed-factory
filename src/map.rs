@@ -3,20 +3,45 @@ use std::sync::Arc;
 use bevy::{
     asset::RenderAssetUsages,
     math::{I64Vec2, IVec2},
-    pbr::wireframe::{Wireframe, WireframeColor},
+    pbr::{
+        ExtendedMaterial, OpaqueRendererMethod,
+        wireframe::{Wireframe, WireframeColor},
+    },
     platform::collections::HashMap,
     prelude::*,
     render::mesh::{Indices, PrimitiveTopology},
 };
 use kdtree_collisions::{KdTree, KdValue};
+use noiz::{
+    Noise, SampleableFor,
+    cells::SimplexGrid,
+    curves::Smoothstep,
+    math_noise::NoiseCurve,
+    prelude::{
+        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, NormedByDerivative,
+        Octave, PeakDerivativeContribution, Persistence, QuickGradients, SNormToUNorm,
+        SimplecticBlend,
+    },
+    rng::NoiseRng,
+};
 
-use crate::parts::{Building, BuildingType};
-
-pub struct MapPlugin;
+use crate::{
+    maptext::TerrainShader,
+    parts::{Building, BuildingType},
+};
+pub struct MapPlugin {
+    pub seed: u128,
+}
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Map::default());
+        app.insert_resource(Map {
+            material: Handle::default(),
+            chunks: HashMap::new(),
+            entities: KdTree::default(),
+            noise: Chunk::get_noise(self.seed as u32),
+        });
         app.add_systems(Update, spawn_chunk);
+        app.add_systems(Startup, setup_map);
     }
 }
 
@@ -65,28 +90,68 @@ pub struct Chunk {
     spawned: bool,
 }
 
+type NoiseT = Noise<(
+    LayeredNoise<
+        NormedByDerivative<f32, EuclideanLength, PeakDerivativeContribution>,
+        Persistence,
+        FractalLayers<
+            Octave<BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients, true>>,
+        >,
+    >,
+    SNormToUNorm,
+    NoiseCurve<Smoothstep>,
+)>;
+
 #[derive(Component)]
 pub struct ChunkMarker(pub I64Vec2);
 
 impl Chunk {
     const CHUNK_SIZE: u32 = 64;
-    const WORLD_CHUNK_SIZE: f32 = Self::CHUNK_SIZE as f32 * GRID_SQUARE_SIZE;
+    const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
+
+    fn get_noise(seed: u32) -> NoiseT {
+        //let base_noise = OpenSimplex::new(seed as u32);
+        Noise {
+            noise: (
+                LayeredNoise::new(
+                    NormedByDerivative::default().with_falloff(0.5),
+                    Persistence(0.7),
+                    FractalLayers {
+                        layer: Default::default(),
+                        lacunarity: 1.6,
+                        amount: 4,
+                    },
+                ),
+                Default::default(),
+                Default::default(),
+            ),
+            seed: NoiseRng(seed),
+            frequency: 0.005,
+        }
+    }
 
     /// get a dummy terrain chunk for testing purpose
-    fn get_dummy() -> Self {
-        let mut grid = Vec::new();
-        for _ in 0..Self::CHUNK_SIZE {
-            for j in 0..Self::CHUNK_SIZE {
-                grid.push(TerrainPoint {
-                    height: (j % 2) as f32,
-                });
-            }
-        }
-        Self {
-            grid,
-            chunk_position: (0, 0).into(),
+    fn new_and_generate(pos: &I64Vec2, noise: &NoiseT) -> Self {
+        let mut chunk = Self {
+            grid: Vec::with_capacity((Self::CHUNK_SIZE * Self::CHUNK_SIZE) as usize),
+            chunk_position: pos.clone(),
             cached_mesh: None,
             spawned: false,
+        };
+        chunk.generate(noise);
+        chunk
+    }
+
+    fn generate(&mut self, noise: &NoiseT) {
+        let world_pos = self.get_world_pos();
+        self.grid.clear();
+        for x in 0..Self::CHUNK_SIZE {
+            let fx = x as f32 * GRID_SQUARE_SIZE + world_pos.x;
+            for z in 0..Self::CHUNK_SIZE {
+                let fz = z as f32 * GRID_SQUARE_SIZE + world_pos.z;
+                let sample: f32 = noise.sample(Vec2::new(fx, fz));
+                self.grid.push(TerrainPoint { height: sample })
+            }
         }
     }
 
@@ -102,18 +167,23 @@ impl Chunk {
     /// Generates the mesh for a chunk.
     // TODO: a way to regenerate mesh on terrain change
     fn make_mesh(&self) -> Mesh {
+        const SCALE_Y: f32 = 20.;
         let mut vertex_positions = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
+        let mut uv = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
         let mut indices = Vec::with_capacity(((Self::CHUNK_SIZE - 1).pow(2) * 6) as usize);
-        let chunk_pos = self.get_world_pos();
+        let offset = -Chunk::WORLD_CHUNK_SIZE / 2.;
         for (i, sq) in self.grid.iter().enumerate() {
-            let offset_x = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
-            let offset_z = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
-            vertex_positions.push([chunk_pos.x + offset_x, sq.height, chunk_pos.z + offset_z]);
+            let x = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
+            let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
+            vertex_positions.push([x + offset, sq.height * SCALE_Y, z + offset]);
+            let uv_x = sq.height;
+            let uv_y = (x + z / 50. + rand::random_range(-0.1..0.1)).fract();
+            uv.push([uv_x as f32, uv_y]);
         }
-        for x in 1..Self::CHUNK_SIZE {
-            for z in 1..Self::CHUNK_SIZE {
-                fn id(x: u32, z: u32) -> u32 {
-                    x + z * Chunk::CHUNK_SIZE
+        for x in 1..Self::CHUNK_SIZE as u16 {
+            for z in 1..Self::CHUNK_SIZE as u16 {
+                fn id(x: u16, z: u16) -> u16 {
+                    z + x * Chunk::CHUNK_SIZE as u16
                 }
                 //top top left triangle
                 indices.extend(&[id(x, z), id(x, z - 1), id(x - 1, z - 1)]);
@@ -127,7 +197,8 @@ impl Chunk {
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertex_positions)
-        .with_inserted_indices(Indices::U32(indices))
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+        .with_inserted_indices(Indices::U16(indices))
         .with_computed_smooth_normals()
     }
 
@@ -144,10 +215,12 @@ impl Chunk {
 }
 
 /// The whole map. Contains chunks, and a kd-tree of building instances in the map.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct Map {
+    material: Handle<ExtendedMaterial<StandardMaterial, TerrainShader>>,
     chunks: HashMap<I64Vec2, Chunk>,
     entities: KdTree<BuildingInstance, 10>,
+    noise: NoiseT,
 }
 
 impl Map {
@@ -157,67 +230,109 @@ impl Map {
         self.chunks
             .raw_entry_mut()
             .from_key(pos)
-            .or_insert_with(|| (pos.clone(), Chunk::get_dummy()))
+            .or_insert_with(|| (pos.clone(), Chunk::new_and_generate(pos, &self.noise)))
             .1
     }
+}
+
+pub fn setup_map(
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, TerrainShader>>>,
+    mut map: ResMut<Map>,
+) {
+    let text = asset_server.load("img/ZAtoon.png");
+    let texture_handle = asset_server.load("img/terrain.png");
+    let mat = materials.add(ExtendedMaterial {
+        base: StandardMaterial {
+            base_color_texture: Some(texture_handle.clone()),
+            // can be used in forward or deferred mode
+            opaque_render_method: OpaqueRendererMethod::Auto,
+            // in deferred mode, only the PbrInput can be modified (uvs, color and other material properties),
+            // in forward mode, the output can also be modified after lighting is applied.
+            // see the fragment shader `extended_material.wgsl` for more info.
+            // Note: to run in deferred mode, you must also add a `DeferredPrepass` component to the camera and either
+            // change the above to `OpaqueRendererMethod::Deferred` or add the `DefaultOpaqueRendererMethod` resource.
+            ..Default::default()
+        },
+        extension: TerrainShader {
+            mask: text,
+            highlight_color: Srgba::hex("D8C37F").unwrap().into(),
+            shadow_color: Srgba::hex("B09070").unwrap().into(),
+            rim_color: Color::WHITE.into(),
+            grass_color: Srgba::hex("92eb3f").unwrap().into(),
+            ocean_color: Srgba::hex("5584f2").unwrap().into(),
+            mountain_color: Srgba::hex("544a47").unwrap().into(),
+            snow_color: Srgba::hex("f2efe4").unwrap().into(),
+            sand_color: Srgba::hex("e0cf96").unwrap().into(),
+        },
+    });
+    map.material = mat
 }
 
 /// Handles the spawning of chunks when the camera is close enough. (Currently only spawns the chunk the camera is on)
 pub fn spawn_chunk(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut map: ResMut<Map>,
     camera: Query<&Transform, (With<Camera>, Changed<Transform>)>,
 ) -> Result {
     let camera_transform = camera.single()?;
     let camera_chunk_pos = camera_transform.translation / Chunk::WORLD_CHUNK_SIZE;
-    let chunk_pos = I64Vec2::new(camera_chunk_pos.x as i64, camera_chunk_pos.z as i64);
-    let chunk = map.get_chunk_mut(&chunk_pos);
-    if !chunk.spawned {
-        chunk.spawned = true;
-        let mesh = chunk.get_mesh(&mut *meshes);
-        let mut entity = commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(
-                materials.add(Color::from(bevy::color::palettes::css::LIGHT_STEEL_BLUE)),
-            ),
-            Transform::from_translation(chunk.get_world_pos()),
-        ));
+    let mat = map.material.clone();
+    for (x, z) in [-1., 0., 1.]
+        .into_iter()
+        .map(|x| [-1., 0., 1.].into_iter().map(move |z| (x, z)))
+        .flatten()
+    {
+        let chunk_pos = I64Vec2::new(
+            (camera_chunk_pos.x + x) as i64,
+            (camera_chunk_pos.z + z) as i64,
+        );
+        let chunk = map.get_chunk_mut(&chunk_pos);
+        if !chunk.spawned {
+            chunk.spawned = true;
+            let mesh = chunk.get_mesh(&mut *meshes);
+            dbg!(chunk_pos);
+            dbg!(chunk.get_world_pos());
+            let mut entity = commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(mat.clone()),
+                Transform::from_translation(chunk.get_world_pos()),
+            ));
 
-        for build in map.entities.query_rect(
-            chunk_pos.x,
-            chunk_pos.x + Chunk::CHUNK_SIZE as i64,
-            chunk_pos.y,
-            chunk_pos.y + Chunk::CHUNK_SIZE as i64,
-        ) {
-            let pos = Vec3::new(
-                (build.grid_pos.x - chunk_pos.x) as f32 * GRID_SQUARE_SIZE,
-                0.,
-                (build.grid_pos.y - chunk_pos.y) as f32 * GRID_SQUARE_SIZE,
-            );
-            match &build.building.typ {
-                BuildingType::Single {
-                    model,
-                } => entity.with_child((
-                    Mesh3d(model.mesh.clone()),
-                    MeshMaterial3d(model.material.clone()),
-                    Transform::from_translation(pos),
-                )),
-                BuildingType::Zone { color } => entity.with_child((
-                    Mesh3d(todo!()),
-                    Wireframe,
-                    WireframeColor {
-                        color: color.clone(),
-                    },
-                    Transform::from_translation(pos).with_scale(Vec3::new(
-                        build.size.x as f32 * GRID_SQUARE_SIZE,
-                        0.1,
-                        build.size.y as f32 * GRID_SQUARE_SIZE,
+            for build in map.entities.query_rect(
+                chunk_pos.x,
+                chunk_pos.x + Chunk::CHUNK_SIZE as i64,
+                chunk_pos.y,
+                chunk_pos.y + Chunk::CHUNK_SIZE as i64,
+            ) {
+                let pos = Vec3::new(
+                    (build.grid_pos.x - chunk_pos.x) as f32 * GRID_SQUARE_SIZE,
+                    0.,
+                    (build.grid_pos.y - chunk_pos.y) as f32 * GRID_SQUARE_SIZE,
+                );
+                match &build.building.typ {
+                    BuildingType::Single { model } => entity.with_child((
+                        Mesh3d(model.mesh.clone()),
+                        MeshMaterial3d(model.material.clone()),
+                        Transform::from_translation(pos),
                     )),
-                )),
-            };
+                    BuildingType::Zone { color } => entity.with_child((
+                        // TODO : mesh for zone
+                        Wireframe,
+                        WireframeColor {
+                            color: color.clone(),
+                        },
+                        Transform::from_translation(pos).with_scale(Vec3::new(
+                            build.size.x as f32 * GRID_SQUARE_SIZE,
+                            0.1,
+                            build.size.y as f32 * GRID_SQUARE_SIZE,
+                        )),
+                    )),
+                };
+            }
         }
     }
+
     Ok(())
 }

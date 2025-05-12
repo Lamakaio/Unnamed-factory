@@ -1,29 +1,44 @@
-pub mod parts;
 pub mod map;
+pub mod maptext;
+pub mod parts;
 pub mod ui;
-use std::{f32::consts::FRAC_PI_2, ops::Range};
+use std::{
+    f32::consts::{FRAC_PI_2, PI},
+    ops::Range,
+};
 
 use bevy::{
+    core_pipeline::experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    pbr::wireframe::{WireframeConfig, WireframePlugin},
-    prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin},
+    pbr::{
+        ExtendedMaterial,
+        wireframe::{WireframeConfig, WireframePlugin},
+    },
+    prelude::*,
+    remote::{RemotePlugin, http::RemoteHttpPlugin},
 };
+use map::MapPlugin;
+use maptext::TerrainShader;
 use parts::BuildPlugin;
 use ui::UiPlugin;
-use map::MapPlugin;
 
 fn main() {
     let mut app = App::new();
+    let seed: u128 = 1082;
     app.add_plugins((
         DefaultPlugins.set(ImagePlugin::default_nearest()),
         WireframePlugin::default(),
     ))
     .add_plugins(RemotePlugin::default())
     .add_plugins(RemoteHttpPlugin::default())
+    .add_plugins(TemporalAntiAliasPlugin)
+    .add_plugins(MaterialPlugin::<
+        ExtendedMaterial<StandardMaterial, TerrainShader>,
+    >::default())
     .insert_resource(CameraSettings::default())
-    .add_systems(Startup, setup_3d)
-    .add_plugins((BuildPlugin, UiPlugin, MapPlugin))
-    .add_systems(Update, (toggle_wireframe, orbit));
+    .add_systems(Startup, (setup_3d,))
+    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
+    .add_systems(Update, (toggle_wireframe, orbit, rotate_light));
 
     app.run();
 }
@@ -46,7 +61,7 @@ impl Default for CameraSettings {
         Self {
             // These values are completely arbitrary, chosen because they seem to produce
             // "sensible" results for this example. Adjust as required.
-            orbit_distance: 2.0..50.0,
+            orbit_distance: 2.0..100.0,
             pitch_speed: 0.003,
             pitch_range: -pitch_limit..pitch_limit,
             yaw_speed: 0.004,
@@ -58,28 +73,34 @@ impl Default for CameraSettings {
 /// Setup the 3D environnement. Mostly a placeholder.
 fn setup_3d(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    //mut meshes: ResMut<Assets<Mesh>>,
+    //mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn((
-        PointLight {
+        DirectionalLight {
             shadows_enabled: true,
-            intensity: 10_000_000.,
-            range: 100.0,
+            illuminance: 10_000.,
             shadow_depth_bias: 0.2,
             ..default()
         },
-        Transform::from_xyz(8.0, 16.0, 8.0),
+        Transform {
+            translation: Vec3::new(0.0, 10.0, 0.0),
+            rotation: Quat::from_rotation_x(-PI / 4.),
+            ..default()
+        },
     ));
 
-    //ground plane
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0, 500.0).subdivisions(100))),
-        MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
-    ));
+    // //ground plane
+    // commands.spawn((
+    //     Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0, 500.0).subdivisions(100))),
+    //     MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
+    // ));
 
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection::default()),
+        Msaa::Off,
+        TemporalAntiAliasing::default(),
         IsDefaultUiCamera,
         Transform::from_xyz(0.0, 7., 14.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
@@ -95,6 +116,19 @@ fn toggle_wireframe(
     }
 }
 
+fn rotate_light(
+    mut light: Query<&mut Transform, With<DirectionalLight>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+) -> Result {
+    let rotation_speed = 1.;
+    let mut light_transform = light.single_mut()?;
+    if keyboard_input.pressed(KeyCode::KeyF) {
+        light_transform.rotate_axis(Dir3::Z, time.delta_secs() * rotation_speed);
+    }
+
+    Ok(())
+}
 
 /// Orbiting camera handling
 fn orbit(
