@@ -165,7 +165,7 @@ impl Chunk {
     }
 
     /// Get the in-world position of the origin of the chunk.
-    fn get_world_pos(&self) -> Vec3 {
+    pub fn get_world_pos(&self) -> Vec3 {
         Vec3::new(
             self.chunk_position.x as f32,
             0.,
@@ -179,7 +179,7 @@ impl Chunk {
         let mut vertex_positions = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
         let mut uv = Vec::with_capacity(Self::CHUNK_SIZE.pow(2) as usize);
         let mut indices = Vec::with_capacity(((Self::CHUNK_SIZE - 1).pow(2) * 6) as usize);
-        let offset = -Chunk::WORLD_CHUNK_SIZE / 2.;
+        let offset = 0.;
         for (i, sq) in self.grid.iter().enumerate() {
             let x = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
             let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
@@ -232,52 +232,83 @@ impl Chunk {
         pos: &Vec3,
         radius: f32,
         operation: PatchOp,
-    ) {
+    ) -> Vec<(i64, i64)>{
         let mesh = self.get_mesh_mut(meshes);
-        let attrs = mesh.attributes_mut();
-        let mut attrs = attrs.filter(|(s, _)| {
-            s.id == Mesh::ATTRIBUTE_POSITION.id || s.id == Mesh::ATTRIBUTE_UV_0.id
-        });
-        let fst = attrs.next().unwrap();
-        let snd = attrs.next().unwrap();
-        let (v_pos, v_uv) = if fst.0.id == Mesh::ATTRIBUTE_POSITION.id {
-            (fst.1, snd.1)
-        } else {
-            (snd.1, fst.1)
-        };
-        if let (VertexAttributeValues::Float32x3(vertex), VertexAttributeValues::Float32x2(uvs)) = (v_pos, v_uv) {
-            let local_pos = (pos - self.get_world_pos() + Self::WORLD_CHUNK_SIZE/2.).xz();
-            let x_min = (local_pos.x - radius)
-                .ceil()
-                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
-            let x_max = (local_pos.x + radius)
-                .floor()
-                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
-            let y_min = (local_pos.y - radius)
-                .ceil()
-                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
-            let y_max = (local_pos.y + radius)
-                .floor()
-                .clamp(0.0, Chunk::CHUNK_SIZE as f32 - 1.) as u32;
-            match operation {
-                PatchOp::Up => {
-                    for x in x_min..=x_max {
-                        for y in y_min..=y_max {
-                            if (local_pos - Vec2::new(x as f32, y as f32)).norm() <= radius {
-                                let index = (x * Chunk::CHUNK_SIZE + y) as usize;
-                                let delta = 0.1;
-                                vertex[index][1] += delta * Self::SCALE_Y;
-                                self.grid[index].height += delta;
-                                uvs[index][0] += delta;
+        let mut ret = Vec::new();
+        {
+            let attrs = mesh.attributes_mut();
+            let mut attrs = attrs.filter(|(s, _)| {
+                s.id == Mesh::ATTRIBUTE_POSITION.id || s.id == Mesh::ATTRIBUTE_UV_0.id
+            });
+            let fst = attrs.next().unwrap();
+            let snd = attrs.next().unwrap();
+            let (v_pos, v_uv) = if fst.0.id == Mesh::ATTRIBUTE_POSITION.id {
+                (fst.1, snd.1)
+            } else {
+                (snd.1, fst.1)
+            };
+            if let (
+                VertexAttributeValues::Float32x3(vertex),
+                VertexAttributeValues::Float32x2(uvs),
+            ) = (v_pos, v_uv)
+            {
+                let local_pos = (pos - self.get_world_pos()).xz();
+                dbg!(local_pos);
+                let mut x_min = (local_pos.x - radius)
+                    .ceil() as i32;
+                let mut x_max = (local_pos.x + radius)
+                    .floor()as i32;
+                let mut y_min = (local_pos.y - radius)
+                    .ceil() as i32;
+                let mut y_max = (local_pos.y + radius)
+                    .floor() as i32;
+
+                if x_min <= 0 && y_min <= 0 {
+                    ret.push((-1, -1));
+                }
+                if x_max >= Self::CHUNK_SIZE as i32 - 1 && y_max >= Self::CHUNK_SIZE as i32 - 1 {
+                    ret.push((1, 1));
+                }
+                if x_min <= 0 {
+                    ret.push((-1, 0));
+                    x_min = 0;
+                }
+                if y_min <= 0 {
+                    ret.push((0, -1));
+                    y_min = 0;
+                }
+                if x_max >= Self::CHUNK_SIZE as i32 - 1 {
+                    ret.push((1, 0));
+                    x_max = Self::CHUNK_SIZE as i32 - 1;
+                }
+                if y_max >= Self::CHUNK_SIZE as i32 - 1 {
+                    ret.push((0, 1));
+                    y_max = Self::CHUNK_SIZE as i32 - 1;
+                }
+
+                match operation {
+                    PatchOp::Up => {
+                        for x in x_min..=x_max {
+                            for y in y_min..=y_max {
+                                let dist = (local_pos - Vec2::new(x as f32, y as f32)).norm();
+                                if dist <= radius {
+                                    let index = x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
+                                    let delta = 0.1 * (1. - (dist / radius).powi(4));
+                                    vertex[index][1] += delta * Self::SCALE_Y;
+                                    self.grid[index].height += delta;
+                                    uvs[index][0] += delta;
+                                }
                             }
                         }
                     }
+                    PatchOp::Down => todo!(),
+                    PatchOp::Flatten => todo!(),
+                    PatchOp::Smooth => todo!(),
                 }
-                PatchOp::Down => todo!(),
-                PatchOp::Flatten => todo!(),
-                PatchOp::Smooth => todo!(),
             }
         }
+        mesh.compute_smooth_normals();
+        ret
     }
 }
 

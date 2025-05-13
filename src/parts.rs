@@ -371,9 +371,13 @@ fn place_build(
             let (e, transform, tool) = *query;
             if let Some(ti) = tool {
                 let chunk_pos_x = (transform.translation.x / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-                let chunk_pos_y = (transform.translation.y / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-                let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_y).into());
-                chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
+                let chunk_pos_z = (transform.translation.z / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
+                let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_z).into());
+                let add_patches = chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
+                for (off_x, off_z) in add_patches {
+                    let chunk = map.get_chunk_mut(&(chunk_pos_x + off_x, chunk_pos_z + off_z).into());
+                    chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
+                }
             }
             else {
                 commands.entity(e).remove::<SelectedBuild>();
