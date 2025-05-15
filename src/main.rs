@@ -8,13 +8,17 @@ use std::{
 };
 
 use bevy::{
-    core_pipeline::{experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing}, prepass::DepthPrepass},
+    core_pipeline::{
+        experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
+        prepass::DepthPrepass,
+    },
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     pbr::{
-        decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt}, wireframe::{WireframeConfig, WireframePlugin}, ExtendedMaterial
+        ExtendedMaterial,
+        wireframe::{WireframeConfig, WireframePlugin},
     },
     prelude::*,
-    remote::{http::RemoteHttpPlugin, RemotePlugin},
+    remote::{RemotePlugin, http::RemoteHttpPlugin},
 };
 use map::MapPlugin;
 use maptext::TerrainShader;
@@ -70,15 +74,12 @@ impl Default for CameraSettings {
 }
 
 /// Setup the 3D environnement. Mostly a placeholder.
-fn setup_3d(
-    mut commands: Commands,
-
-) {
+fn setup_3d(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
             illuminance: 10_000.,
-            shadow_depth_bias: 0.2,
+            shadow_depth_bias: 0.05,
             ..default()
         },
         Transform {
@@ -87,7 +88,6 @@ fn setup_3d(
             ..default()
         },
     ));
-
 
     // //ground plane
     // commands.spawn((

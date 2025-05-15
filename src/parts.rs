@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bevy::{
     asset::RenderAssetUsages,
-    math::I64Vec2,
+    math::{I64Vec2, NormedVectorSpace},
     pbr::{
         decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
         wireframe::{Wireframe, WireframeColor},
@@ -15,7 +15,7 @@ use bevy::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::map::{Chunk, Map, PatchOp, GRID_SQUARE_SIZE};
+use crate::map::{Chunk, GRID_SQUARE_SIZE, Map, PatchOp};
 
 /// An id for a building, serve to identify which building corresponds to a mesh.
 #[derive(Clone, Component, PartialEq)]
@@ -177,6 +177,22 @@ pub fn setup_parts(
         },
         size: (0, 0).into(),
     }));
+
+    parts.0.push(Arc::new(Building {
+        typ: BuildingType::Tool { op: PatchOp::Down },
+        config: BuildConfig {
+            name: "patch down".into(),
+        },
+        size: (0, 0).into(),
+    }));
+
+    parts.0.push(Arc::new(Building {
+        typ: BuildingType::Tool { op: PatchOp::Flatten },
+        config: BuildConfig {
+            name: "patch flatten".into(),
+        },
+        size: (0, 0).into(),
+    }));
 }
 
 /// Creates a colorful test pattern
@@ -221,13 +237,20 @@ fn spawn_build_from_part_id(
     shapes: Res<SavedShapes>,
     interaction_query: Query<(Entity, &BuildId), Without<Transform>>,
     button: Res<ButtonInput<MouseButton>>,
-    selected_part_query: Option<Single<&SelectedBuild>>,
+    selected_part_query: Option<Single<Entity, With<SelectedBuild>>>,
     asset_server: Res<AssetServer>,
     mut decal_standard_materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
 ) {
-    if button.pressed(MouseButton::Left) || selected_part_query.is_some() {
+    if button.pressed(MouseButton::Left) {
         return;
     }
+
+    if let Some(selpart) = selected_part_query {
+        if !interaction_query.is_empty() {
+            commands.entity(*selpart).despawn()
+        };
+    }
+
     for (e, p) in &interaction_query {
         let part = &p.0;
 
@@ -319,7 +342,7 @@ fn build_follow_cursor(
         .with_filter(&filter);
     let hits = ray_cast.cast_ray(ray, &settings);
 
-    let (point, normal) = if let Some((_, hit)) = hits.first() {
+    let (point, _normal) = if let Some((_, hit)) = hits.first() {
         *visibility = Visibility::Visible;
         (hit.point, hit.normal.normalize())
     } else {
@@ -342,7 +365,7 @@ fn build_follow_cursor(
     let he_proj = part_transform
         .rotation
         .mul_vec3(Vec3::from(aabb.half_extents))
-        .project_onto(normal);
+        .project_onto(Vec3::Y);
     if selected_build.resizable
         && (button.pressed(MouseButton::Left) || button.just_pressed(MouseButton::Left))
     {
@@ -353,7 +376,7 @@ fn build_follow_cursor(
             Vec3::new(place_point.x, 0., place_point.y) + he * part_transform.scale;
     } else if !button.just_released(MouseButton::Left) {
         *place_point = point2d;
-        part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
+        //part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
         part_transform.translation = Vec3::new(place_point.x, point.y, place_point.y) + he_proj;
     }
 }
@@ -361,25 +384,36 @@ fn build_follow_cursor(
 /// Actually place a part on click
 fn place_build(
     mut commands: Commands,
-    selected_part_query: Option<Single<(Entity, &Transform, Option<&ToolInstance>), With<SelectedBuild>>>,
+    selected_part_query: Option<
+        Single<(Entity, &Transform, Option<&ToolInstance>, &Aabb), With<SelectedBuild>>,
+    >,
     mut map: ResMut<Map>,
     button: Res<ButtonInput<MouseButton>>,
-    mut meshes: ResMut<Assets<Mesh>>
+    key: Res<ButtonInput<KeyCode>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     if button.just_released(MouseButton::Left) {
         if let Some(query) = selected_part_query {
-            let (e, transform, tool) = *query;
-            if let Some(ti) = tool {
-                let chunk_pos_x = (transform.translation.x / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-                let chunk_pos_z = (transform.translation.z / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-                let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_z).into());
-                let add_patches = chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
-                for (off_x, off_z) in add_patches {
-                    let chunk = map.get_chunk_mut(&(chunk_pos_x + off_x, chunk_pos_z + off_z).into());
-                    chunk.patch(&mut *meshes, &transform.translation, ti.radius, ti.op );
-                }
+            let (e, transform, tool, aabb) = *query;
+            let (trsl, radius, op) = if let Some(ti) = tool {
+                (transform.translation, ti.radius, ti.op)
+            } else {
+                (
+                    transform.translation - Vec3::new(0., aabb.half_extents.y - 0.05, 0.),
+                    aabb.half_extents.xz().norm() * 2.,
+                    PatchOp::Flatten,
+                )
+            };
+            let chunk_pos_x = (transform.translation.x / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
+            let chunk_pos_z = (transform.translation.z / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
+            let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_z).into());
+            //TODO too convoluted here. Make separate chunk intersect detection.
+            let add_patches = chunk.patch(&mut *meshes, &trsl, radius, op);
+            for (off_x, off_z) in add_patches {
+                let chunk = map.get_chunk_mut(&(chunk_pos_x + off_x, chunk_pos_z + off_z).into());
+                chunk.patch(&mut *meshes, &trsl, radius, op);
             }
-            else {
+            if !(key.pressed(KeyCode::ControlLeft) || key.pressed(KeyCode::ControlRight)) {
                 commands.entity(e).remove::<SelectedBuild>();
             }
         }

@@ -232,7 +232,7 @@ impl Chunk {
         pos: &Vec3,
         radius: f32,
         operation: PatchOp,
-    ) -> Vec<(i64, i64)>{
+    ) -> Vec<(i64, i64)> {
         let mesh = self.get_mesh_mut(meshes);
         let mut ret = Vec::new();
         {
@@ -253,15 +253,10 @@ impl Chunk {
             ) = (v_pos, v_uv)
             {
                 let local_pos = (pos - self.get_world_pos()).xz();
-                dbg!(local_pos);
-                let mut x_min = (local_pos.x - radius)
-                    .ceil() as i32;
-                let mut x_max = (local_pos.x + radius)
-                    .floor()as i32;
-                let mut y_min = (local_pos.y - radius)
-                    .ceil() as i32;
-                let mut y_max = (local_pos.y + radius)
-                    .floor() as i32;
+                let mut x_min = (local_pos.x - radius).ceil() as i32;
+                let mut x_max = (local_pos.x + radius).floor() as i32;
+                let mut y_min = (local_pos.y - radius).ceil() as i32;
+                let mut y_max = (local_pos.y + radius).floor() as i32;
 
                 if x_min <= 0 && y_min <= 0 {
                     ret.push((-1, -1));
@@ -287,13 +282,19 @@ impl Chunk {
                 }
 
                 match operation {
-                    PatchOp::Up => {
+                    PatchOp::Up | PatchOp::Down => {
+                        let sign = if let PatchOp::Down = operation {
+                            -1.
+                        } else {
+                            1.
+                        };
                         for x in x_min..=x_max {
                             for y in y_min..=y_max {
                                 let dist = (local_pos - Vec2::new(x as f32, y as f32)).norm();
                                 if dist <= radius {
-                                    let index = x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
-                                    let delta = 0.1 * (1. - (dist / radius).powi(4));
+                                    let index =
+                                        x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
+                                    let delta = 0.1 * (1. - (dist / radius).powi(4)) * sign;
                                     vertex[index][1] += delta * Self::SCALE_Y;
                                     self.grid[index].height += delta;
                                     uvs[index][0] += delta;
@@ -301,8 +302,22 @@ impl Chunk {
                             }
                         }
                     }
-                    PatchOp::Down => todo!(),
-                    PatchOp::Flatten => todo!(),
+                    PatchOp::Flatten => {
+                        for x in x_min..=x_max {
+                            for y in y_min..=y_max {
+                                let dist = (local_pos - Vec2::new(x as f32, y as f32)).norm();
+                                if dist <= radius {
+                                    let index =
+                                        x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
+                                    let ratio = (dist / radius).powi(4);
+                                    let height = ratio * vertex[index][1] + (1. - ratio) * pos.y;
+                                    vertex[index][1] = height;
+                                    self.grid[index].height = height / Self::SCALE_Y;
+                                    uvs[index][0] = height / Self::SCALE_Y;
+                                }
+                            }
+                        }
+                    }
                     PatchOp::Smooth => todo!(),
                 }
             }
@@ -390,8 +405,6 @@ pub fn spawn_chunk(
         if !chunk.spawned {
             chunk.spawned = true;
             let mesh = chunk.get_mesh(&mut *meshes);
-            dbg!(chunk_pos);
-            dbg!(chunk.get_world_pos());
             let mut entity = commands.spawn((
                 Mesh3d(mesh),
                 MeshMaterial3d(mat.clone()),
@@ -410,24 +423,28 @@ pub fn spawn_chunk(
                     (build.grid_pos.y - chunk_pos.y) as f32 * GRID_SQUARE_SIZE,
                 );
                 match &build.building.typ {
-                    BuildingType::Single { model } => entity.with_child((
-                        Mesh3d(model.mesh.clone()),
-                        MeshMaterial3d(model.material.clone()),
-                        Transform::from_translation(pos),
-                    )),
-                    BuildingType::Zone { color } => entity.with_child((
-                        // TODO : mesh for zone
-                        Wireframe,
-                        WireframeColor {
-                            color: color.clone(),
-                        },
-                        Transform::from_translation(pos).with_scale(Vec3::new(
-                            build.size.x as f32 * GRID_SQUARE_SIZE,
-                            0.1,
-                            build.size.y as f32 * GRID_SQUARE_SIZE,
-                        )),
-                    )),
-                    BuildingType::Tool { op } => todo!(),
+                    BuildingType::Single { model } => {
+                        entity.with_child((
+                            Mesh3d(model.mesh.clone()),
+                            MeshMaterial3d(model.material.clone()),
+                            Transform::from_translation(pos),
+                        ));
+                    }
+                    BuildingType::Zone { color } => {
+                        entity.with_child((
+                            // TODO : mesh for zone
+                            Wireframe,
+                            WireframeColor {
+                                color: color.clone(),
+                            },
+                            Transform::from_translation(pos).with_scale(Vec3::new(
+                                build.size.x as f32 * GRID_SQUARE_SIZE,
+                                0.1,
+                                build.size.y as f32 * GRID_SQUARE_SIZE,
+                            )),
+                        ));
+                    }
+                    _ => {}
                 };
             }
         }
