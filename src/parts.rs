@@ -23,9 +23,12 @@ pub struct BuildId(pub Arc<Building>);
 
 /// The part currently selected, that follow the mouse
 #[derive(Component)]
-pub struct SelectedBuild {
-    resizable: bool,
-}
+pub struct SelectedBuild;
+
+/// Whether a part is resizable.
+#[derive(Component)]
+pub struct Resizable;
+
 
 /// Multiples of grid square the selection snaps to
 #[derive(Resource)]
@@ -48,6 +51,7 @@ impl Plugin for BuildPlugin {
                 build_follow_cursor,
                 place_build,
                 snapping_mode,
+                select_world_part
             ),
         );
         app.insert_resource(Buildings::default());
@@ -61,6 +65,8 @@ pub struct Building {
     pub typ: BuildingType,
     pub config: BuildConfig,
     pub size: I64Vec2,
+    pub material: Handle<StandardMaterial>, 
+    pub highlight_material: Handle<StandardMaterial>
 }
 
 impl PartialEq for Building {
@@ -72,7 +78,6 @@ impl PartialEq for Building {
 /// Contains the material and mesh for a building. (and maybe pther things in the future)
 pub struct BuildModel {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
 }
 
 /// Split between zoning and individual buildings (and maybe fmroe things in the future, e.g. roads)
@@ -102,6 +107,9 @@ pub struct Buildings(pub Vec<Arc<Building>>);
 #[derive(Resource, Default)]
 pub struct SavedShapes(Vec<Handle<Mesh>>);
 
+#[derive(Component)]
+pub struct Highlighted;
+
 /// Generate the parts, that will later serve to generate the buttons.
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
@@ -111,10 +119,19 @@ pub fn setup_parts(
     //asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let debug_texture = images.add(uv_debug_texture());
     let debug_material = materials.add(StandardMaterial {
-        base_color_texture: Some(images.add(uv_debug_texture())),
+        base_color_texture: Some(debug_texture.clone()),
         ..default()
     });
+    let highlight_material = materials.add(
+        StandardMaterial {
+            base_color_texture: Some(debug_texture.clone()), 
+            base_color: Color::WHITE.with_alpha(0.4), 
+            alpha_mode: AlphaMode::Blend,
+            ..Default::default()
+        }
+    );
 
     shapes.0.push(meshes.add(Cuboid::default()));
 
@@ -152,9 +169,10 @@ pub fn setup_parts(
             typ: BuildingType::Single {
                 model: BuildModel {
                     mesh: shape.clone(),
-                    material: debug_material.clone(),
                 },
             },
+            material: debug_material.clone(),
+            highlight_material: highlight_material.clone(),
             config: BuildConfig::placeholder(i),
             size: (1, 1).into(),
         }));
@@ -168,6 +186,8 @@ pub fn setup_parts(
             name: "a_zonetest".into(),
         },
         size: (0, 0).into(),
+        material: debug_material.clone(),
+        highlight_material: highlight_material.clone(),
     }));
 
     parts.0.push(Arc::new(Building {
@@ -176,6 +196,9 @@ pub fn setup_parts(
             name: "patch up".into(),
         },
         size: (0, 0).into(),
+
+        material: debug_material.clone(),
+        highlight_material: highlight_material.clone(),
     }));
 
     parts.0.push(Arc::new(Building {
@@ -184,6 +207,9 @@ pub fn setup_parts(
             name: "patch down".into(),
         },
         size: (0, 0).into(),
+
+        material: debug_material.clone(),
+        highlight_material: highlight_material.clone(),
     }));
 
     parts.0.push(Arc::new(Building {
@@ -192,6 +218,9 @@ pub fn setup_parts(
             name: "patch flatten".into(),
         },
         size: (0, 0).into(),
+
+        material: debug_material.clone(),
+        highlight_material: highlight_material.clone(),
     }));
 }
 
@@ -257,9 +286,9 @@ fn spawn_build_from_part_id(
         match &part.typ {
             BuildingType::Single { model } => commands.entity(e).insert((
                 Mesh3d(model.mesh.clone()),
-                MeshMaterial3d(model.material.clone()),
+                MeshMaterial3d(part.material.clone()),
                 Transform::default(),
-                SelectedBuild { resizable: false },
+                SelectedBuild,
                 Visibility::Hidden,
             )),
             BuildingType::Zone { color } => commands.entity(e).insert((
@@ -269,7 +298,8 @@ fn spawn_build_from_part_id(
                     color: color.clone(),
                 },
                 Transform::default(),
-                SelectedBuild { resizable: true },
+                SelectedBuild,
+                Resizable,
                 Visibility::Hidden,
             )),
             BuildingType::Tool { op } => commands.entity(e).insert((
@@ -291,7 +321,7 @@ fn spawn_build_from_part_id(
                     },
                 })),
                 Transform::from_scale(Vec3::splat(10.0)),
-                SelectedBuild { resizable: false },
+                SelectedBuild,
                 Visibility::Hidden,
             )),
         };
@@ -309,10 +339,10 @@ fn build_follow_cursor(
         Single<(
             Entity,
             &mut Transform,
-            &SelectedBuild,
             &Aabb,
             &mut Visibility,
-        )>,
+            Option<&Resizable>
+        ), With<SelectedBuild>>,
     >,
     //map: Res<Map>,
     button: Res<ButtonInput<MouseButton>>,
@@ -332,7 +362,7 @@ fn build_follow_cursor(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
         return;
     };
-    let (e, mut part_transform, selected_build, aabb, mut visibility) = selpart.into_inner();
+    let (e, mut part_transform, aabb, mut visibility, resizable) = selpart.into_inner();
 
     // Cast the ray to get hit to the nearest different object
 
@@ -366,7 +396,7 @@ fn build_follow_cursor(
         .rotation
         .mul_vec3(Vec3::from(aabb.half_extents))
         .project_onto(Vec3::Y);
-    if selected_build.resizable
+    if resizable.is_some()
         && (button.pressed(MouseButton::Left) || button.just_pressed(MouseButton::Left))
     {
         let scale = point2d - *place_point;
@@ -417,6 +447,80 @@ fn place_build(
                 commands.entity(e).remove::<SelectedBuild>();
             }
         }
+    }
+}
+
+
+
+fn select_world_part(
+    mut commands: Commands,
+    selected_part_query: Option<
+        Single<Entity, With<SelectedBuild>>>,
+    highlighted_part_query: Option<Single<Entity, With<Highlighted>>>,
+    buildings: Query<(), With<BuildId>>,
+    mut ray_cast: MeshRayCast,
+    camera_query: Single<(&Camera, &GlobalTransform)>,
+    windows: Single<&Window>,
+    keyboard_input: Res<ButtonInput<MouseButton>>,
+) {
+    if selected_part_query.is_none() {
+        let (camera, camera_transform) = *camera_query;
+
+        let Some(cursor_position) = windows.cursor_position() else {
+            return;
+        };
+    
+        // Calculate a ray pointing from the camera into the world based on the cursor's position.
+        let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
+            return;
+        };
+
+        let settings = MeshRayCastSettings::default()
+        .always_early_exit();
+        let hits = ray_cast.cast_ray(ray, &settings);
+
+        if let Some((e, _hit)) = hits.first() {
+            //checks if hit is a building
+            if buildings.contains(*e) {
+                //if clicked, select it
+                if keyboard_input.just_released(MouseButton::Left) {
+                    highlighted_part_query.map(|e| {commands.entity(*e).remove::<Highlighted>();});
+                    commands.entity(*e).insert(SelectedBuild);
+                }
+                else {
+                    //highlight it and remove potential different highlights.
+                    if let Some(highlighted_e) = highlighted_part_query {
+                        if *e != *highlighted_e {
+                            commands.entity(*highlighted_e).remove::<Highlighted>();
+                            commands.entity(*e).insert(Highlighted);
+                        }
+                    }
+                    else {
+                        commands.entity(*e).insert(Highlighted);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn on_add_highlight(
+    trigger: Trigger<OnAdd, Highlighted>, 
+    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, &BuildId)>,
+) {
+    if let Ok((mut mat, buildid)) = query.get_mut(trigger.target()) {
+        mat.0 = buildid.0.highlight_material.clone();
+        //TODO: zones ? 
+    }
+}
+
+fn on_remove_highlight(
+    trigger: Trigger<OnRemove, Highlighted>, 
+    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, &BuildId)>,
+) {
+    if let Ok((mut mat, buildid)) = query.get_mut(trigger.target()) {
+        mat.0 = buildid.0.material.clone();
+        //TODO: zones ? 
     }
 }
 

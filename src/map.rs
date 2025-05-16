@@ -370,7 +370,7 @@ pub fn setup_map(
         extension: TerrainShader {
             mask: text,
             highlight_color: Srgba::hex("D8C37F").unwrap().into(),
-            shadow_color: Srgba::hex("B09070").unwrap().into(),
+            shadow_color: Srgba::hex("#2b2724").unwrap().into(),
             rim_color: Color::WHITE.into(),
             grass_color: Srgba::hex("92eb3f").unwrap().into(),
             ocean_color: Srgba::hex("5584f2").unwrap().into(),
@@ -426,7 +426,7 @@ pub fn spawn_chunk(
                     BuildingType::Single { model } => {
                         entity.with_child((
                             Mesh3d(model.mesh.clone()),
-                            MeshMaterial3d(model.material.clone()),
+                            MeshMaterial3d(build.building.material.clone()),
                             Transform::from_translation(pos),
                         ));
                     }
