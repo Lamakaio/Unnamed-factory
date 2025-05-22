@@ -2,6 +2,7 @@ pub mod map;
 pub mod maptext;
 pub mod parts;
 pub mod ui;
+pub mod sim;
 use std::{
     f32::consts::{FRAC_PI_2, PI},
     ops::Range,
@@ -22,6 +23,7 @@ use bevy::{
 use map::MapPlugin;
 use maptext::TerrainShader;
 use parts::BuildPlugin;
+use sim::SimPlugin;
 use ui::UiPlugin;
 
 fn main() {
@@ -39,7 +41,8 @@ fn main() {
     >::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, (setup_3d,))
-    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
+    //.add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
+    .add_plugins(SimPlugin)
     .add_systems(Update, (toggle_wireframe, orbit, rotate_light));
 
     app.run();
@@ -117,19 +120,19 @@ fn setup_3d(
 
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {fov: PI/3., ..Default::default()}),
-        Camera {
-            hdr: true,
-            ..default()
-        },
-        Bloom::NATURAL,
-        Tonemapping::AcesFitted,
-        //DepthPrepass,
-        //Msaa::Off,
-        //TemporalAntiAliasing::default(),
         IsDefaultUiCamera,
-        Transform::from_xyz(20.0, 5., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Atmosphere::EARTH,
+        // Projection::Perspective(PerspectiveProjection {fov: PI/3., ..Default::default()}),
+        // Camera {
+        //     hdr: true,
+        //     ..default()
+        // },
+        // Bloom::NATURAL,
+        // Exposure::SUNLIGHT,
+        // DepthPrepass,
+        // //Msaa::Off,
+        // //TemporalAntiAliasing::default(),
+        // Transform::from_xyz(20.0, 5., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Atmosphere::EARTH,
     ));
 }
 
