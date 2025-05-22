@@ -114,13 +114,15 @@ fn run_rhai(
     }
     if let Some(sc) = scripts.get_mut(&sim.run) {
         if sc.ast.is_none() {
-            sc.ast = sim.engine.compile_with_scope(&sim.scope, &sc.text).ok();
+            sc.ast = Some(sim.engine.compile_with_scope(&sim.scope, &sc.text)?);
         }
 
         if let Some(ast) = &sc.ast {
-            let Sim { engine, scope, .. } = &mut *sim;
+            if input.pressed(KeyCode::Enter) {
+                let Sim { engine, scope, .. } = &mut *sim;
 
-            engine.run_ast_with_scope(scope, ast)?;
+                engine.run_ast_with_scope(scope, ast)?;
+            }
         }
     }
 
@@ -145,6 +147,7 @@ fn spawn_on(
                         flex_direction: FlexDirection::Column,
                         border: UiRect::all(Val::Px(5.0)),
                         margin: UiRect::all(Val::Px(10.)),
+                        flex_wrap: FlexWrap::Wrap,
                         ..default()
                     },
                     BorderColor(Color::hsv(rand::random_range(0.0..360.0), 1.0, 1.0)),
@@ -169,7 +172,7 @@ fn spawn_on(
             path.hash(&mut h);
             parent.spawn((
                 Node {
-                    margin: UiRect::all(Val::Px(10.)),
+                    margin: UiRect::all(Val::Px(3.)),
                     ..default()
                 },
                 Text(format!("{} : {}", name, f)),
