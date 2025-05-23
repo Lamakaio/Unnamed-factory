@@ -20,7 +20,7 @@ use bevy::{
     remote::{http::RemoteHttpPlugin, RemotePlugin},
     render::camera::Exposure,
 };
-use map::MapPlugin;
+use map::{Map, MapPlugin};
 use maptext::TerrainShader;
 use parts::BuildPlugin;
 use sim::SimPlugin;
@@ -41,8 +41,8 @@ fn main() {
     >::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, (setup_3d,))
-    //.add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
-    .add_plugins(SimPlugin)
+    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
+    //.add_plugins(SimPlugin)
     .add_systems(Update, (toggle_wireframe, orbit, rotate_light));
 
     app.run();
@@ -57,6 +57,7 @@ struct CameraSettings {
     pub pitch_range: Range<f32>,
     pub yaw_speed: f32,
     pub zoom_speed: f32,
+    pub pan_speed: f32,
 }
 
 impl Default for CameraSettings {
@@ -71,6 +72,7 @@ impl Default for CameraSettings {
             pitch_range: -pitch_limit..pitch_limit,
             yaw_speed: 0.004,
             zoom_speed: 0.05,
+            pan_speed: 3.
         }
     }
 }
@@ -121,18 +123,22 @@ fn setup_3d(
     commands.spawn((
         Camera3d::default(),
         IsDefaultUiCamera,
-        // Projection::Perspective(PerspectiveProjection {fov: PI/3., ..Default::default()}),
-        // Camera {
-        //     hdr: true,
-        //     ..default()
-        // },
-        // Bloom::NATURAL,
-        // Exposure::SUNLIGHT,
-        // DepthPrepass,
-        // //Msaa::Off,
-        // //TemporalAntiAliasing::default(),
-        // Transform::from_xyz(20.0, 5., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
-        // Atmosphere::EARTH,
+        CameraTarget {
+            pos: Vec3::default(), 
+            distance: 10.
+        },
+        Projection::Perspective(PerspectiveProjection {fov: PI/3., ..Default::default()}),
+        Camera {
+            hdr: true,
+            ..default()
+        },
+        Bloom::NATURAL,
+        Exposure::SUNLIGHT,
+        DepthPrepass,
+        //Msaa::Off,
+        //TemporalAntiAliasing::default(),
+        Transform::from_xyz(20.0, 20., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Atmosphere::EARTH,
     ));
 }
 
@@ -160,14 +166,24 @@ fn rotate_light(
     Ok(())
 }
 
+#[derive(Component)]
+pub struct CameraTarget {
+    pos: Vec3, 
+    distance: f32
+}
+
 /// Orbiting camera handling
 fn orbit(
-    mut camera: Single<&mut Transform, With<Camera>>,
+    mut camera: Single<(&mut Transform, &mut CameraTarget), With<Camera>>,
     camera_settings: Res<CameraSettings>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
     mouse_motion: Res<AccumulatedMouseMotion>,
+    map: Res<Map>,
+    time: Res<Time>
 ) {
+    let (camera_transform, camera_target) = &mut *camera;
     if mouse_buttons.pressed(MouseButton::Right) {
         let delta = mouse_motion.delta;
 
@@ -178,7 +194,7 @@ fn orbit(
         let delta_yaw = -delta.x * camera_settings.yaw_speed;
 
         // Obtain the existing pitch, yaw, and roll values from the transform.
-        let (yaw, pitch, roll) = camera.rotation.to_euler(EulerRot::YXZ);
+        let (yaw, pitch, roll) = camera_transform.rotation.to_euler(EulerRot::YXZ);
 
         // Establish the new yaw and pitch, preventing the pitch value from exceeding our limits.
         let pitch = (pitch + delta_pitch).clamp(
@@ -186,19 +202,39 @@ fn orbit(
             camera_settings.pitch_range.end,
         );
         let yaw = yaw + delta_yaw;
-        camera.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
+        camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
 
     // Adjust the translation to maintain the correct orientation toward the orbit target at the desired orbit distance.
-    // Here, it's a static target, but this could easily be customized.
-    let target = Vec3::new(0., 10., 0.);
 
-    let current_distance = camera.translation.distance(target);
+    let mut movement = Vec3::default();
+    // Move the target if needed
+    if keyboard_input.pressed(KeyCode::ArrowDown) {
+        movement += Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::ArrowUp) {
+        movement -= Vec3::Z;
+    }
+    if keyboard_input.pressed(KeyCode::ArrowLeft) {
+        movement -= Vec3::X;
+    }
+    if keyboard_input.pressed(KeyCode::ArrowRight) {
+        movement += Vec3::X;
+    }
+    movement *= time.delta_secs() * camera_settings.pan_speed * camera_target.distance;
+
+    camera_target.pos += camera_transform.rotation.mul_vec3(movement);
+
+    camera_target.pos.y = map.get_height(camera_target.pos) + 1.;
+
+
     let delta_scroll = mouse_scroll.delta.y;
-    let distance =
-        (current_distance + delta_scroll * camera_settings.zoom_speed * current_distance).clamp(
-            camera_settings.orbit_distance.start,
-            camera_settings.orbit_distance.end,
-        );
-    camera.translation = target - camera.forward() * distance;
+    camera_target.distance += delta_scroll * camera_settings.zoom_speed * camera_target.distance;
+    camera_target.distance = camera_target.distance.clamp(
+        camera_settings.orbit_distance.start,
+        camera_settings.orbit_distance.end,
+    );
+    camera_transform.translation = camera_target.pos - camera_transform.forward() * camera_target.distance;
+
+    camera_transform.translation.y =  camera_transform.translation.y.max(map.get_height(camera_transform.translation) + 1.)
 }

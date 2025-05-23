@@ -27,7 +27,7 @@ use noiz::{
 
 use crate::{
     maptext::TerrainShader,
-    parts::{Building, BuildingType},
+    parts::{Building, BuildingType}, CameraTarget,
 };
 pub struct MapPlugin {
     pub seed: u128,
@@ -226,6 +226,9 @@ impl Chunk {
         meshes.get_mut(&handle).expect("Mesh not found")
     }
 
+    pub fn get_index(x: i32, y: i32) -> usize {
+        x as usize * Chunk::CHUNK_SIZE as usize + y as usize
+    }
     pub fn patch(
         &mut self,
         meshes: &mut Assets<Mesh>,
@@ -292,8 +295,7 @@ impl Chunk {
                             for y in y_min..=y_max {
                                 let dist = (local_pos - Vec2::new(x as f32, y as f32)).norm();
                                 if dist <= radius {
-                                    let index =
-                                        x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
+                                    let index = Chunk::get_index(x, y);
                                     let delta = 0.1 * (1. - (dist / radius).powi(4)) * sign;
                                     vertex[index][1] += delta * Self::SCALE_Y;
                                     self.grid[index].height += delta;
@@ -346,12 +348,27 @@ impl Map {
             .or_insert_with(|| (pos.clone(), Chunk::new_and_generate(pos, &self.noise)))
             .1
     }
+
+    pub fn get_height(&self, pos: Vec3) -> f32 {
+        let chunk_pos = (pos / Chunk::WORLD_CHUNK_SIZE).floor();
+        let chunk_pos = I64Vec2::new(chunk_pos.x as i64, chunk_pos.z as i64);
+        let chunk = self.chunks.get(&chunk_pos);
+        if let Some(chunk) = chunk {
+            let offset = (pos - chunk.get_world_pos()).floor();
+            chunk.grid[Chunk::get_index(offset.x as i32, offset.z as i32)].height * Chunk::SCALE_Y
+        }
+        else {
+            Chunk::SCALE_Y
+        } 
+    }
 }
 
 pub fn setup_map(
+    mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, TerrainShader>>>,
     mut map: ResMut<Map>,
+    mut meshes: ResMut<Assets<Mesh>>
 ) {
     let text = asset_server.load("img/ZAtoon.png");
     let texture_handle = asset_server.load("img/terrain.png");
@@ -379,7 +396,12 @@ pub fn setup_map(
             sand_color: Srgba::hex("e0cf96").unwrap().into(),
         },
     });
-    map.material = mat
+    map.material = mat.clone();
+    commands.spawn((
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(5000.0, 5000.0).subdivisions(10))),
+        MeshMaterial3d(mat),
+        Transform::from_xyz(0., 2., 0.)
+    ));
 }
 
 /// Handles the spawning of chunks when the camera is close enough. (Currently only spawns the chunk the camera is on)
@@ -387,14 +409,14 @@ pub fn spawn_chunk(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut map: ResMut<Map>,
-    camera: Query<&Transform, (With<Camera>, Changed<Transform>)>,
+    camera: Query<&CameraTarget, (With<Camera>, Changed<CameraTarget>)>,
 ) -> Result {
     let camera_transform = camera.single()?;
-    let camera_chunk_pos = camera_transform.translation / Chunk::WORLD_CHUNK_SIZE;
+    let camera_chunk_pos = camera_transform.pos / Chunk::WORLD_CHUNK_SIZE;
     let mat = map.material.clone();
-    for (x, z) in [-1., 0., 1.]
+    for (x, z) in [-2., -1., 0., 1.]
         .into_iter()
-        .map(|x| [-1., 0., 1.].into_iter().map(move |z| (x, z)))
+        .map(|x| [-2., -1., 0., 1.].into_iter().map(move |z| (x, z)))
         .flatten()
     {
         let chunk_pos = I64Vec2::new(
