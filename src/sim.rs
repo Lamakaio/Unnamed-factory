@@ -4,7 +4,7 @@ use bevy::asset::{AssetLoader, AsyncReadExt, LoadContext};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use foldhash::fast::{FixedState, FoldHasher, RandomState};
+use foldhash::fast::FixedState;
 use rhai::Scope;
 use rhai::{Engine, ImmutableString};
 
@@ -213,6 +213,7 @@ fn make_sim_ui(
                     ..default()
                 },
                 MainNode,
+                Visibility::Hidden,
             ))
             .with_children(|parent| {
                 let mut path = vec![];

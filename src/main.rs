@@ -1,28 +1,35 @@
+pub mod build;
+pub mod build_asset;
 pub mod map;
-pub mod maptext;
-pub mod parts;
-pub mod ui;
+pub mod shaders;
 pub mod sim;
+pub mod ui;
+
 use std::{
     f32::consts::{FRAC_PI_2, PI},
     ops::Range,
 };
 
 use bevy::{
+    color::palettes,
     core_pipeline::{
-        auto_exposure::{AutoExposure, AutoExposurePlugin}, bloom::Bloom, experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing}, prepass::DepthPrepass, tonemapping::Tonemapping
+        bloom::Bloom,
+        experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
+        prepass::DepthPrepass,
     },
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     pbr::{
-        light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere, ExtendedMaterial
+        Atmosphere,
+        light_consts::lux,
+        wireframe::{WireframeConfig, WireframePlugin},
     },
     prelude::*,
-    remote::{http::RemoteHttpPlugin, RemotePlugin},
     render::camera::Exposure,
 };
+use build::BuildPlugin;
+use build_asset::BuildAssetPlugin;
 use map::{Map, MapPlugin};
-use maptext::TerrainShader;
-use parts::BuildPlugin;
+use shaders::ShadersPlugin;
 use sim::SimPlugin;
 use ui::UiPlugin;
 
@@ -32,17 +39,14 @@ fn main() {
     app.add_plugins((
         DefaultPlugins.set(ImagePlugin::default_nearest()),
         WireframePlugin::default(),
+        TemporalAntiAliasPlugin,
     ))
     //.add_plugins(RemotePlugin::default())
     //.add_plugins(RemoteHttpPlugin::default())
-    .add_plugins(AutoExposurePlugin)
-    .add_plugins(MaterialPlugin::<
-        ExtendedMaterial<StandardMaterial, TerrainShader>,
-    >::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, (setup_3d,))
-    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }))
-    //.add_plugins(SimPlugin)
+    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }, ShadersPlugin, BuildAssetPlugin))
+    .add_plugins(SimPlugin)
     .add_systems(Update, (toggle_wireframe, orbit, rotate_light));
 
     app.run();
@@ -72,7 +76,7 @@ impl Default for CameraSettings {
             pitch_range: -pitch_limit..pitch_limit,
             yaw_speed: 0.004,
             zoom_speed: 0.05,
-            pan_speed: 3.
+            pan_speed: 3.,
         }
     }
 }
@@ -97,20 +101,7 @@ fn setup_3d(
             rotation: Quat::from_rotation_x(-PI / 4.),
             ..default()
         },
-        Sun
-    ));
-
-    commands.spawn((
-        DirectionalLight {
-            shadows_enabled: false,
-            illuminance: lux::FULL_MOON_NIGHT,
-            ..default()
-        },
-        Transform {
-            translation: Vec3::new(0.0, 10.0, 0.0),
-            rotation: Quat::from_rotation_x(-PI / 4.),
-            ..default()
-        },
+        Sun,
     ));
 
     // //ground plane
@@ -124,21 +115,31 @@ fn setup_3d(
         Camera3d::default(),
         IsDefaultUiCamera,
         CameraTarget {
-            pos: Vec3::default(), 
-            distance: 10.
+            pos: Vec3::default(),
+            distance: 10.,
         },
-        Projection::Perspective(PerspectiveProjection {fov: PI/3., ..Default::default()}),
+        Projection::Perspective(PerspectiveProjection {
+            fov: PI / 3.,
+            ..Default::default()
+        }),
         Camera {
             hdr: true,
             ..default()
         },
         Bloom::NATURAL,
         Exposure::SUNLIGHT,
+        AmbientLight {
+            color: palettes::css::MIDNIGHT_BLUE.into(),
+            brightness: 100000.,
+            ..default()
+        },
         DepthPrepass,
-        //Msaa::Off,
-        //TemporalAntiAliasing::default(),
+        Msaa::Off,
+        TemporalAntiAliasing::default(),
         Transform::from_xyz(20.0, 20., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         Atmosphere::EARTH,
+        //DistanceFog::default()
+        //ScreenSpaceAmbientOcclusion::default()
     ));
 }
 
@@ -168,8 +169,8 @@ fn rotate_light(
 
 #[derive(Component)]
 pub struct CameraTarget {
-    pos: Vec3, 
-    distance: f32
+    pos: Vec3,
+    distance: f32,
 }
 
 /// Orbiting camera handling
@@ -181,7 +182,7 @@ fn orbit(
     mouse_scroll: Res<AccumulatedMouseScroll>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     map: Res<Map>,
-    time: Res<Time>
+    time: Res<Time>,
 ) {
     let (camera_transform, camera_target) = &mut *camera;
     if mouse_buttons.pressed(MouseButton::Right) {
@@ -227,14 +228,17 @@ fn orbit(
 
     camera_target.pos.y = map.get_height(camera_target.pos) + 1.;
 
-
     let delta_scroll = mouse_scroll.delta.y;
     camera_target.distance += delta_scroll * camera_settings.zoom_speed * camera_target.distance;
     camera_target.distance = camera_target.distance.clamp(
         camera_settings.orbit_distance.start,
         camera_settings.orbit_distance.end,
     );
-    camera_transform.translation = camera_target.pos - camera_transform.forward() * camera_target.distance;
+    camera_transform.translation =
+        camera_target.pos - camera_transform.forward() * camera_target.distance;
 
-    camera_transform.translation.y =  camera_transform.translation.y.max(map.get_height(camera_transform.translation) + 1.)
+    camera_transform.translation.y = camera_transform
+        .translation
+        .y
+        .max(map.get_height(camera_transform.translation) + 1.)
 }

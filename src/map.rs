@@ -24,10 +24,10 @@ use noiz::{
     },
     rng::NoiseRng,
 };
+use serde::Deserialize;
 
 use crate::{
-    maptext::TerrainShader,
-    parts::{Building, BuildingType}, CameraTarget,
+    build::{Building, BuildingType}, shaders::{MapMaterial, TerrainShader}, CameraTarget
 };
 pub struct MapPlugin {
     pub seed: u128,
@@ -50,9 +50,9 @@ pub const GRID_SQUARE_SIZE: f32 = 1.;
 /// Might contain other instance-specific stats in the future (damage, etc)
 #[derive(PartialEq, Clone)]
 pub struct BuildingInstance {
-    building: Arc<Building>,
+    building: Handle<Building>,
     grid_pos: I64Vec2,
-    size: IVec2,
+    size: I64Vec2,
 }
 
 impl KdValue for BuildingInstance {
@@ -67,11 +67,11 @@ impl KdValue for BuildingInstance {
     }
 
     fn max_x(&self) -> Self::Position {
-        self.grid_pos.x + self.building.size.x
+        self.grid_pos.x + self.size.x
     }
 
     fn max_y(&self) -> Self::Position {
-        self.grid_pos.y + self.building.size.y
+        self.grid_pos.y + self.size.y
     }
 }
 
@@ -102,7 +102,7 @@ type NoiseT = Noise<(
     NoiseCurve<Smoothstep>,
 )>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub enum PatchOp {
     Up,
     Down,
@@ -332,7 +332,7 @@ impl Chunk {
 /// The whole map. Contains chunks, and a kd-tree of building instances in the map.
 #[derive(Resource)]
 pub struct Map {
-    material: Handle<ExtendedMaterial<StandardMaterial, TerrainShader>>,
+    material: Handle<MapMaterial>,
     chunks: HashMap<I64Vec2, Chunk>,
     entities: KdTree<BuildingInstance, 10>,
     noise: NoiseT,
@@ -366,36 +366,10 @@ impl Map {
 pub fn setup_map(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<ExtendedMaterial<StandardMaterial, TerrainShader>>>,
     mut map: ResMut<Map>,
     mut meshes: ResMut<Assets<Mesh>>
 ) {
-    let text = asset_server.load("img/ZAtoon.png");
-    let texture_handle = asset_server.load("img/terrain.png");
-    let mat = materials.add(ExtendedMaterial {
-        base: StandardMaterial {
-            base_color_texture: Some(texture_handle.clone()),
-            // can be used in forward or deferred mode
-            opaque_render_method: OpaqueRendererMethod::Auto,
-            // in deferred mode, only the PbrInput can be modified (uvs, color and other material properties),
-            // in forward mode, the output can also be modified after lighting is applied.
-            // see the fragment shader `extended_material.wgsl` for more info.
-            // Note: to run in deferred mode, you must also add a `DeferredPrepass` component to the camera and either
-            // change the above to `OpaqueRendererMethod::Deferred` or add the `DefaultOpaqueRendererMethod` resource.
-            ..Default::default()
-        },
-        extension: TerrainShader {
-            mask: text,
-            highlight_color: Srgba::hex("D8C37F").unwrap().into(),
-            shadow_color: Srgba::hex("#2b2724").unwrap().into(),
-            rim_color: Color::WHITE.into(),
-            grass_color: Srgba::hex("92eb3f").unwrap().into(),
-            ocean_color: Srgba::hex("5584f2").unwrap().into(),
-            mountain_color: Srgba::hex("544a47").unwrap().into(),
-            snow_color: Srgba::hex("f2efe4").unwrap().into(),
-            sand_color: Srgba::hex("e0cf96").unwrap().into(),
-        },
-    });
+    let mat = asset_server.load("materials/map.mapmat");
     map.material = mat.clone();
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(5000.0, 5000.0).subdivisions(10))),
@@ -433,42 +407,42 @@ pub fn spawn_chunk(
                 Transform::from_translation(chunk.get_world_pos()),
             ));
 
-            for build in map.entities.query_rect(
-                chunk_pos.x,
-                chunk_pos.x + Chunk::CHUNK_SIZE as i64,
-                chunk_pos.y,
-                chunk_pos.y + Chunk::CHUNK_SIZE as i64,
-            ) {
-                let pos = Vec3::new(
-                    (build.grid_pos.x - chunk_pos.x) as f32 * GRID_SQUARE_SIZE,
-                    0.,
-                    (build.grid_pos.y - chunk_pos.y) as f32 * GRID_SQUARE_SIZE,
-                );
-                match &build.building.typ {
-                    BuildingType::Single { model } => {
-                        entity.with_child((
-                            Mesh3d(model.mesh.clone()),
-                            MeshMaterial3d(build.building.material.clone()),
-                            Transform::from_translation(pos),
-                        ));
-                    }
-                    BuildingType::Zone { color } => {
-                        entity.with_child((
-                            // TODO : mesh for zone
-                            Wireframe,
-                            WireframeColor {
-                                color: color.clone(),
-                            },
-                            Transform::from_translation(pos).with_scale(Vec3::new(
-                                build.size.x as f32 * GRID_SQUARE_SIZE,
-                                0.1,
-                                build.size.y as f32 * GRID_SQUARE_SIZE,
-                            )),
-                        ));
-                    }
-                    _ => {}
-                };
-            }
+            // for build in map.entities.query_rect(
+            //     chunk_pos.x,
+            //     chunk_pos.x + Chunk::CHUNK_SIZE as i64,
+            //     chunk_pos.y,
+            //     chunk_pos.y + Chunk::CHUNK_SIZE as i64,
+            // ) {
+            //     let pos = Vec3::new(
+            //         (build.grid_pos.x - chunk_pos.x) as f32 * GRID_SQUARE_SIZE,
+            //         0.,
+            //         (build.grid_pos.y - chunk_pos.y) as f32 * GRID_SQUARE_SIZE,
+            //     );
+            //     match &build.building.typ {
+            //         BuildingType::Single { model } => {
+            //             entity.with_child((
+            //                 Mesh3d(model.mesh.clone()),
+            //                 MeshMaterial3d(build.building.material.clone()),
+            //                 Transform::from_translation(pos),
+            //             ));
+            //         }
+            //         BuildingType::Zone { color } => {
+            //             entity.with_child((
+            //                 // TODO : mesh for zone
+            //                 Wireframe,
+            //                 WireframeColor {
+            //                     color: color.clone(),
+            //                 },
+            //                 Transform::from_translation(pos).with_scale(Vec3::new(
+            //                     build.size.x as f32 * GRID_SQUARE_SIZE,
+            //                     0.1,
+            //                     build.size.y as f32 * GRID_SQUARE_SIZE,
+            //                 )),
+            //             ));
+            //         }
+            //         _ => {}
+            //     };
+            // }
         }
     }
 

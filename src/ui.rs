@@ -5,14 +5,15 @@ use bevy::{
     prelude::*,
 };
 
-use crate::parts::{BuildId, Buildings, setup_parts};
+use crate::build::{BuildId, Building, setup_parts};
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         //setup ui needs the parts list first
         app.add_systems(Startup, setup_ui.after(setup_parts));
-        app.add_systems(Update, (update_scroll_position, button_system));
+        app.add_systems(Update, (update_scroll_position, button_system, update_building_list));
+        app.insert_resource(FontHandle::default());
     }
 }
 
@@ -24,7 +25,8 @@ pub struct PartButton {
     part_id: BuildId,
 }
 
-fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<Buildings>) {
+fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, mut font: ResMut<FontHandle>) {
+    font.0 = asset_server.load("fonts/FiraSans-Bold.ttf");
     // root node
     commands
         .spawn(Node {
@@ -63,64 +65,81 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, parts: Res<B
                             parent.spawn((
                                 Text::new("Vertically Scrolling List"),
                                 TextFont {
-                                    font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                                    font: font.0.clone(),
                                     font_size: FONT_SIZE,
                                     ..default()
                                 },
                                 Label,
                             ));
                             // Scrolling list
-                            parent
-                                .spawn(Node {
+                            parent.spawn((
+                                Node {
                                     flex_direction: FlexDirection::Column,
                                     align_self: AlignSelf::Stretch,
                                     height: Val::Percent(90.),
                                     overflow: Overflow::scroll_y(), // n.b.
                                     ..default()
-                                })
-                                .with_children(|parent| {
-                                    // List items
-                                    let mut parts_vec = parts.0.clone();
-                                    parts_vec.sort_by(|p1, p2| p1.config.name.cmp(&p2.config.name));
-                                    for p in parts_vec {
-                                        parent
-                                            .spawn((
-                                                Button,
-                                                Node {
-                                                    min_height: Val::Px(2. * LINE_HEIGHT),
-                                                    max_height: Val::Px(2. * LINE_HEIGHT),
-                                                    border: UiRect::all(Val::Px(5.0)),
-                                                    ..default()
-                                                },
-                                                Pickable {
-                                                    should_block_lower: false,
-                                                    ..default()
-                                                },
-                                                PartButton {
-                                                    part_id: BuildId(p.clone()),
-                                                },
-                                            ))
-                                            .with_children(|parent| {
-                                                parent
-                                                    .spawn((
-                                                        Text(format!("Item {:}", p.config.name)),
-                                                        TextFont {
-                                                            font: asset_server
-                                                                .load("fonts/FiraSans-Bold.ttf"),
-                                                            ..default()
-                                                        },
-                                                        Label,
-                                                    ))
-                                                    .insert(Pickable {
-                                                        should_block_lower: false,
-                                                        ..default()
-                                                    });
-                                            });
-                                    }
-                                });
+                                },
+                                BuildingList,
+                            ));
                         });
                 });
         });
+}
+#[derive(Component)]
+pub struct BuildingList;
+
+#[derive(Resource, Default)]
+pub struct FontHandle(pub Handle<Font>);
+
+pub fn update_building_list(
+    mut commands: Commands,
+    mut events: EventReader<AssetEvent<Building>>,
+    mut buildings: ResMut<Assets<Building>>,
+    list_query: Single<Entity, With<BuildingList>>,
+    font: Res<FontHandle>,
+) {
+    for ev in events.read() {
+        if let AssetEvent::LoadedWithDependencies { id } = ev {
+            commands.entity(*list_query).with_children(|parent| {
+                // List items
+                let building_handle = buildings.get_strong_handle(*id).unwrap();
+                let building = buildings.get(*id).unwrap();
+                parent
+                    .spawn((
+                        Button,
+                        Node {
+                            min_height: Val::Px(2. * LINE_HEIGHT),
+                            max_height: Val::Px(2. * LINE_HEIGHT),
+                            border: UiRect::all(Val::Px(5.0)),
+                            ..default()
+                        },
+                        Pickable {
+                            should_block_lower: false,
+                            ..default()
+                        },
+                        PartButton {
+                            part_id: BuildId(building_handle),
+                        },
+                    ))
+                    .with_children(|parent| {
+                        parent
+                            .spawn((
+                                Text(format!("Item {:}", building.name)),
+                                TextFont {
+                                    font: font.0.clone(),
+                                    ..default()
+                                },
+                                Label,
+                            ))
+                            .insert(Pickable {
+                                should_block_lower: false,
+                                ..default()
+                            });
+                    });
+            });
+        }
+    }
 }
 
 /// Updates the scroll position of scrollable nodes in response to mouse input
@@ -153,7 +172,7 @@ const NORMAL_BUTTON: Color = Color::srgb(0.15, 0.15, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.25, 0.25, 0.25);
 const PRESSED_BUTTON: Color = Color::srgb(0.35, 0.75, 0.35);
 
-/// Change the button appearance when it is pressed. 
+/// Change the button appearance when it is pressed.
 fn button_system(
     mut commands: Commands,
     mut interaction_query: Query<
@@ -181,7 +200,6 @@ fn button_system(
                 *color = NORMAL_BUTTON.into();
                 border_color.0 = Color::BLACK;
             }
-            
         }
     }
 }

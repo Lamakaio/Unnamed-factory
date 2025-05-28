@@ -1,0 +1,9 @@
+BuildingFile (
+    name: "test part", 
+    size: (10, 10), 
+    typ: Single (
+        mesh: "buildings/test/test.gltf#Mesh0/Primitive0",
+        material: "buildings/test/test.gltf#Material0"
+    ), 
+    script: "buildings/test/test.rhai"
+)

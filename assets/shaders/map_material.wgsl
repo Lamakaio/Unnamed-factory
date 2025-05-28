@@ -6,6 +6,7 @@
     pbr_fragment::pbr_input_from_vertex_output,
     pbr_functions::alpha_discard,
     mesh_view_bindings as view_bindings,
+    decal::clustered::apply_decal_base_color,
 }
 
 #ifdef PREPASS_PIPELINE
@@ -16,27 +17,40 @@
 #else
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
+    pbr_functions,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 }
 #endif
 
-@group(2) @binding(100) var mask: texture_2d<f32>;
-@group(2) @binding(101) var mask_sampler: sampler;
-@group(2) @binding(102) var<uniform> highlight_color: vec4<f32>;
-@group(2) @binding(103) var<uniform> shadow_color: vec4<f32>;
-@group(2) @binding(104) var<uniform> rim_color: vec4<f32>;
-@group(2) @binding(105) var<uniform> grass_color: vec4<f32>;
-@group(2) @binding(106) var<uniform> ocean_color: vec4<f32>;
-@group(2) @binding(107) var<uniform> mountain_color: vec4<f32>;
-@group(2) @binding(108) var<uniform> snow_color: vec4<f32>;
-@group(2) @binding(109) var<uniform> sand_color: vec4<f32>;
+#ifdef FORWARD_DECAL
+#import bevy_pbr::decal::forward::get_forward_decal_info
+#endif
+
+@group(2) @binding(100) var<uniform> grass_color: vec4<f32>;
+@group(2) @binding(101) var<uniform> ocean_color: vec4<f32>;
+@group(2) @binding(102) var<uniform> mountain_color: vec4<f32>;
+@group(2) @binding(103) var<uniform> snow_color: vec4<f32>;
+@group(2) @binding(104) var<uniform> sand_color: vec4<f32>;
 
 @fragment
 fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-    var pbr_input = pbr_input_from_vertex_output(in, is_front, false);
+    // If we're in the crossfade section of a visibility range, conditionally
+    // discard the fragment according to the visibility pattern.
+#ifdef VISIBILITY_RANGE_DITHER
+    pbr_functions::visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
+
+#ifdef FORWARD_DECAL
+    let forward_decal_info = get_forward_decal_info(in);
+    in.world_position = forward_decal_info.world_position;
+    in.uv = forward_decal_info.uv;
+#endif
+
+
+    var pbr_input = pbr_input_from_vertex_output(in, is_front, true);
 
     // alpha discard
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
@@ -77,6 +91,14 @@ fn fragment(
     else {
         texture = snow_color;
     }
+
+    texture = apply_decal_base_color(
+        in.world_position.xyz,
+        in.position.xy,
+        texture
+    );
+
+
     pbr_input.material.base_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
 
     out.color = apply_pbr_lighting(pbr_input);
@@ -100,6 +122,10 @@ fn fragment(
     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
     // note this does not include fullscreen postprocessing effects like bloom.
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+#endif
+
+#ifdef FORWARD_DECAL
+    out.color.a = min(forward_decal_info.alpha, out.color.a);
 #endif
 
     return out;
