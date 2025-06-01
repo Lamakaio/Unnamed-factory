@@ -1,0 +1,7 @@
+BuildingFile (
+    name: "Big house", 
+    size: (10, 10), 
+    typ: Single (
+        model: "models/bighouse.glb",
+    ), 
+)

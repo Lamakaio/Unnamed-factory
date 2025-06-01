@@ -1,0 +1,7 @@
+BuildingFile (
+    name: "Watch tower", 
+    size: (10, 10), 
+    typ: Single (
+        model: "models/watchtower.glb",
+    ), 
+)

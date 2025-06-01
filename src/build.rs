@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{sync::Arc};
 
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{LoadedFolder, RenderAssetUsages},
     math::NormedVectorSpace,
     pbr::{
         decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    map::{Chunk, GRID_SQUARE_SIZE, Map, PatchOp},
+    map::{Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
     sim::RhaiScript,
 };
 
@@ -53,6 +53,7 @@ impl Plugin for BuildPlugin {
                 place_build,
                 snapping_mode,
                 select_world_part,
+                compute_aabb,
             ),
         );
         app.insert_resource(SavedShapes::default());
@@ -67,30 +68,22 @@ pub struct Building {
     pub typ: BuildingType,
     pub name: String,
     pub size: (u64, u64),
-    pub script: Handle<RhaiScript>,
+    pub script: Option<Handle<RhaiScript>>,
 }
 
 /// Split between zoning and individual buildings (and maybe fmroe things in the future, e.g. roads)
 #[derive(Debug)]
 pub enum BuildingType {
-    Zone {
-        color: Color,
-    },
-    Single {
-        mesh: Handle<Mesh>,
-        material: Handle<StandardMaterial>,
-    },
-    Tool {
-        op: PatchOp,
-        color: Color,
-    },
+    Zone { color: Color },
+    Single { model: Handle<Scene> },
+    Tool { op: PatchOp, color: Color },
 }
 
 #[derive(Component)]
 pub struct Highlighted;
 
 #[derive(Resource, Default)]
-pub struct Buildings(pub Vec<Handle<Building>>);
+pub struct Buildings(pub Handle<LoadedFolder>);
 
 #[derive(Resource, Default)]
 pub struct SavedShapes(pub Vec<Handle<Mesh>>);
@@ -99,10 +92,9 @@ pub struct SavedShapes(pub Vec<Handle<Mesh>>);
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
     mut shapes: ResMut<SavedShapes>,
-    asset_server: Res<AssetServer>, 
-    mut buildings: ResMut<Buildings>
+    asset_server: Res<AssetServer>,
+    mut buildings: ResMut<Buildings>,
 ) -> Result {
-
     shapes.0.push(meshes.add(Cuboid::default()));
 
     shapes.0.push(meshes.add(Tetrahedron::default()));
@@ -118,7 +110,7 @@ pub fn setup_parts(
         .0
         .push(meshes.add(Sphere::default().mesh().uv(32, 18)));
 
-    buildings.0.push(asset_server.load::<Building>("buildings/test/test.bconf"));
+    buildings.0 = asset_server.load_folder("buildings");
     Ok(())
 }
 
@@ -147,6 +139,7 @@ fn spawn_build_from_part_id(
 
     if let Some(selpart) = selected_part_query {
         if !interaction_query.is_empty() {
+            dbg!("despawn");
             commands.entity(*selpart).despawn()
         };
     }
@@ -155,9 +148,8 @@ fn spawn_build_from_part_id(
         let part = buildings.get(&p.0).unwrap(); //FIXME
 
         match &part.typ {
-            BuildingType::Single { mesh, material } => commands.entity(e).insert((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
+            BuildingType::Single { model } => commands.entity(e).insert((
+                SceneRoot(model.clone()),
                 Transform::default(),
                 SelectedBuild,
                 Visibility::Hidden,
@@ -202,6 +194,31 @@ fn spawn_build_from_part_id(
 
 //const DEFAULT_RAY_DISTANCE: f32 = 10.;
 
+fn compute_aabb(
+    mut commands: Commands,
+    children_query: Query<&Children>,
+    aabb_query: Query<(&Aabb, &Transform, &GlobalTransform)>,
+    selected_part_query: Option<Single<(Entity, &Children), (With<SelectedBuild>, Without<Aabb>)>>,
+) {
+    fn combine_aabb(x: &mut Aabb, y: &Aabb, y_offset: Vec3A) {
+        *x = Aabb::from_min_max(x.min().min(y.min() + y_offset).into(), x.max().max(y.max() + y_offset).into())
+    }
+    if let Some(query) = selected_part_query {
+        let (entity, children) = *query;
+        let mut aabb = Aabb::from_min_max(Vec3::splat(1e10), Vec3::splat(-1e10));
+        let mut stack: Vec<Entity> = children.iter().collect();
+        while let Some(e) = stack.pop() {
+            if let Ok((child_aabb, child_transform, child_global_transform)) = aabb_query.get(e) {
+                combine_aabb(&mut aabb, child_aabb, (child_global_transform.translation() - child_transform.translation).into());
+                dbg!(child_aabb);
+            } else if let Ok(child_children) = children_query.get(e) {
+                stack.extend(child_children.iter());
+            }
+        }
+        commands.entity(entity).insert(aabb);
+    }
+}
+
 /// Make the selected part follow the cursor
 fn build_follow_cursor(
     mut ray_cast: MeshRayCast,
@@ -223,6 +240,7 @@ fn build_follow_cursor(
     button: Res<ButtonInput<MouseButton>>,
     snapping: Res<Snapping>,
     mut place_point: Local<Vec2>,
+    chunks: Query<&IsGround>,
 ) {
     let Some(selpart) = selected_part_query else {
         return;
@@ -237,11 +255,11 @@ fn build_follow_cursor(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor_position) else {
         return;
     };
-    let (e, mut part_transform, aabb, mut visibility, resizable) = selpart.into_inner();
-
+    let (_e, mut part_transform, aabb, mut visibility, resizable) = selpart.into_inner();
+    //dbg!(aabb);
     // Cast the ray to get hit to the nearest different object
 
-    let filter = |entity: Entity| entity != e;
+    let filter = |entity: Entity| chunks.contains(entity);
     let settings = MeshRayCastSettings::default()
         .always_early_exit()
         .with_filter(&filter);
@@ -282,7 +300,8 @@ fn build_follow_cursor(
     } else if !button.just_released(MouseButton::Left) {
         *place_point = point2d;
         //part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-        part_transform.translation = Vec3::new(place_point.x, point.y, place_point.y) + he_proj;
+        let center : Vec3 = aabb.center.into();
+        part_transform.translation = Vec3::new(place_point.x, point.y, place_point.y) + he_proj - center;
     }
 }
 
@@ -304,7 +323,7 @@ fn place_build(
                 (transform.translation, ti.radius, ti.op)
             } else {
                 (
-                    transform.translation - Vec3::new(0., aabb.half_extents.y - 0.05, 0.),
+                    transform.translation - Vec3::new(0., aabb.half_extents.y - 0.05, 0.) + Vec3::from(aabb.center),
                     aabb.half_extents.xz().norm() * 2.,
                     PatchOp::Flatten,
                 )

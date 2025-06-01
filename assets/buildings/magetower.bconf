@@ -1,0 +1,7 @@
+BuildingFile (
+    name: "Mage tower", 
+    size: (10, 10), 
+    typ: Single (
+        model: "models/magetower.glb",
+    ), 
+)

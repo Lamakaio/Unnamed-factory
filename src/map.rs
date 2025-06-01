@@ -27,7 +27,9 @@ use noiz::{
 use serde::Deserialize;
 
 use crate::{
-    build::{Building, BuildingType}, shaders::{MapMaterial, TerrainShader}, CameraTarget
+    CameraTarget,
+    build::{Building, BuildingType},
+    shaders::{MapMaterial, TerrainShader},
 };
 pub struct MapPlugin {
     pub seed: u128,
@@ -356,10 +358,9 @@ impl Map {
         if let Some(chunk) = chunk {
             let offset = (pos - chunk.get_world_pos()).floor();
             chunk.grid[Chunk::get_index(offset.x as i32, offset.z as i32)].height * Chunk::SCALE_Y
-        }
-        else {
+        } else {
             Chunk::SCALE_Y
-        } 
+        }
     }
 }
 
@@ -367,16 +368,30 @@ pub fn setup_map(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut map: ResMut<Map>,
-    mut meshes: ResMut<Assets<Mesh>>
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
     let mat = asset_server.load("materials/map.mapmat");
     map.material = mat.clone();
+    let bottomplanemat = mats.add(StandardMaterial {
+        base_color: bevy::color::palettes::css::LIGHT_BLUE.into(),
+        ..default()
+    });
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(5000.0, 5000.0).subdivisions(10))),
-        MeshMaterial3d(mat),
-        Transform::from_xyz(0., 2., 0.)
+        Name::new("bottom plane"),
+        Mesh3d(
+            meshes.add(
+                Cuboid::from_size(Vec3::new(100000., 1., 100000.))
+                    .mesh()
+                    .build(),
+            ),
+        ),
+        MeshMaterial3d(bottomplanemat),
+        Transform::from_xyz(0., 0., 0.),
     ));
 }
+#[derive(Component)]
+pub struct IsGround;
 
 /// Handles the spawning of chunks when the camera is close enough. (Currently only spawns the chunk the camera is on)
 pub fn spawn_chunk(
@@ -402,9 +417,11 @@ pub fn spawn_chunk(
             chunk.spawned = true;
             let mesh = chunk.get_mesh(&mut *meshes);
             let mut entity = commands.spawn((
+                Name::new(format!("chunk {} {}", chunk_pos.x, chunk_pos.y)),
                 Mesh3d(mesh),
                 MeshMaterial3d(mat.clone()),
                 Transform::from_translation(chunk.get_world_pos()),
+                IsGround,
             ));
 
             // for build in map.entities.query_rect(

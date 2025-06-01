@@ -11,20 +11,13 @@ use std::{
 };
 
 use bevy::{
-    color::palettes,
-    core_pipeline::{
+    color::palettes, core_pipeline::{
         bloom::Bloom,
         experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
         prepass::DepthPrepass,
-    },
-    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    pbr::{
-        Atmosphere,
-        light_consts::lux,
-        wireframe::{WireframeConfig, WireframePlugin},
-    },
-    prelude::*,
-    render::camera::Exposure,
+    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, pbr::{
+        light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere
+    }, prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin}, render::camera::Exposure
 };
 use build::BuildPlugin;
 use build_asset::BuildAssetPlugin;
@@ -41,8 +34,8 @@ fn main() {
         WireframePlugin::default(),
         TemporalAntiAliasPlugin,
     ))
-    //.add_plugins(RemotePlugin::default())
-    //.add_plugins(RemoteHttpPlugin::default())
+    .add_plugins(RemotePlugin::default())
+    .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, (setup_3d,))
     .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }, ShadersPlugin, BuildAssetPlugin))
@@ -90,6 +83,7 @@ fn setup_3d(
     //mut materials: ResMut<Assets<StandardMaterial>>, mut meshes: ResMut<Assets<Mesh>>
 ) {
     commands.spawn((
+        Name::new("Sun"),
         DirectionalLight {
             shadows_enabled: true,
             illuminance: lux::RAW_SUNLIGHT,
@@ -112,6 +106,7 @@ fn setup_3d(
     // ));
 
     commands.spawn((
+        Name::new("3d camera"),
         Camera3d::default(),
         IsDefaultUiCamera,
         CameraTarget {
@@ -129,8 +124,8 @@ fn setup_3d(
         Bloom::NATURAL,
         Exposure::SUNLIGHT,
         AmbientLight {
-            color: palettes::css::MIDNIGHT_BLUE.into(),
-            brightness: 100000.,
+            color: palettes::css::MIDNIGHT_BLUE.lighter(0.1).into(),
+            brightness: 30000.,
             ..default()
         },
         DepthPrepass,
