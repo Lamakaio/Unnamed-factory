@@ -84,14 +84,6 @@ pub struct TerrainPoint {
     height: f32,
 }
 
-/// A chunk, containing terrain data
-pub struct Chunk {
-    grid: Vec<TerrainPoint>,
-    chunk_position: I64Vec2,
-    cached_mesh: Option<Handle<Mesh>>,
-    spawned: bool,
-}
-
 type NoiseT = Noise<(
     LayeredNoise<
         NormedByDerivative<f32, EuclideanLength, PeakDerivativeContribution>,
@@ -114,6 +106,14 @@ pub enum PatchOp {
 
 #[derive(Component)]
 pub struct ChunkMarker(pub I64Vec2);
+
+/// A chunk, containing terrain data
+pub struct Chunk {
+    grid: Vec<TerrainPoint>,
+    chunk_position: I64Vec2,
+    cached_mesh: Option<Handle<Mesh>>,
+    spawned: bool,
+}
 
 impl Chunk {
     pub const CHUNK_SIZE: u32 = 64;
@@ -356,11 +356,20 @@ impl Map {
         let chunk_pos = I64Vec2::new(chunk_pos.x as i64, chunk_pos.z as i64);
         let chunk = self.chunks.get(&chunk_pos);
         if let Some(chunk) = chunk {
-            let offset = (pos - chunk.get_world_pos()).floor();
-            chunk.grid[Chunk::get_index(offset.x as i32, offset.z as i32)].height * Chunk::SCALE_Y
+            let offset = ((pos - chunk.get_world_pos())/ GRID_SQUARE_SIZE);
+            let floor = offset.floor();
+            let fract = offset.fract();
+            let h00 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32)].height;
+            let h01 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32 + 1)].height;
+            let h10 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32)].height;
+            let h11 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32 + 1)].height;
+            (h00 * (1. - fract.x.fract()) * (1. - fract.z.fract())
+                + h01 * (1. - fract.x.fract()) * fract.z.fract()
+                + h10 * fract.x.fract() * (1. - fract.z.fract())
+                + h11 * fract.x.fract() * fract.z.fract()) * Chunk::SCALE_Y
         } else {
             Chunk::SCALE_Y
-        }
+        } 
     }
 }
 

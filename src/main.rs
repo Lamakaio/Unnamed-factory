@@ -5,25 +5,19 @@ pub mod shaders;
 pub mod sim;
 pub mod ui;
 
-use std::{f32::consts::{FRAC_PI_2, PI}, ops::Range
+use std::{
+    f32::consts::{FRAC_PI_2, PI},
+    ops::Range,
 };
 
 use bevy::{
-    color::palettes,
-    core_pipeline::{
+    color::palettes, core_pipeline::{
         bloom::Bloom,
         experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
         prepass::DepthPrepass,
-    },
-    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    pbr::{
-        Atmosphere,
-        light_consts::lux,
-        wireframe::{WireframeConfig, WireframePlugin},
-    },
-    prelude::*,
-    remote::{RemotePlugin, http::RemoteHttpPlugin},
-    render::{camera::Exposure, primitives::Aabb},
+    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, math::NormedVectorSpace, pbr::{
+        light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere
+    }, prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin}, render::{camera::Exposure, primitives::Aabb}
 };
 use build::BuildPlugin;
 use build_asset::BuildAssetPlugin;
@@ -164,7 +158,7 @@ fn toggle_wireframe(
         wireframe_config.global = !wireframe_config.global;
     }
 }
-#[derive(Default, Reflect, GizmoConfigGroup)]
+#[derive(Default)]
 struct BoundingBoxConfig(pub bool);
 
 fn toggle_bounding_box(
@@ -182,7 +176,11 @@ fn toggle_bounding_box(
                 Transform::from_translation(
                     Vec3::from(aabb.center) * transform.scale() + transform.translation(),
                 )
-                .with_scale(transform.rotation().mul_vec3(Vec3::from(aabb.half_extents) * transform.scale() * 2.)),
+                .with_scale(
+                    transform
+                        .rotation()
+                        .mul_vec3(Vec3::from(aabb.half_extents) * transform.scale() * 2.),
+                ),
                 bevy::color::palettes::css::ORANGE_RED,
             );
         }
@@ -262,9 +260,10 @@ fn orbit(
 
     camera_target.pos += camera_transform.rotation.mul_vec3(movement);
 
-    camera_target.pos.y = map.get_height(camera_target.pos) + 1.;
+    let height =  map.get_height(camera_target.pos);
+    camera_target.pos.y = height;
 
-    let delta_scroll = mouse_scroll.delta.y;
+    let delta_scroll = -mouse_scroll.delta.y;
     camera_target.distance += delta_scroll * camera_settings.zoom_speed * camera_target.distance;
     camera_target.distance = camera_target.distance.clamp(
         camera_settings.orbit_distance.start,

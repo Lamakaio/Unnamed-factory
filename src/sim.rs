@@ -82,6 +82,7 @@ impl Plugin for SimPlugin {
             Update,
             (
                 run_rhai,
+                toggle_sim_screen,
                 make_sim_ui.after(run_rhai),
                 get_values.after(run_rhai),
                 update_ui.after(make_sim_ui).after(get_values),
@@ -150,7 +151,7 @@ fn spawn_on(
                         flex_wrap: FlexWrap::Wrap,
                         ..default()
                     },
-                    BorderColor(Color::hsv(rand::random_range(0.0..360.0), 1.0, 1.0)),
+                    BorderColor(Color::hsv(rand::random_range(0.0..360.0), 0.3, 0.8)),
                 ))
                 .with_children(|parent| {
                     parent.spawn((
@@ -210,8 +211,15 @@ fn make_sim_ui(
                     justify_content: JustifyContent::SpaceEvenly,
                     flex_direction: FlexDirection::Row,
                     flex_wrap: FlexWrap::Wrap,
+                    margin: UiRect {
+                        left: Val::Percent(5.),
+                        right: Val::Percent(5.),
+                        top: Val::Percent(5.),
+                        bottom: Val::Percent(5.),
+                    },
                     ..default()
                 },
+                BackgroundColor(bevy::color::palettes::css::BLACK.with_alpha(0.9).into()),
                 MainNode,
                 Visibility::Hidden,
             ))
@@ -219,6 +227,17 @@ fn make_sim_ui(
                 let mut path = vec![];
                 spawn_on(parent, data, &font, &mut path);
             });
+    }
+}
+
+fn toggle_sim_screen(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    main_node: Query<&mut Visibility, With<MainNode>>,
+) {
+    if keyboard.just_pressed(KeyCode::Tab) {
+        for mut visibility in main_node {
+            visibility.toggle_visible_hidden();
+        }
     }
 }
 
