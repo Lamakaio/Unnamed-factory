@@ -3,5 +3,6 @@ BuildingFile (
     size: (10, 10), 
     typ: Single (
         model: "models/church.glb",
+        scale: 0.1
     ), 
 )

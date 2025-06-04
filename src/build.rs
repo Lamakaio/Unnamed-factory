@@ -1,8 +1,8 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use bevy::{
     asset::{LoadedFolder, RenderAssetUsages},
-    math::NormedVectorSpace,
+    math::{NormedVectorSpace, VectorSpace},
     pbr::{
         decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
         wireframe::{Wireframe, WireframeColor},
@@ -75,7 +75,7 @@ pub struct Building {
 #[derive(Debug)]
 pub enum BuildingType {
     Zone { color: Color },
-    Single { model: Handle<Scene> },
+    Single { model: Handle<Scene>, scale: f32 },
     Tool { op: PatchOp, color: Color },
 }
 
@@ -148,9 +148,9 @@ fn spawn_build_from_part_id(
         let part = buildings.get(&p.0).unwrap(); //FIXME
 
         match &part.typ {
-            BuildingType::Single { model } => commands.entity(e).insert((
+            BuildingType::Single { model, scale } => commands.entity(e).insert((
                 SceneRoot(model.clone()),
-                Transform::default(),
+                Transform::from_scale(Vec3::splat(*scale)),
                 SelectedBuild,
                 Visibility::Hidden,
             )),
@@ -196,25 +196,35 @@ fn spawn_build_from_part_id(
 
 fn compute_aabb(
     mut commands: Commands,
-    children_query: Query<&Children>,
-    aabb_query: Query<(&Aabb, &Transform, &GlobalTransform)>,
+    children_query: Query<(&Children, &Transform)>,
+    aabb_query: Query<(&Aabb, &Transform)>,
     selected_part_query: Option<Single<(Entity, &Children), (With<SelectedBuild>, Without<Aabb>)>>,
 ) {
-    fn combine_aabb(x: &mut Aabb, y: &Aabb, y_offset: Vec3A) {
-        *x = Aabb::from_min_max(x.min().min(y.min() + y_offset).into(), x.max().max(y.max() + y_offset).into())
+    fn combine_aabb(x: &mut Aabb, y: &Aabb, offset: Vec3A) {
+        *x = Aabb::from_min_max(
+            x.min().min(y.min() + offset).into(),
+            x.max().max(y.max() + offset).into(),
+        )
     }
     if let Some(query) = selected_part_query {
         let (entity, children) = *query;
         let mut aabb = Aabb::from_min_max(Vec3::splat(1e10), Vec3::splat(-1e10));
-        let mut stack: Vec<Entity> = children.iter().collect();
-        while let Some(e) = stack.pop() {
-            if let Ok((child_aabb, child_transform, child_global_transform)) = aabb_query.get(e) {
-                combine_aabb(&mut aabb, child_aabb, (child_global_transform.translation() - child_transform.translation).into());
+        let mut stack: Vec<(Entity, Vec3)> = children.iter().map(|e| (e, Vec3::ZERO)).collect();
+        while let Some((e, position)) = stack.pop() {
+            if let Ok((child_aabb, child_transform)) = aabb_query.get(e) {
                 dbg!(child_aabb);
-            } else if let Ok(child_children) = children_query.get(e) {
-                stack.extend(child_children.iter());
+                let offset = child_transform.translation + position;
+                dbg!(offset);
+                combine_aabb(&mut aabb, child_aabb, offset.into());
+            } else if let Ok((child_children, child_transform)) = children_query.get(e) {
+                stack.extend(
+                    child_children
+                        .iter()
+                        .map(|e| (e, position + child_transform.translation)),
+                );
             }
         }
+        dbg!(aabb);
         commands.entity(entity).insert(aabb);
     }
 }
@@ -284,10 +294,10 @@ fn build_follow_cursor(
 
     let he = part_transform
         .rotation
-        .mul_vec3(Vec3::from(aabb.half_extents));
+        .mul_vec3(Vec3::from(aabb.half_extents) * part_transform.scale);
     let he_proj = part_transform
         .rotation
-        .mul_vec3(Vec3::from(aabb.half_extents))
+        .mul_vec3(Vec3::from(aabb.half_extents) * part_transform.scale)
         .project_onto(Vec3::Y);
     if resizable.is_some()
         && (button.pressed(MouseButton::Left) || button.just_pressed(MouseButton::Left))
@@ -300,8 +310,9 @@ fn build_follow_cursor(
     } else if !button.just_released(MouseButton::Left) {
         *place_point = point2d;
         //part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
-        let center : Vec3 = aabb.center.into();
-        part_transform.translation = Vec3::new(place_point.x, point.y, place_point.y) + he_proj - center;
+        let center = Vec3::from(aabb.center) * part_transform.scale;
+        part_transform.translation =
+            Vec3::new(place_point.x, point.y, place_point.y) + he_proj - center;
     }
 }
 
@@ -323,8 +334,10 @@ fn place_build(
                 (transform.translation, ti.radius, ti.op)
             } else {
                 (
-                    transform.translation - Vec3::new(0., aabb.half_extents.y - 0.05, 0.) + Vec3::from(aabb.center),
-                    aabb.half_extents.xz().norm() * 2.,
+                    transform.translation
+                        + (Vec3::from(aabb.center) - Vec3::new(0., aabb.half_extents.y - 0.05, 0.))
+                            * transform.scale,
+                    (aabb.half_extents.xz() * transform.scale.xz()).norm() * 2.,
                     PatchOp::Flatten,
                 )
             };

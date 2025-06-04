@@ -5,19 +5,25 @@ pub mod shaders;
 pub mod sim;
 pub mod ui;
 
-use std::{
-    f32::consts::{FRAC_PI_2, PI},
-    ops::Range,
+use std::{f32::consts::{FRAC_PI_2, PI}, ops::Range
 };
 
 use bevy::{
-    color::palettes, core_pipeline::{
+    color::palettes,
+    core_pipeline::{
         bloom::Bloom,
         experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
         prepass::DepthPrepass,
-    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, pbr::{
-        light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere
-    }, prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin}, render::camera::Exposure
+    },
+    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    pbr::{
+        Atmosphere,
+        light_consts::lux,
+        wireframe::{WireframeConfig, WireframePlugin},
+    },
+    prelude::*,
+    remote::{RemotePlugin, http::RemoteHttpPlugin},
+    render::{camera::Exposure, primitives::Aabb},
 };
 use build::BuildPlugin;
 use build_asset::BuildAssetPlugin;
@@ -25,6 +31,8 @@ use map::{Map, MapPlugin};
 use shaders::ShadersPlugin;
 use sim::SimPlugin;
 use ui::UiPlugin;
+
+use crate::build::BuildId;
 
 fn main() {
     let mut app = App::new();
@@ -38,9 +46,18 @@ fn main() {
     .add_plugins(RemoteHttpPlugin::default())
     .insert_resource(CameraSettings::default())
     .add_systems(Startup, (setup_3d,))
-    .add_plugins((BuildPlugin, UiPlugin, MapPlugin { seed }, ShadersPlugin, BuildAssetPlugin))
+    .add_plugins((
+        BuildPlugin,
+        UiPlugin,
+        MapPlugin { seed },
+        ShadersPlugin,
+        BuildAssetPlugin,
+    ))
     .add_plugins(SimPlugin)
-    .add_systems(Update, (toggle_wireframe, orbit, rotate_light));
+    .add_systems(
+        Update,
+        (toggle_wireframe, orbit, rotate_light, toggle_bounding_box),
+    );
 
     app.run();
 }
@@ -143,8 +160,32 @@ fn toggle_wireframe(
     mut wireframe_config: ResMut<WireframeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Space) {
+    if keyboard.just_pressed(KeyCode::F1) {
         wireframe_config.global = !wireframe_config.global;
+    }
+}
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct BoundingBoxConfig(pub bool);
+
+fn toggle_bounding_box(
+    mut bb_config: Local<BoundingBoxConfig>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    aabb_query: Query<(&Aabb, &GlobalTransform), With<BuildId>>,
+    mut gizmos: Gizmos,
+) {
+    if keyboard.just_pressed(KeyCode::F2) {
+        bb_config.0 = !bb_config.0;
+    }
+    if bb_config.0 {
+        for (aabb, transform) in aabb_query {
+            gizmos.cuboid(
+                Transform::from_translation(
+                    Vec3::from(aabb.center) * transform.scale() + transform.translation(),
+                )
+                .with_scale(transform.rotation().mul_vec3(Vec3::from(aabb.half_extents) * transform.scale() * 2.)),
+                bevy::color::palettes::css::ORANGE_RED,
+            );
+        }
     }
 }
 

@@ -3,5 +3,6 @@ BuildingFile (
     size: (10, 10), 
     typ: Single (
         model: "models/house.glb",
+        scale: 0.1
     ), 
 )

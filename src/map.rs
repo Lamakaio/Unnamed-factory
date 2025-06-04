@@ -313,7 +313,7 @@ impl Chunk {
                                 if dist <= radius {
                                     let index =
                                         x as usize * Chunk::CHUNK_SIZE as usize + y as usize;
-                                    let ratio = (dist / radius).powi(4);
+                                    let ratio = (dist / radius).powi(6);
                                     let height = ratio * vertex[index][1] + (1. - ratio) * pos.y;
                                     vertex[index][1] = height;
                                     self.grid[index].height = height / Self::SCALE_Y;

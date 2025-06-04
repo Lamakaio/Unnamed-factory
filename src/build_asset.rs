@@ -21,7 +21,7 @@ impl Plugin for BuildAssetPlugin {
 #[derive(Deserialize)]
 enum BuildingTypFile {
     Zone { color: LinearRgba },
-    Single { model: String },
+    Single { model: String, scale: f32 },
     Tool { op: PatchOp, color: LinearRgba },
 }
 #[derive(Deserialize)]
@@ -58,8 +58,9 @@ impl AssetLoader for BuildingLoader {
             BuildingTypFile::Zone { color } => BuildingType::Zone {
                 color: color.into(),
             },
-            BuildingTypFile::Single { model } => BuildingType::Single {
+            BuildingTypFile::Single { model, scale } => BuildingType::Single {
                 model: load_context.load(GltfAssetLabel::Scene(0).from_asset(model)),
+                scale
             },
             BuildingTypFile::Tool { op, color } => BuildingType::Tool {
                 op,
