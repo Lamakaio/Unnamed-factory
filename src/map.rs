@@ -47,33 +47,34 @@ impl Plugin for MapPlugin {
     }
 }
 
-pub const GRID_SQUARE_SIZE: f32 = 1.;
+pub const GRID_SQUARE_SIZE: f32 = 0.5;
 /// An instance of a specific building at a position
 /// Might contain other instance-specific stats in the future (damage, etc)
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Component)]
 pub struct BuildingInstance {
-    building: Handle<Building>,
-    grid_pos: I64Vec2,
-    size: I64Vec2,
+    pub building: Handle<Building>,
+    pub pos: Vec2,
+    pub half_extents: Vec2,
+    pub entity: Entity
 }
 
 impl KdValue for BuildingInstance {
-    type Position = i64;
+    type Position = f32;
 
     fn min_x(&self) -> Self::Position {
-        self.grid_pos.x
+        self.pos.x
     }
 
     fn min_y(&self) -> Self::Position {
-        self.grid_pos.y
+        self.pos.y
     }
 
     fn max_x(&self) -> Self::Position {
-        self.grid_pos.x + self.size.x
+        self.pos.x + self.half_extents.x
     }
 
     fn max_y(&self) -> Self::Position {
-        self.grid_pos.y + self.size.y
+        self.pos.y + self.half_extents.y
     }
 }
 
@@ -116,7 +117,7 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub const CHUNK_SIZE: u32 = 64;
+    pub const CHUNK_SIZE: u32 = 256;
     pub const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
     pub const SCALE_Y: f32 = 20.;
 
@@ -239,6 +240,7 @@ impl Chunk {
         operation: PatchOp,
     ) -> Vec<(i64, i64)> {
         let mesh = self.get_mesh_mut(meshes);
+        
         let mut ret = Vec::new();
         {
             let attrs = mesh.attributes_mut();
@@ -257,12 +259,13 @@ impl Chunk {
                 VertexAttributeValues::Float32x2(uvs),
             ) = (v_pos, v_uv)
             {
-                let local_pos = (pos - self.get_world_pos()).xz();
+                let local_pos = (pos - self.get_world_pos()).xz() / GRID_SQUARE_SIZE;
+                let radius = radius / GRID_SQUARE_SIZE;
                 let mut x_min = (local_pos.x - radius).ceil() as i32;
                 let mut x_max = (local_pos.x + radius).floor() as i32;
                 let mut y_min = (local_pos.y - radius).ceil() as i32;
                 let mut y_max = (local_pos.y + radius).floor() as i32;
-
+                
                 if x_min <= 0 && y_min <= 0 {
                     ret.push((-1, -1));
                 }
@@ -336,7 +339,7 @@ impl Chunk {
 pub struct Map {
     material: Handle<MapMaterial>,
     chunks: HashMap<I64Vec2, Chunk>,
-    entities: KdTree<BuildingInstance, 10>,
+    pub entities: KdTree<BuildingInstance, 10>,
     noise: NoiseT,
 }
 

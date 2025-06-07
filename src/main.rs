@@ -154,7 +154,7 @@ fn toggle_wireframe(
     mut wireframe_config: ResMut<WireframeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
 ) {
-    if keyboard.just_pressed(KeyCode::F1) {
+    if keyboard.just_pressed(KeyCode::F3) {
         wireframe_config.global = !wireframe_config.global;
     }
 }

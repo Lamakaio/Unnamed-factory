@@ -188,7 +188,6 @@ fn button_system(
     for (interaction, mut color, mut border_color, part_button) in &mut interaction_query {
         match *interaction {
             Interaction::Pressed => {
-                dbg!("plop");
                 *color = PRESSED_BUTTON.into();
                 border_color.0 = RED.into();
                 commands.spawn((part_button.part_id.clone(), Name::new("building")));

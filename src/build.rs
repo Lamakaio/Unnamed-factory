@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{process::Child, sync::Arc};
 
 use bevy::{
     asset::{LoadedFolder, RenderAssetUsages},
@@ -11,11 +11,11 @@ use bevy::{
     render::{
         primitives::Aabb,
         render_resource::{Extent3d, TextureDimension, TextureFormat},
-    },
+    }, text::cosmic_text::ttf_parser::ankr::Point,
 };
 
 use crate::{
-    map::{Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
+    map::{BuildingInstance, Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
     sim::RhaiScript,
 };
 
@@ -44,7 +44,7 @@ pub struct BuildPlugin;
 
 impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_parts);
+        app.add_systems(Startup, (setup_parts, setup_highlight));
         app.add_systems(
             Update,
             (
@@ -56,6 +56,8 @@ impl Plugin for BuildPlugin {
                 compute_aabb,
             ),
         );
+        app.add_observer(on_add_highlight);
+        app.add_observer(on_remove_highlight);
         app.insert_resource(SavedShapes::default());
         app.insert_resource(Snapping::One);
         app.insert_resource(Buildings::default());
@@ -88,6 +90,20 @@ pub struct Buildings(pub Handle<LoadedFolder>);
 #[derive(Resource, Default)]
 pub struct SavedShapes(pub Vec<Handle<Mesh>>);
 
+pub fn setup_highlight(mut commands: Commands) {
+    commands.spawn((
+        SpotLight {
+            color: bevy::color::palettes::css::ORANGE_RED.into(),
+            intensity: 1e9,
+            range: 100.,
+            outer_angle: 0.1,
+            inner_angle: 0.02,
+            ..default()
+        },
+        Transform::from_translation(Vec3::new(0., -10., 0.)),
+        HighlightLight,
+    ));
+}
 /// Generate the parts, that will later serve to generate the buttons.
 pub fn setup_parts(
     mut meshes: ResMut<Assets<Mesh>>,
@@ -111,6 +127,7 @@ pub fn setup_parts(
         .push(meshes.add(Sphere::default().mesh().uv(32, 18)));
 
     buildings.0 = asset_server.load_folder("buildings");
+
     Ok(())
 }
 
@@ -139,7 +156,6 @@ fn spawn_build_from_part_id(
 
     if let Some(selpart) = selected_part_query {
         if !interaction_query.is_empty() {
-            dbg!("despawn");
             commands.entity(*selpart).despawn()
         };
     }
@@ -212,9 +228,7 @@ fn compute_aabb(
         let mut stack: Vec<(Entity, Vec3)> = children.iter().map(|e| (e, Vec3::ZERO)).collect();
         while let Some((e, position)) = stack.pop() {
             if let Ok((child_aabb, child_transform)) = aabb_query.get(e) {
-                dbg!(child_aabb);
                 let offset = child_transform.translation + position;
-                dbg!(offset);
                 combine_aabb(&mut aabb, child_aabb, offset.into());
             } else if let Ok((child_children, child_transform)) = children_query.get(e) {
                 stack.extend(
@@ -224,7 +238,6 @@ fn compute_aabb(
                 );
             }
         }
-        dbg!(aabb);
         commands.entity(entity).insert(aabb);
     }
 }
@@ -246,7 +259,7 @@ fn build_follow_cursor(
             With<SelectedBuild>,
         >,
     >,
-    //map: Res<Map>,
+    map: Res<Map>,
     button: Res<ButtonInput<MouseButton>>,
     snapping: Res<Snapping>,
     mut place_point: Local<Vec2>,
@@ -266,7 +279,6 @@ fn build_follow_cursor(
         return;
     };
     let (_e, mut part_transform, aabb, mut visibility, resizable) = selpart.into_inner();
-    //dbg!(aabb);
     // Cast the ray to get hit to the nearest different object
 
     let filter = |entity: Entity| chunks.contains(entity);
@@ -312,7 +324,8 @@ fn build_follow_cursor(
         //part_transform.rotation = Quat::from_rotation_arc(Vec3::Y, normal);
         let center = Vec3::from(aabb.center) * part_transform.scale;
         part_transform.translation =
-            Vec3::new(place_point.x, point.y, place_point.y) + he_proj - center;
+            Vec3::new(place_point.x, map.get_height(point2d.xxy()), place_point.y) + he_proj
+                - center;
     }
 }
 
@@ -320,16 +333,17 @@ fn build_follow_cursor(
 fn place_build(
     mut commands: Commands,
     selected_part_query: Option<
-        Single<(Entity, &Transform, Option<&ToolInstance>, &Aabb), With<SelectedBuild>>,
+        Single<(Entity, &Transform, Option<&ToolInstance>, &Aabb, &BuildId), With<SelectedBuild>>,
     >,
     mut map: ResMut<Map>,
+    buildings: Res<Assets<Building>>,
     button: Res<ButtonInput<MouseButton>>,
     key: Res<ButtonInput<KeyCode>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     if button.just_released(MouseButton::Left) {
         if let Some(query) = selected_part_query {
-            let (e, transform, tool, aabb) = *query;
+            let (e, transform, tool, aabb, bid) = *query;
             let (trsl, radius, op) = if let Some(ti) = tool {
                 (transform.translation, ti.radius, ti.op)
             } else {
@@ -353,6 +367,18 @@ fn place_build(
             if !(key.pressed(KeyCode::ControlLeft) || key.pressed(KeyCode::ControlRight)) {
                 commands.entity(e).remove::<SelectedBuild>();
             }
+            if let Some(building) = buildings.get(&bid.0) {
+                if let BuildingType::Single { .. } = building.typ {
+                    let instance = BuildingInstance {
+                        building: bid.0.clone(),
+                        pos: transform.translation.xz() + aabb.min().xz() * transform.scale.xz(),
+                        half_extents: aabb.half_extents.xz(),
+                        entity: e,
+                    };
+                    map.entities.insert(instance.clone());
+                    commands.entity(e).insert(instance);
+                }
+            }
         }
     }
 }
@@ -361,11 +387,13 @@ fn select_world_part(
     mut commands: Commands,
     selected_part_query: Option<Single<Entity, With<SelectedBuild>>>,
     highlighted_part_query: Option<Single<Entity, With<Highlighted>>>,
-    buildings: Query<(), With<BuildId>>,
+    buildings: Query<&BuildingInstance>,
+    parent_query: Query<&ChildOf>,
     mut ray_cast: MeshRayCast,
     camera_query: Single<(&Camera, &GlobalTransform)>,
     windows: Single<&Window>,
     keyboard_input: Res<ButtonInput<MouseButton>>,
+    mut map: ResMut<Map>,
 ) {
     if selected_part_query.is_none() {
         let (camera, camera_transform) = *camera_query;
@@ -383,48 +411,66 @@ fn select_world_part(
         let hits = ray_cast.cast_ray(ray, &settings);
 
         if let Some((e, _hit)) = hits.first() {
+            let mut e = *e;
+            //go up the entity hierarchy to get toplevel entity
+            while let Ok(ChildOf(parent)) = parent_query.get(e) {
+                e = *parent;
+            }
             //checks if hit is a building
-            if buildings.contains(*e) {
+            if let Ok(instance) = buildings.get(e) {
                 //if clicked, select it
                 if keyboard_input.just_released(MouseButton::Left) {
                     highlighted_part_query.map(|e| {
                         commands.entity(*e).remove::<Highlighted>();
                     });
-                    commands.entity(*e).insert(SelectedBuild);
+                    commands
+                        .entity(e)
+                        .insert(SelectedBuild)
+                        .remove::<BuildingInstance>();
+                    map.entities.remove_one(instance.clone());
                 } else {
                     //highlight it and remove potential different highlights.
                     if let Some(highlighted_e) = highlighted_part_query {
-                        if *e != *highlighted_e {
+                        if e != *highlighted_e {
                             commands.entity(*highlighted_e).remove::<Highlighted>();
-                            commands.entity(*e).insert(Highlighted);
+                            commands.entity(e).insert(Highlighted);
                         }
                     } else {
-                        commands.entity(*e).insert(Highlighted);
+                        commands.entity(e).insert(Highlighted);
                     }
                 }
+            } else {
+                highlighted_part_query.map(|e| {
+                    commands.entity(*e).remove::<Highlighted>();
+                });
             }
         }
     }
 }
 
+#[derive(Component)]
+pub struct HighlightLight;
+
 fn on_add_highlight(
     trigger: Trigger<OnAdd, Highlighted>,
-    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, &BuildId)>,
+    part_query: Query<(&Transform, &Aabb), With<BuildId>>,
+    mut light_query: Single<(&mut Transform, &mut SpotLight), (With<HighlightLight>, Without<BuildId>)>,
 ) {
-    if let Ok((mut mat, buildid)) = query.get_mut(trigger.target()) {
-        //mat.0 = buildid.0.highlight_material.clone();
-        //TODO: zones ?
+    if let Ok((part, aabb)) = part_query.get(trigger.target()) {
+        let (light_transform, light) = &mut *light_query;
+        let pos = part.translation + Vec3::from(aabb.center) * part.scale;
+        const LIGHT_DISTANCE: f32 = 10.;
+        light_transform.translation = pos + Vec3::Y * LIGHT_DISTANCE;
+        light_transform.look_at(pos, Vec3::Y);
+        light.outer_angle = ((Vec3::from(aabb.half_extents) * part.scale).norm()  / LIGHT_DISTANCE).atan();
     }
 }
 
 fn on_remove_highlight(
-    trigger: Trigger<OnRemove, Highlighted>,
-    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, &BuildId)>,
+    _trigger: Trigger<OnRemove, Highlighted>,
+    mut light_query: Single<&mut Transform, With<HighlightLight>>,
 ) {
-    if let Ok((mut mat, buildid)) = query.get_mut(trigger.target()) {
-        //mat.0 = buildid.0.material.clone();
-        //TODO: zones ?
-    }
+    light_query.translation = Vec3::new(0., -10., 0.);
 }
 
 /// Change the snapping mode by cycling on pressing S
