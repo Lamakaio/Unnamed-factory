@@ -4,6 +4,7 @@ pub mod map;
 pub mod shaders;
 pub mod sim;
 pub mod ui;
+pub mod mapgen;
 
 use std::{
     f32::consts::{FRAC_PI_2, PI},
@@ -75,7 +76,7 @@ impl Default for CameraSettings {
         Self {
             // These values are completely arbitrary, chosen because they seem to produce
             // "sensible" results for this example. Adjust as required.
-            orbit_distance: 1.0..20.0,
+            orbit_distance: 1.0..100.0,
             pitch_speed: 0.003,
             pitch_range: -pitch_limit..pitch_limit,
             yaw_speed: 0.004,
@@ -144,6 +145,16 @@ fn setup_3d(
         TemporalAntiAliasing::default(),
         Transform::from_xyz(20.0, 20., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         Atmosphere::EARTH,
+        DistanceFog {
+            color: Color::srgba(0.55, 0.58, 0.72, 0.6),
+            directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
+            directional_light_exponent: 50.0,
+            falloff: FogFalloff::from_visibility_colors(
+                300.0, // distance in world units up to which objects retain visibility (>= 5% contrast)
+                Color::srgb(0.796, 0.914, 0.929), // atmospheric extinction color (after light is lost due to absorption by atmospheric particles)
+                Color::srgb(0.8, 0.844, 1.0), // atmospheric inscattering color (light gained due to scattering from the sun)
+            ),
+        }
         //DistanceFog::default()
         //ScreenSpaceAmbientOcclusion::default()
     ));

@@ -4,6 +4,7 @@
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_vertex_output,
+    pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
     mesh_view_bindings as view_bindings,
     decal::clustered::apply_decal_base_color,
@@ -50,7 +51,7 @@ fn fragment(
 #endif
 
 
-    var pbr_input = pbr_input_from_vertex_output(in, is_front, true);
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     // alpha discard
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
@@ -66,26 +67,25 @@ fn fragment(
     var out: FragmentOutput;
     var texture: vec4<f32>;
     let height = in.uv.x;
-    if height < 0.37 {
+    if height < 0.34 {
         texture = ocean_color;
     }
-    else if height < 0.38 {
-        texture = mix(ocean_color, sand_color, (height - 0.37)/ 0.01);
+    else if height < 0.345 {
+        texture = mix(ocean_color, sand_color, (height - 0.34)/ 0.005);
     }
-    else if height < 0.39 {
+    else if height < 0.34 {
         texture = sand_color;
     }
-    else if height < 0.40 {
-        texture = mix(sand_color, grass_color, (height - 0.39)/0.01);
+    else if height < 0.35 {
+        texture = mix(sand_color, grass_color, (height - 0.345)/0.005);
     }
-    else if height < 0.55 {
+    else if height < 0.42 {
         texture = grass_color;
     }
-
-    else if height < 0.6 {
-        texture = mix(grass_color, mountain_color, (height - 0.55)/0.05);
+    else if height < 0.47 {
+        texture = mix(grass_color, mountain_color, (height - 0.42)/0.05);
     }
-    else if height < 0.75 {
+    else if height < 0.55 {
         texture = mountain_color;
     }
     else {

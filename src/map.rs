@@ -13,16 +13,19 @@ use bevy::{
 };
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{
-    Noise, SampleableFor,
-    cells::SimplexGrid,
+    Noise, Sampleable, SampleableFor,
+    cell_noise::{MixCellValuesForDomain, PerNearestPoint},
+    cells::{OrthoGrid, SimplexGrid, Voronoi},
     curves::Smoothstep,
-    math_noise::NoiseCurve,
+    math_noise::{NoiseCurve, Pow2, Pow4},
+    misc_noise::Scaled,
     prelude::{
-        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, NormedByDerivative,
-        Octave, PeakDerivativeContribution, Persistence, QuickGradients, SNormToUNorm,
-        SimplecticBlend,
+        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, ManhattanLength, Masked,
+        MixCellGradients, Normed, NormedByDerivative, Octave, PeakDerivativeContribution,
+        PerCellPointDistances, Persistence, QuickGradients, SNormToUNorm, SimplecticBlend,
+        WorleyLeastDistance,
     },
-    rng::NoiseRng,
+    rng::{NoiseRng, SNorm, UNorm},
 };
 use serde::Deserialize;
 
@@ -55,7 +58,7 @@ pub struct BuildingInstance {
     pub building: Handle<Building>,
     pub pos: Vec2,
     pub half_extents: Vec2,
-    pub entity: Entity
+    pub entity: Entity,
 }
 
 impl KdValue for BuildingInstance {
@@ -87,15 +90,47 @@ pub struct TerrainPoint {
 
 type NoiseT = Noise<(
     LayeredNoise<
-        NormedByDerivative<f32, EuclideanLength, PeakDerivativeContribution>,
+        Normed<f32>,
         Persistence,
-        FractalLayers<
-            Octave<BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients, true>>,
-        >,
+        (
+            Octave<(OceanNoiseT, Scaled<f32>)>,
+            Octave<Masked<ContinentNoiseT, FlatnessNoiseT>>,
+        ),
     >,
     SNormToUNorm,
-    NoiseCurve<Smoothstep>,
 )>;
+
+type OceanNoiseT = (
+    Scaled<f32>,
+    noiz::prelude::Offset<MixCellValuesForDomain<OrthoGrid, Smoothstep, SNorm>>,
+    BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients>,
+    NoiseCurve<TestCurve>,
+);
+
+type ContinentNoiseT = (
+    LayeredNoise<
+        NormedByDerivative<f32, EuclideanLength, PeakDerivativeContribution>,
+        Persistence,
+        FractalLayers<Octave<MixCellGradients<OrthoGrid, Smoothstep, QuickGradients, true>>>,
+    >,
+    SNormToUNorm,
+);
+
+type FlatnessNoiseT = (
+    Masked<
+        (
+            Scaled<f32>,
+            BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients>,
+            SNormToUNorm,
+        ),
+        (
+            Scaled<f32>,
+            PerCellPointDistances<Voronoi, ManhattanLength, WorleyLeastDistance>,
+        ),
+    >,
+    Pow2,
+    Scaled<f32>
+);
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub enum PatchOp {
@@ -116,29 +151,107 @@ pub struct Chunk {
     spawned: bool,
 }
 
+#[derive(Default, Clone)]
+struct TestCurve;
+impl Curve<f32> for TestCurve {
+    fn domain(&self) -> Interval {
+        Interval::new(0., 1.).unwrap()
+    }
+
+    fn sample_unchecked(&self, t: f32) -> f32 {
+        1. - (1.5 * t).clamp(0., 1.)
+    }
+}
+
 impl Chunk {
     pub const CHUNK_SIZE: u32 = 256;
     pub const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
-    pub const SCALE_Y: f32 = 20.;
+    pub const SCALE_Y: f32 = 100.;
 
     fn get_noise(seed: u32) -> NoiseT {
         //let base_noise = OpenSimplex::new(seed as u32);
         Noise {
             noise: (
                 LayeredNoise::new(
-                    NormedByDerivative::default().with_falloff(0.5),
-                    Persistence(0.7),
-                    FractalLayers {
-                        layer: Default::default(),
-                        lacunarity: 1.6,
-                        amount: 4,
-                    },
+                    Normed::<f32>::default(),
+                    Persistence(1.),
+                    (
+                        Octave(
+                            (
+                                (
+                                    Scaled(0.1),
+                                    noiz::prelude::Offset::<
+                                        MixCellValuesForDomain<OrthoGrid, Smoothstep, SNorm>,
+                                    > {
+                                        offset_strength: 0.4,
+                                        ..Default::default()
+                                    },
+                                    BlendCellGradients::<
+                                        SimplexGrid,
+                                        SimplecticBlend,
+                                        QuickGradients,
+                                    >::default(),
+                                    NoiseCurve::<TestCurve>::default(),
+                                ),
+                                Scaled(0.15),
+                            ),
+                        ),
+                        Octave(Masked(
+                            (
+                                LayeredNoise::new(
+                                    NormedByDerivative::<
+                                        f32,
+                                        EuclideanLength,
+                                        PeakDerivativeContribution,
+                                    >::default()
+                                    .with_falloff(0.35),
+                                    Persistence(0.6),
+                                    FractalLayers {
+                                        layer: Octave::<
+                                            MixCellGradients<
+                                                OrthoGrid,
+                                                Smoothstep,
+                                                QuickGradients,
+                                                true,
+                                            >,
+                                        >::default(),
+                                        lacunarity: 1.8,
+                                        amount: 8,
+                                    },
+                                ),
+                                SNormToUNorm::default(),
+                            ),
+                            (
+                                Masked(
+                                    (
+                                        Scaled(0.1),
+                                        BlendCellGradients::<
+                                            SimplexGrid,
+                                            SimplecticBlend,
+                                            QuickGradients,
+                                        >::default(),
+                                        SNormToUNorm::default(),
+                                    ),
+                                    (
+                                        Scaled(0.2),
+                                        PerCellPointDistances::<
+                                            Voronoi,
+                                            ManhattanLength,
+                                            WorleyLeastDistance,
+                                        >::default(),
+                                    ),
+                                ),
+                                Pow2::default(),
+                                Scaled (2.)
+                            ),
+                        )),
+                    ),
                 ),
-                Default::default(),
-                Default::default(),
+                SNormToUNorm::default(),
             ),
             seed: NoiseRng(seed),
-            frequency: 0.005,
+            frequency: 0.04,
+            ..Default::default()
         }
     }
 
@@ -162,7 +275,9 @@ impl Chunk {
             for z in 0..Self::CHUNK_SIZE {
                 let fz = z as f32 * GRID_SQUARE_SIZE + world_pos.z;
                 let sample: f32 = noise.sample(Vec2::new(fx, fz));
-                self.grid.push(TerrainPoint { height: sample })
+                self.grid.push(TerrainPoint {
+                    height: 1.3 * sample - 0.35,
+                })
             }
         }
     }
@@ -240,7 +355,7 @@ impl Chunk {
         operation: PatchOp,
     ) -> Vec<(i64, i64)> {
         let mesh = self.get_mesh_mut(meshes);
-        
+
         let mut ret = Vec::new();
         {
             let attrs = mesh.attributes_mut();
@@ -265,7 +380,7 @@ impl Chunk {
                 let mut x_max = (local_pos.x + radius).floor() as i32;
                 let mut y_min = (local_pos.y - radius).ceil() as i32;
                 let mut y_max = (local_pos.y + radius).floor() as i32;
-                
+
                 if x_min <= 0 && y_min <= 0 {
                     ret.push((-1, -1));
                 }
@@ -359,7 +474,7 @@ impl Map {
         let chunk_pos = I64Vec2::new(chunk_pos.x as i64, chunk_pos.z as i64);
         let chunk = self.chunks.get(&chunk_pos);
         if let Some(chunk) = chunk {
-            let offset = ((pos - chunk.get_world_pos())/ GRID_SQUARE_SIZE);
+            let offset = ((pos - chunk.get_world_pos()) / GRID_SQUARE_SIZE);
             let floor = offset.floor();
             let fract = offset.fract();
             let h00 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32)].height;
@@ -369,10 +484,11 @@ impl Map {
             (h00 * (1. - fract.x.fract()) * (1. - fract.z.fract())
                 + h01 * (1. - fract.x.fract()) * fract.z.fract()
                 + h10 * fract.x.fract() * (1. - fract.z.fract())
-                + h11 * fract.x.fract() * fract.z.fract()) * Chunk::SCALE_Y
+                + h11 * fract.x.fract() * fract.z.fract())
+                * Chunk::SCALE_Y
         } else {
             Chunk::SCALE_Y
-        } 
+        }
     }
 }
 
