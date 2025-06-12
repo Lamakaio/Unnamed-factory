@@ -11,11 +11,13 @@ use bevy::{
     render::{
         primitives::Aabb,
         render_resource::{Extent3d, TextureDimension, TextureFormat},
-    }, text::cosmic_text::ttf_parser::ankr::Point,
+    },
+    text::cosmic_text::ttf_parser::ankr::Point,
 };
 
 use crate::{
     map::{BuildingInstance, Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
+    mapgen::Continent,
     sim::RhaiScript,
 };
 
@@ -394,6 +396,7 @@ fn select_world_part(
     windows: Single<&Window>,
     keyboard_input: Res<ButtonInput<MouseButton>>,
     mut map: ResMut<Map>,
+    chunks: Query<&IsGround>,
 ) {
     if selected_part_query.is_none() {
         let (camera, camera_transform) = *camera_query;
@@ -410,7 +413,7 @@ fn select_world_part(
         let settings = MeshRayCastSettings::default().always_early_exit();
         let hits = ray_cast.cast_ray(ray, &settings);
 
-        if let Some((e, _hit)) = hits.first() {
+        if let Some((e, hit)) = hits.first() {
             let mut e = *e;
             //go up the entity hierarchy to get toplevel entity
             while let Ok(ChildOf(parent)) = parent_query.get(e) {
@@ -443,6 +446,33 @@ fn select_world_part(
                 highlighted_part_query.map(|e| {
                     commands.entity(*e).remove::<Highlighted>();
                 });
+
+                if let Ok(IsGround(chunk_position)) = chunks.get(e) {
+                    let pos = hit.point;
+                    let continent_pos_offset = (chunk_position * (Chunk::CHUNK_SIZE as i64 - 1)
+                        + Continent::CONTINENT_SIZE as i64 / 2)
+                        .abs()
+                        % ((Continent::CONTINENT_SIZE - Chunk::CHUNK_SIZE) as i64);
+                    let in_chunk_pos = (pos
+                        - map.chunks.get(chunk_position).unwrap().get_world_pos())
+                            / GRID_SQUARE_SIZE;
+                    let continent_index = (
+                        in_chunk_pos.x.floor() as u32 + continent_pos_offset.x as u32,
+                        in_chunk_pos.z.floor() as u32 + continent_pos_offset.y as u32,
+                    );
+                    let height = &map.continent[continent_index];
+                    let hydro = map
+                        .continent
+                        .get_hydro(continent_index.0, continent_index.1);
+                    // println!(
+                    //     "{} {} - {} {}",
+                    //     pos., height.grad, hydro.amount, hydro.momentum
+                    // );
+                    println!(
+                        "{} {} - {} {} - {}",
+                        height.height, height.grad, hydro.amount, hydro.momentum, hydro.visit
+                    );
+                }
             }
         }
     }
@@ -454,7 +484,10 @@ pub struct HighlightLight;
 fn on_add_highlight(
     trigger: Trigger<OnAdd, Highlighted>,
     part_query: Query<(&Transform, &Aabb), With<BuildId>>,
-    mut light_query: Single<(&mut Transform, &mut SpotLight), (With<HighlightLight>, Without<BuildId>)>,
+    mut light_query: Single<
+        (&mut Transform, &mut SpotLight),
+        (With<HighlightLight>, Without<BuildId>),
+    >,
 ) {
     if let Ok((part, aabb)) = part_query.get(trigger.target()) {
         let (light_transform, light) = &mut *light_query;
@@ -462,7 +495,8 @@ fn on_add_highlight(
         const LIGHT_DISTANCE: f32 = 10.;
         light_transform.translation = pos + Vec3::Y * LIGHT_DISTANCE;
         light_transform.look_at(pos, Vec3::Y);
-        light.outer_angle = ((Vec3::from(aabb.half_extents) * part.scale).norm()  / LIGHT_DISTANCE).atan();
+        light.outer_angle =
+            ((Vec3::from(aabb.half_extents) * part.scale).norm() / LIGHT_DISTANCE).atan();
     }
 }
 

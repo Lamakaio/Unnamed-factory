@@ -10,10 +10,10 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 kdtree-collisions = {git = "https://github.com/Lamakaio/kdtree-collisions.git"}
 noiz = "0.2"
-rand = "0.9"
+rand = "*"
 rhai = {version="1.21", features = ["sync", "metadata", "no_closure", "no_custom_syntax", "no_time", "only_i64"]}
 foldhash = "*" 
-
+rand_distr = "*"
 fast_hilbert = "2"
 
 

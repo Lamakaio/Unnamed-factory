@@ -67,6 +67,10 @@ fn fragment(
     var out: FragmentOutput;
     var texture: vec4<f32>;
     let height = in.uv.x;
+
+    let hydro = (abs(in.uv.y) - 0.94) / 100.;
+    let mix_hydro = exp(-(1./hydro));
+
     if height < 0.34 {
         texture = ocean_color;
     }
@@ -91,6 +95,8 @@ fn fragment(
     else {
         texture = snow_color;
     }
+
+    texture = mix(texture, ocean_color, mix_hydro);
 
     texture = apply_decal_base_color(
         in.world_position.xyz,

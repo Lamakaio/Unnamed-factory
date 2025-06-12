@@ -32,6 +32,7 @@ use serde::Deserialize;
 use crate::{
     CameraTarget,
     build::{Building, BuildingType},
+    mapgen::Continent,
     shaders::{MapMaterial, TerrainShader},
 };
 pub struct MapPlugin {
@@ -43,7 +44,7 @@ impl Plugin for MapPlugin {
             material: Handle::default(),
             chunks: HashMap::new(),
             entities: KdTree::default(),
-            noise: Chunk::get_noise(self.seed as u32),
+            continent: Continent::new_and_generate(self.seed as u32),
         });
         app.add_systems(Update, spawn_chunk);
         app.add_systems(Startup, setup_map);
@@ -81,57 +82,6 @@ impl KdValue for BuildingInstance {
     }
 }
 
-/// A single point of terrain, with an height.
-/// Potentially contains terrain type for texturing (and other stuff ?)
-#[derive(Clone)]
-pub struct TerrainPoint {
-    height: f32,
-}
-
-type NoiseT = Noise<(
-    LayeredNoise<
-        Normed<f32>,
-        Persistence,
-        (
-            Octave<(OceanNoiseT, Scaled<f32>)>,
-            Octave<Masked<ContinentNoiseT, FlatnessNoiseT>>,
-        ),
-    >,
-    SNormToUNorm,
-)>;
-
-type OceanNoiseT = (
-    Scaled<f32>,
-    noiz::prelude::Offset<MixCellValuesForDomain<OrthoGrid, Smoothstep, SNorm>>,
-    BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients>,
-    NoiseCurve<TestCurve>,
-);
-
-type ContinentNoiseT = (
-    LayeredNoise<
-        NormedByDerivative<f32, EuclideanLength, PeakDerivativeContribution>,
-        Persistence,
-        FractalLayers<Octave<MixCellGradients<OrthoGrid, Smoothstep, QuickGradients, true>>>,
-    >,
-    SNormToUNorm,
-);
-
-type FlatnessNoiseT = (
-    Masked<
-        (
-            Scaled<f32>,
-            BlendCellGradients<SimplexGrid, SimplecticBlend, QuickGradients>,
-            SNormToUNorm,
-        ),
-        (
-            Scaled<f32>,
-            PerCellPointDistances<Voronoi, ManhattanLength, WorleyLeastDistance>,
-        ),
-    >,
-    Pow2,
-    Scaled<f32>
-);
-
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub enum PatchOp {
     Up,
@@ -145,7 +95,8 @@ pub struct ChunkMarker(pub I64Vec2);
 
 /// A chunk, containing terrain data
 pub struct Chunk {
-    grid: Vec<TerrainPoint>,
+    grid: Vec<f32>,
+    hydro: Vec<f32>,
     chunk_position: I64Vec2,
     cached_mesh: Option<Handle<Mesh>>,
     spawned: bool,
@@ -168,116 +119,118 @@ impl Chunk {
     pub const WORLD_CHUNK_SIZE: f32 = (Self::CHUNK_SIZE as f32 - 1.) * GRID_SQUARE_SIZE;
     pub const SCALE_Y: f32 = 100.;
 
-    fn get_noise(seed: u32) -> NoiseT {
-        //let base_noise = OpenSimplex::new(seed as u32);
-        Noise {
-            noise: (
-                LayeredNoise::new(
-                    Normed::<f32>::default(),
-                    Persistence(1.),
-                    (
-                        Octave(
-                            (
-                                (
-                                    Scaled(0.1),
-                                    noiz::prelude::Offset::<
-                                        MixCellValuesForDomain<OrthoGrid, Smoothstep, SNorm>,
-                                    > {
-                                        offset_strength: 0.4,
-                                        ..Default::default()
-                                    },
-                                    BlendCellGradients::<
-                                        SimplexGrid,
-                                        SimplecticBlend,
-                                        QuickGradients,
-                                    >::default(),
-                                    NoiseCurve::<TestCurve>::default(),
-                                ),
-                                Scaled(0.15),
-                            ),
-                        ),
-                        Octave(Masked(
-                            (
-                                LayeredNoise::new(
-                                    NormedByDerivative::<
-                                        f32,
-                                        EuclideanLength,
-                                        PeakDerivativeContribution,
-                                    >::default()
-                                    .with_falloff(0.35),
-                                    Persistence(0.6),
-                                    FractalLayers {
-                                        layer: Octave::<
-                                            MixCellGradients<
-                                                OrthoGrid,
-                                                Smoothstep,
-                                                QuickGradients,
-                                                true,
-                                            >,
-                                        >::default(),
-                                        lacunarity: 1.8,
-                                        amount: 8,
-                                    },
-                                ),
-                                SNormToUNorm::default(),
-                            ),
-                            (
-                                Masked(
-                                    (
-                                        Scaled(0.1),
-                                        BlendCellGradients::<
-                                            SimplexGrid,
-                                            SimplecticBlend,
-                                            QuickGradients,
-                                        >::default(),
-                                        SNormToUNorm::default(),
-                                    ),
-                                    (
-                                        Scaled(0.2),
-                                        PerCellPointDistances::<
-                                            Voronoi,
-                                            ManhattanLength,
-                                            WorleyLeastDistance,
-                                        >::default(),
-                                    ),
-                                ),
-                                Pow2::default(),
-                                Scaled (2.)
-                            ),
-                        )),
-                    ),
-                ),
-                SNormToUNorm::default(),
-            ),
-            seed: NoiseRng(seed),
-            frequency: 0.04,
-            ..Default::default()
-        }
-    }
+    // fn get_noise(seed: u32) -> NoiseT {
+    //     //let base_noise = OpenSimplex::new(seed as u32);
+    //     Noise {
+    //         noise: (
+    //             LayeredNoise::new(
+    //                 Normed::<f32>::default(),
+    //                 Persistence(1.),
+    //                 (
+    //                     Octave(
+    //                         (
+    //                             (
+    //                                 Scaled(0.1),
+    //                                 noiz::prelude::Offset::<
+    //                                     MixCellValuesForDomain<OrthoGrid, Smoothstep, SNorm>,
+    //                                 > {
+    //                                     offset_strength: 0.4,
+    //                                     ..Default::default()
+    //                                 },
+    //                                 BlendCellGradients::<
+    //                                     SimplexGrid,
+    //                                     SimplecticBlend,
+    //                                     QuickGradients,
+    //                                 >::default(),
+    //                                 NoiseCurve::<TestCurve>::default(),
+    //                             ),
+    //                             Scaled(0.15),
+    //                         ),
+    //                     ),
+    //                     Octave(Masked(
+    //                         (
+    //                             LayeredNoise::new(
+    //                                 NormedByDerivative::<
+    //                                     f32,
+    //                                     EuclideanLength,
+    //                                     PeakDerivativeContribution,
+    //                                 >::default()
+    //                                 .with_falloff(0.35),
+    //                                 Persistence(0.6),
+    //                                 FractalLayers {
+    //                                     layer: Octave::<
+    //                                         MixCellGradients<
+    //                                             OrthoGrid,
+    //                                             Smoothstep,
+    //                                             QuickGradients,
+    //                                             true,
+    //                                         >,
+    //                                     >::default(),
+    //                                     lacunarity: 1.8,
+    //                                     amount: 8,
+    //                                 },
+    //                             ),
+    //                             SNormToUNorm::default(),
+    //                         ),
+    //                         (
+    //                             Masked(
+    //                                 (
+    //                                     Scaled(0.1),
+    //                                     BlendCellGradients::<
+    //                                         SimplexGrid,
+    //                                         SimplecticBlend,
+    //                                         QuickGradients,
+    //                                     >::default(),
+    //                                     SNormToUNorm::default(),
+    //                                 ),
+    //                                 (
+    //                                     Scaled(0.2),
+    //                                     PerCellPointDistances::<
+    //                                         Voronoi,
+    //                                         ManhattanLength,
+    //                                         WorleyLeastDistance,
+    //                                     >::default(),
+    //                                 ),
+    //                             ),
+    //                             Pow2::default(),
+    //                             Scaled (2.)
+    //                         ),
+    //                     )),
+    //                 ),
+    //             ),
+    //             SNormToUNorm::default(),
+    //         ),
+    //         seed: NoiseRng(seed),
+    //         frequency: 0.04,
+    //         ..Default::default()
+    //     }
+    // }
 
     /// get a dummy terrain chunk for testing purpose
-    fn new_and_generate(pos: &I64Vec2, noise: &NoiseT) -> Self {
+    fn new_and_generate(pos: &I64Vec2, continent: &Continent) -> Self {
         let mut chunk = Self {
             grid: Vec::with_capacity((Self::CHUNK_SIZE * Self::CHUNK_SIZE) as usize),
+            hydro: Vec::with_capacity((Self::CHUNK_SIZE * Self::CHUNK_SIZE) as usize),
             chunk_position: pos.clone(),
             cached_mesh: None,
             spawned: false,
         };
-        chunk.generate(noise);
+        chunk.generate(continent);
         chunk
     }
 
-    fn generate(&mut self, noise: &NoiseT) {
-        let world_pos = self.get_world_pos();
+    fn generate(&mut self, continent: &Continent) {
+        let world_pos = (self.chunk_position * (Self::CHUNK_SIZE as i64 - 1)
+            + Continent::CONTINENT_SIZE as i64 / 2)
+            .abs()
+            % ((Continent::CONTINENT_SIZE - Self::CHUNK_SIZE) as i64);
         self.grid.clear();
         for x in 0..Self::CHUNK_SIZE {
-            let fx = x as f32 * GRID_SQUARE_SIZE + world_pos.x;
             for z in 0..Self::CHUNK_SIZE {
-                let fz = z as f32 * GRID_SQUARE_SIZE + world_pos.z;
-                let sample: f32 = noise.sample(Vec2::new(fx, fz));
-                self.grid.push(TerrainPoint {
-                    height: 1.3 * sample - 0.35,
-                })
+                let pos = (x + world_pos.x as u32, z + world_pos.y as u32);
+                let sample: f32 = continent[pos].height;
+                self.grid.push(1.3 * sample - 0.35);
+                self.hydro.push(continent.get_hydro(pos.0, pos.1).amount);
             }
         }
     }
@@ -301,11 +254,13 @@ impl Chunk {
         for (i, sq) in self.grid.iter().enumerate() {
             let x = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
             let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
-            vertex_positions.push([x + offset, sq.height * Self::SCALE_Y, z + offset]);
-            let uv_x = sq.height;
-            let uv_y = (x + z / 50. + rand::random_range(-0.1..0.1)).fract();
-            uv.push([uv_x as f32, uv_y]);
+            vertex_positions.push([x + offset, sq * Self::SCALE_Y, z + offset]);
+            let uv_x = *sq;
+            let uv_y = self.hydro[i];
+            //print!("{uv_y} ");
+            uv.push([uv_x, uv_y]);
         }
+        //println!("");
         for x in 1..Self::CHUNK_SIZE as u16 {
             for z in 1..Self::CHUNK_SIZE as u16 {
                 fn id(x: u16, z: u16) -> u16 {
@@ -418,7 +373,7 @@ impl Chunk {
                                     let index = Chunk::get_index(x, y);
                                     let delta = 0.1 * (1. - (dist / radius).powi(4)) * sign;
                                     vertex[index][1] += delta * Self::SCALE_Y;
-                                    self.grid[index].height += delta;
+                                    self.grid[index] += delta;
                                     uvs[index][0] += delta;
                                 }
                             }
@@ -434,7 +389,7 @@ impl Chunk {
                                     let ratio = (dist / radius).powi(6);
                                     let height = ratio * vertex[index][1] + (1. - ratio) * pos.y;
                                     vertex[index][1] = height;
-                                    self.grid[index].height = height / Self::SCALE_Y;
+                                    self.grid[index] = height / Self::SCALE_Y;
                                     uvs[index][0] = height / Self::SCALE_Y;
                                 }
                             }
@@ -453,9 +408,9 @@ impl Chunk {
 #[derive(Resource)]
 pub struct Map {
     material: Handle<MapMaterial>,
-    chunks: HashMap<I64Vec2, Chunk>,
+    pub chunks: HashMap<I64Vec2, Chunk>,
     pub entities: KdTree<BuildingInstance, 10>,
-    noise: NoiseT,
+    pub continent: Continent,
 }
 
 impl Map {
@@ -465,7 +420,7 @@ impl Map {
         self.chunks
             .raw_entry_mut()
             .from_key(pos)
-            .or_insert_with(|| (pos.clone(), Chunk::new_and_generate(pos, &self.noise)))
+            .or_insert_with(|| (pos.clone(), Chunk::new_and_generate(pos, &self.continent)))
             .1
     }
 
@@ -477,10 +432,10 @@ impl Map {
             let offset = ((pos - chunk.get_world_pos()) / GRID_SQUARE_SIZE);
             let floor = offset.floor();
             let fract = offset.fract();
-            let h00 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32)].height;
-            let h01 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32 + 1)].height;
-            let h10 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32)].height;
-            let h11 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32 + 1)].height;
+            let h00 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32)];
+            let h01 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32 + 1)];
+            let h10 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32)];
+            let h11 = chunk.grid[Chunk::get_index(floor.x as i32 + 1, floor.z as i32 + 1)];
             (h00 * (1. - fract.x.fract()) * (1. - fract.z.fract())
                 + h01 * (1. - fract.x.fract()) * fract.z.fract()
                 + h10 * fract.x.fract() * (1. - fract.z.fract())
@@ -519,7 +474,7 @@ pub fn setup_map(
     ));
 }
 #[derive(Component)]
-pub struct IsGround;
+pub struct IsGround(pub I64Vec2);
 
 /// Handles the spawning of chunks when the camera is close enough. (Currently only spawns the chunk the camera is on)
 pub fn spawn_chunk(
@@ -549,7 +504,7 @@ pub fn spawn_chunk(
                 Mesh3d(mesh),
                 MeshMaterial3d(mat.clone()),
                 Transform::from_translation(chunk.get_world_pos()),
-                IsGround,
+                IsGround(chunk_pos),
             ));
 
             // for build in map.entities.query_rect(
