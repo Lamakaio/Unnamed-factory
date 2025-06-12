@@ -1,6 +1,7 @@
-use bevy::math::{Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace, curve::Interval};
+use bevy::math::{
+    Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace, cubic_splines::CubicHermite, curve::Interval,
+};
 use fast_hilbert;
-use foldhash::{HashMap, HashSet};
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{
     Noise, Sampleable, SampleableFor,
@@ -20,6 +21,7 @@ use noiz::{
 use rand::SeedableRng;
 use rand_distr::Distribution;
 use std::{
+    collections::BTreeMap,
     default,
     f32::consts::PI,
     ops::{Index, IndexMut},
@@ -100,6 +102,11 @@ pub struct Hydrologypoint {
     pub visit: bool,
     pub source: usize,
     next: usize,
+    prev: usize,
+}
+
+pub struct RiverPath {
+    paths: BTreeMap<usize, CubicHermite<Vec2>>,
 }
 
 pub struct Continent {
@@ -107,6 +114,7 @@ pub struct Continent {
     hydrology: Vec<Hydrologypoint>,
     height_noise: NoiseT,
     offset: Vec2,
+    river_paths: Vec<RiverPath>,
 }
 
 impl Continent {
@@ -125,6 +133,7 @@ impl Continent {
             ],
             height_noise: Self::get_noise(seed),
             offset: Vec2::new(0., 0.),
+            river_paths: Vec::default(),
         };
         new.generate();
         new
@@ -217,12 +226,10 @@ impl Continent {
 
     fn make_hydrology_map(&mut self) {
         const HEIGHT_THRESHOLD: f32 = 0.05;
-        let dist = rand_distr::Normal::new(0., 0.1).unwrap();
-        let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
         //get sources
         for x in 1u32..((1 << Self::CONTINENT_SIZE_PO2) - 1) {
             for y in 1..((1 << Self::CONTINENT_SIZE_PO2) - 1) {
-                let id = fast_hilbert::xy2h(x, y, Self::CONTINENT_SIZE_PO2) as usize;
+                let id = Self::xy2h(x, y);
                 let grad = self.points[id].grad;
                 //Compute the angle, and add a perturbation (bigger if the grad is small)
                 let angle = grad.angle_to(Vec2::Y)
@@ -240,8 +247,7 @@ impl Continent {
                     3 => (x + 1, y - 1),
                     _ => (x, y - 1),
                 };
-                let target_id: usize =
-                    fast_hilbert::xy2h(target.0, target.1, Self::CONTINENT_SIZE_PO2) as usize;
+                let target_id: usize = Self::xy2h(target.0, target.1);
                 if self.points[id].height + HEIGHT_THRESHOLD < self.points[target_id].height {
                     self.hydrology[id].dead_end = true;
                     self.hydrology[id].momentum = grad;
@@ -262,7 +268,7 @@ impl Continent {
             .filter_map(|(i, h)| if h.visit == false { Some(i) } else { None })
             .collect();
 
-        let mut estuaries = HashSet::<(u32, u32)>::default();
+        let mut estuaries = Vec::<(u32, u32)>::default();
         const SOURCE_CULLING_RADIUS: u32 = 10;
         const SEP_SLOPE_ANGLE: f32 = PI / 4.;
         let mut chosen_sources: Vec<usize> = Vec::default();
@@ -291,20 +297,88 @@ impl Continent {
 
             //dbg!("plop");
         }
-
+        let mut forks = BTreeMap::default();
         //make paths
         for s in chosen_sources.iter() {
-            self.go_through_path(*s, &mut estuaries);
+            self.go_through_path(*s, &mut estuaries, &mut forks);
         }
         //Reverse order for amounts
         for s in chosen_sources.iter().rev() {
             self.propagate_amount(*s);
         }
 
+        let estuary_groups = self.make_estuary_groups(estuaries);
+
+        self.fork_estuaries(estuary_groups, &mut forks);
+    }
+
+    fn fork_estuaries(&mut self, estuary_groups: BTreeMap<(u32, u32), Vec<(u32, u32)>>, forks: &mut BTreeMap<usize, usize>) {
+        const RIVER_UNMERGE_RADIUS: f32 = 25.;
+
+        let dist = rand_distr::Normal::new(0., 0.1).unwrap();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
+
+        for (main, others) in estuary_groups {
+            let mut main = Self::xy2h(main.0, main.1);
+            let mut prev;
+            let mut prevs: Vec<usize> = others.into_iter().map(|(x, y)| Self::xy2h(x, y)).collect();
+            loop {
+                prev = main;
+                for _ in 0..5 {
+                    main = self.hydrology[main].prev;
+                }
+
+                fn d(a: (u32, u32), b: (u32, u32)) -> f32 {
+                    Vec2::new(a.0 as f32, a.1 as f32).distance(Vec2::new(b.0 as f32, b.1 as f32))
+                }
+                let mut to_remove = Vec::new();
+                for (i, v) in prevs.iter_mut().enumerate() {
+                    //go back on the main river, then go back on the others to match 
+                    let main_pos = Self::h2xy(main);
+                    let mut pos = Self::h2xy(*v);
+                    let mut prev_dist = 1000.;
+                    let mut new_dist = d(main_pos, pos);
+                    while new_dist < prev_dist {
+                        *v = self.hydrology[*v].prev;
+                        pos = Self::h2xy(*v);
+                        prev_dist = new_dist;
+                        new_dist = d(main_pos, pos);
+                        //Change the fork dest to the main river
+                        if let Some(fork) = forks.get_mut(v) {
+                            *fork = prev;
+                        }
+                    }
+                    //split if needed
+                    if new_dist > RIVER_UNMERGE_RADIUS {
+                        forks.insert(prev, *v);
+                        self.hydrology[*v].next = prev;
+                        to_remove.push(i)
+                    }
+                }
+                for i in to_remove.into_iter().rev() {
+                    prevs.swap_remove(i);
+                }
+
+            }
+        }
+    }
+
+    fn xy2h(x: u32, y: u32) -> usize {
+        fast_hilbert::xy2h(x, y, Self::CONTINENT_SIZE_PO2) as usize
+    }
+
+    fn h2xy(h: usize) -> (u32, u32) {
+        fast_hilbert::h2xy(h as u64, Self::CONTINENT_SIZE_PO2)
+    }
+
+    fn make_estuary_groups(
+        &mut self,
+        estuaries: Vec<(u32, u32)>,
+    ) -> BTreeMap<(u32, u32), Vec<(u32, u32)>> {
         //make groups of estuaries
         const ESTUARY_MERGE_RADIUS: u32 = 20;
-        let mut estuary_groups: HashMap<(u32, u32), Vec<(u32, u32)>> = HashMap::default();
-        tree = KdTree::default();
+        let mut estuary_groups: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::default();
+        let mut tree: KdTree<U32Value, 10> = KdTree::default();
         for (x, y) in estuaries {
             //collect intersecting points
             fn dist(a: &U32Value, b: (u32, u32)) -> f32 {
@@ -327,7 +401,7 @@ impl Continent {
                     .push((x, y));
             } else {
                 //create new group
-                estuary_groups.insert((x, y), vec![(x, y)]);
+                estuary_groups.insert((x, y), vec![]);
                 let val = U32Value {
                     x,
                     y,
@@ -337,6 +411,7 @@ impl Continent {
                 tree.insert(val);
             }
         }
+        estuary_groups
     }
 
     fn propagate_amount(&mut self, s: usize) {
@@ -351,18 +426,10 @@ impl Continent {
             node = next;
             next = self.hydrology[node].next;
         }
-        println!(
-            "{} - {} - {} {} - {}",
-            self.hydrology[node].amount,
-            next,
-            self.hydrology[next].source,
-            self.hydrology[node].source,
-            self.hydrology[node].visit
-        );
     }
 
-    fn go_through_path(&mut self, s: usize, estuaries: &mut HashSet<(u32, u32)>) {
-        let mut node = s;
+    fn go_through_path(&mut self, s: usize, estuaries: &mut Vec<(u32, u32)>, forks: &mut BTreeMap<usize, usize>) {
+        let mut node: usize = s;
         self.hydrology[node].source = s;
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
         let dist = rand_distr::Normal::new(0., PI / 20.).unwrap();
@@ -384,26 +451,27 @@ impl Continent {
             //Corrected momentum to account for movement in the wrong direction
             let corrected = (2. * self.hydrology[node].momentum - actual).normalize()
                 * self.hydrology[node].momentum.norm();
-            let target_id: usize =
-                fast_hilbert::xy2h(target.0, target.1, Self::CONTINENT_SIZE_PO2) as usize;
+            let next: usize = Self::xy2h(target.0, target.1);
 
             self.hydrology[node].visit = false;
-            self.hydrology[node].next = target_id;
+            self.hydrology[node].next = next;
+            self.hydrology[next].prev = node;
 
-            if self.hydrology[target_id].source != 0 {
+            if self.hydrology[next].source != 0 {
+                forks.insert(next, node);
                 return;
             }
-            self.hydrology[target_id].source = self.hydrology[node].source;
+            self.hydrology[next].source = self.hydrology[node].source;
 
             let slowdown = 0.9;
 
-            self.hydrology[target_id].momentum = Vec2::from_angle(skew.clamp(-0.1, 0.1))
-                .rotate(self.hydrology[target_id].momentum + corrected * slowdown);
+            self.hydrology[next].momentum = Vec2::from_angle(skew.clamp(-0.1, 0.1))
+                .rotate(self.hydrology[next].momentum + corrected * slowdown);
 
-            node = target_id;
+            node = next;
         }
 
-        estuaries.insert((x, y));
+        estuaries.push((x, y));
     }
 
     pub fn get_hydro(&self, x: u32, y: u32) -> &Hydrologypoint {
