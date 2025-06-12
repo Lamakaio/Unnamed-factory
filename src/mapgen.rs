@@ -27,7 +27,7 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use crate::map::GRID_SQUARE_SIZE;
+use crate::map::{Chunk, GRID_SQUARE_SIZE};
 
 #[derive(Default, Clone)]
 struct TestCurve;
@@ -99,14 +99,15 @@ pub struct Hydrologypoint {
     pub momentum: Vec2,
     pub amount: f32,
     dead_end: bool,
-    pub visit: bool,
+    pub visit: u8,
     pub source: usize,
+    ctrlpoint: bool,
     next: usize,
     prev: usize,
 }
 
 pub struct RiverPath {
-    paths: BTreeMap<usize, CubicHermite<Vec2>>,
+    paths: BTreeMap<usize, CubicHermite<Vec3>>,
 }
 
 pub struct Continent {
@@ -114,7 +115,7 @@ pub struct Continent {
     hydrology: Vec<Hydrologypoint>,
     height_noise: NoiseT,
     offset: Vec2,
-    river_paths: Vec<RiverPath>,
+    pub river_paths: Vec<CubicHermite<Vec3>>,
 }
 
 impl Continent {
@@ -253,7 +254,7 @@ impl Continent {
                     self.hydrology[id].momentum = grad;
                     self.hydrology[id].amount = 1.; //FIXME
                 } else {
-                    self.hydrology[target_id].visit = true;
+                    self.hydrology[target_id].visit = 1;
                     self.hydrology[id].momentum = grad;
                     self.hydrology[id].amount = 1.; //FIXME
                 }
@@ -265,7 +266,7 @@ impl Continent {
             .hydrology
             .iter()
             .enumerate()
-            .filter_map(|(i, h)| if h.visit == false { Some(i) } else { None })
+            .filter_map(|(i, h)| if h.visit == 0 { Some(i) } else { None })
             .collect();
 
         let mut estuaries = Vec::<(u32, u32)>::default();
@@ -310,19 +311,99 @@ impl Continent {
         let estuary_groups = self.make_estuary_groups(estuaries);
 
         self.fork_estuaries(estuary_groups, &mut forks);
+        self.make_curves(&chosen_sources);
     }
 
-    fn fork_estuaries(&mut self, estuary_groups: BTreeMap<(u32, u32), Vec<(u32, u32)>>, forks: &mut BTreeMap<usize, usize>) {
-        const RIVER_UNMERGE_RADIUS: f32 = 25.;
-
-        let dist = rand_distr::Normal::new(0., 0.1).unwrap();
+    fn make_curves(&mut self, sources: &Vec<usize>) {
+        const TILES_PER_POINT: u32 = 30;
+        let dist = rand_distr::Normal::new(0., 0.5).unwrap();
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
+
+        for s in sources {
+            let mut points = Vec::new();
+            let mut velocities = Vec::new();
+
+            let origin = self.hydrology[*s].source;
+            let mut tile = *s;
+            let mut prev = self.to_world(*s) - Vec3::new(1., 0., 1.);
+
+            while self.hydrology[tile].source == origin
+                && tile != 0
+                && self.hydrology[tile].visit != 2
+            {
+                let grad = Vec2::from_angle(dist.sample(&mut rng))
+                    .rotate(self.hydrology[tile].momentum.normalize())
+                    * TILES_PER_POINT as f32
+                    / 2.;
+                let point = self.to_world(tile);
+                let h_grad = (point.y - prev.y) / (point.distance(prev));
+                points.push(point);
+                velocities.push(Vec3::new(grad.x, h_grad, grad.y));
+                self.hydrology[tile].ctrlpoint = true;
+
+                prev = point;
+                //go further in the curve
+                for _ in 0..TILES_PER_POINT {
+                    //Stop if going out of bounds, or if looping on the same source
+                    if self.hydrology[tile].next == 0
+                        || (self.hydrology[tile].visit == 2
+                            && self.hydrology[tile].source == origin)
+                    {
+                        self.hydrology[tile].visit = 2;
+                        break;
+                    }
+                    // Add visiting if on original river
+                    if self.hydrology[tile].source == origin {
+                        self.hydrology[tile].visit = 2;
+                    }
+                    //Stop on ctrl point of other river curve
+                    if self.hydrology[tile].ctrlpoint && self.hydrology[tile].source != origin {
+                        break;
+                    }
+                    tile = self.hydrology[tile].next;
+                }
+            }
+
+            while self.hydrology[tile].source != origin && self.hydrology[tile].next != 0 && !self.hydrology[tile].ctrlpoint  {
+                tile = self.hydrology[tile].next;
+            }
+            //put last point in curve for nice merging
+            self.hydrology[tile].ctrlpoint = true;
+            let grad = self.hydrology[tile].momentum.normalize() * 10.;
+            let point = self.to_world(tile);
+            let h_grad = (point.y - prev.y) / (point.distance(prev));
+            points.push(point);
+            velocities.push(Vec3::new(grad.x, h_grad, grad.y));
+
+            if points.len() >= 3 && self.hydrology[tile].amount >= 80. {
+                self.river_paths.push(CubicHermite::new(points, velocities));
+            }
+        }
+    }
+
+    fn to_world(&self, p: usize) -> Vec3 {
+        let (x, y) = Self::h2xy(p);
+        let (x, y) = (
+            x as i32 - Self::CONTINENT_SIZE as i32 / 2,
+            y as i32 - Self::CONTINENT_SIZE as i32 / 2,
+        );
+        let (x, y) = (x as f32 * GRID_SQUARE_SIZE, y as f32 * GRID_SQUARE_SIZE);
+        let h = self.points[p].height * Chunk::SCALE_Y + 1.;
+        Vec3::new(x, h, y)
+    }
+
+    fn fork_estuaries(
+        &mut self,
+        estuary_groups: BTreeMap<(u32, u32), Vec<(u32, u32)>>,
+        forks: &mut BTreeMap<usize, usize>,
+    ) {
+        const RIVER_UNMERGE_RADIUS: f32 = 25.;
 
         for (main, others) in estuary_groups {
             let mut main = Self::xy2h(main.0, main.1);
             let mut prev;
             let mut prevs: Vec<usize> = others.into_iter().map(|(x, y)| Self::xy2h(x, y)).collect();
-            loop {
+            while main != 0 && !prevs.is_empty() {
                 prev = main;
                 for _ in 0..5 {
                     main = self.hydrology[main].prev;
@@ -333,7 +414,7 @@ impl Continent {
                 }
                 let mut to_remove = Vec::new();
                 for (i, v) in prevs.iter_mut().enumerate() {
-                    //go back on the main river, then go back on the others to match 
+                    //go back on the main river, then go back on the others to match
                     let main_pos = Self::h2xy(main);
                     let mut pos = Self::h2xy(*v);
                     let mut prev_dist = 1000.;
@@ -358,7 +439,6 @@ impl Continent {
                 for i in to_remove.into_iter().rev() {
                     prevs.swap_remove(i);
                 }
-
             }
         }
     }
@@ -394,11 +474,30 @@ impl Continent {
             });
 
             if let Some(min) = min.cloned() {
+                let repr = Self::xy2h(min.x, min.y);
+                let current = Self::xy2h(x, y);
                 // add to closest group
-                estuary_groups
-                    .get_mut(&(min.x, min.y))
-                    .unwrap()
-                    .push((x, y));
+                if self.hydrology[repr].amount >= self.hydrology[current].amount {
+                    estuary_groups
+                        .get_mut(&(min.x, min.y))
+                        .unwrap()
+                        .push((x, y));
+                }
+                //if current is larger, make it repr
+                else {
+                    tree.remove_one(min.clone());
+                    let val = U32Value {
+                        x,
+                        y,
+                        he: ESTUARY_MERGE_RADIUS,
+                        ..Default::default()
+                    };
+                    tree.insert(val);
+
+                    let mut old = estuary_groups.remove(&(min.x, min.y)).unwrap();
+                    old.push((min.x, min.y));
+                    estuary_groups.insert((x, y), old);
+                }
             } else {
                 //create new group
                 estuary_groups.insert((x, y), vec![]);
@@ -419,19 +518,24 @@ impl Continent {
         let mut next = self.hydrology[node].next;
         while next != 0
             && self.hydrology[next].source == self.hydrology[node].source
-            && self.hydrology[node].visit == false
+            && self.hydrology[node].visit != 3
         {
             self.hydrology[next].amount += self.hydrology[node].amount;
-            self.hydrology[node].visit = true;
+            self.hydrology[node].visit = 3;
             node = next;
             next = self.hydrology[node].next;
         }
     }
 
-    fn go_through_path(&mut self, s: usize, estuaries: &mut Vec<(u32, u32)>, forks: &mut BTreeMap<usize, usize>) {
+    fn go_through_path(
+        &mut self,
+        s: usize,
+        estuaries: &mut Vec<(u32, u32)>,
+        forks: &mut BTreeMap<usize, usize>,
+    ) {
         let mut node: usize = s;
         self.hydrology[node].source = s;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64 + s as u64);
         let dist = rand_distr::Normal::new(0., PI / 20.).unwrap();
         let mut skew = 0.;
         let (mut x, mut y) = (0, 0);
@@ -453,7 +557,6 @@ impl Continent {
                 * self.hydrology[node].momentum.norm();
             let next: usize = Self::xy2h(target.0, target.1);
 
-            self.hydrology[node].visit = false;
             self.hydrology[node].next = next;
             self.hydrology[next].prev = node;
 
@@ -465,8 +568,9 @@ impl Continent {
 
             let slowdown = 0.9;
 
-            self.hydrology[next].momentum = Vec2::from_angle(skew.clamp(-0.1, 0.1))
-                .rotate(self.hydrology[next].momentum + corrected * slowdown);
+            self.hydrology[next].momentum = Vec2::from_angle(skew.clamp(-0.2, 0.2))
+                .rotate(self.hydrology[next].momentum + corrected * slowdown)
+                + self.hydrology[node].momentum.normalize() / 15.;
 
             node = next;
         }

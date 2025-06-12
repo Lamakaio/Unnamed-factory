@@ -46,7 +46,7 @@ impl Plugin for MapPlugin {
             entities: KdTree::default(),
             continent: Continent::new_and_generate(self.seed as u32),
         });
-        app.add_systems(Update, spawn_chunk);
+        app.add_systems(Update, (spawn_chunk, display_rivers));
         app.add_systems(Startup, setup_map);
     }
 }
@@ -229,7 +229,7 @@ impl Chunk {
             for z in 0..Self::CHUNK_SIZE {
                 let pos = (x + world_pos.x as u32, z + world_pos.y as u32);
                 let sample: f32 = continent[pos].height;
-                self.grid.push(1.3 * sample - 0.35);
+                self.grid.push(sample);
                 self.hydro.push(continent.get_hydro(pos.0, pos.1).amount);
             }
         }
@@ -255,7 +255,7 @@ impl Chunk {
             let x = GRID_SQUARE_SIZE * (i as u32 / Self::CHUNK_SIZE) as f32;
             let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
             vertex_positions.push([x + offset, sq * Self::SCALE_Y, z + offset]);
-            let uv_x = *sq;
+            let uv_x = 1.3 * (*sq) - 0.35;
             let uv_y = self.hydro[i];
             //print!("{uv_y} ");
             uv.push([uv_x, uv_y]);
@@ -444,6 +444,14 @@ impl Map {
         } else {
             Chunk::SCALE_Y
         }
+    }
+}
+
+pub fn display_rivers(map: ResMut<Map>, mut gizmos: Gizmos) {
+    for c in &map.continent.river_paths {
+        let c = c.to_curve().unwrap();
+        let len = c.segments().len();
+        gizmos.curve_3d(c, (0..=200).map(|i| i as f32 / 200. * len as f32), bevy::color::palettes::css::RED);
     }
 }
 
