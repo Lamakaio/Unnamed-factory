@@ -453,6 +453,20 @@ pub fn display_rivers(map: ResMut<Map>, mut gizmos: Gizmos) {
         let len = c.segments().len();
         gizmos.curve_3d(c, (0..=200).map(|i| i as f32 / 200. * len as f32), bevy::color::palettes::css::RED);
     }
+    for p in &map.continent.lakes {
+        let pos = map.continent.to_world(*p);
+        gizmos.sphere(Isometry3d::from_translation(pos), 3., bevy::color::palettes::css::PINK);
+    }
+
+    for p in map.continent.to_lake.keys() {
+        let pos = map.continent.to_world(*p);
+        gizmos.sphere(Isometry3d::from_translation(pos), 1., bevy::color::palettes::css::ORANGE);
+    }
+
+    for p in map.continent.to_sea.keys() {
+        let pos = map.continent.to_world(*p);
+        gizmos.sphere(Isometry3d::from_translation(pos), 1., bevy::color::palettes::css::BLUE);
+    }
 }
 
 pub fn setup_map(

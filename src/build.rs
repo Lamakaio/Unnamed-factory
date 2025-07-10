@@ -464,14 +464,13 @@ fn select_world_part(
                     let hydro = map
                         .continent
                         .get_hydro(continent_index.0, continent_index.1);
-                    // println!(
-                    //     "{} {} - {} {}",
-                    //     pos., height.grad, hydro.amount, hydro.momentum
-                    // );
-                    println!(
-                        "{} {} - {} {} - {}",
-                        height.height, height.grad, hydro.amount, hydro.momentum, hydro.visit
-                    );
+                    let es = map.continent.to_sea.get(&hydro.source).or(map.continent.to_lake.get(&hydro.source)).map(|i| Continent::h2xy(*i));
+                    if keyboard_input.just_pressed(MouseButton::Left) {
+                        println!(
+                            "{:?} {} {} - {:?} ---- {:?}",
+                            continent_index, height.height, height.grad, hydro, es
+                        );
+                    }
                 }
             }
         }
