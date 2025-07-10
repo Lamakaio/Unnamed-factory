@@ -1,24 +1,20 @@
 use bevy::{
     log::{info, warn},
-    math::{
-        Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace, cubic_splines::CubicHermite,
-        curve::Interval,
-    },
+    math::{NormedVectorSpace, Vec2, Vec3, cubic_splines::CubicHermite},
 };
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{
-    Noise, Sampleable, SampleableFor,
+    Noise, SampleableFor,
     cell_noise::MixCellValuesForDomain,
-    cells::{OrthoGrid, SimplexGrid, Voronoi, WithGradient},
+    cells::{OrthoGrid, SimplexGrid, WithGradient},
     curves::Smoothstep,
-    math_noise::{NoiseCurve, Pow2, Pow4, PowF},
+    math_noise::{Pow2, PowF},
     misc_noise::{Constant, WithGradientOf},
     prelude::{
-        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, ManhattanLength, Masked,
-        MixCellGradients, Normed, NormedByDerivative, Octave, Offset, PeakDerivativeContribution,
-        PerCellPointDistances, Persistence, QuickGradients, SNormToUNorm, Scaled, SimplecticBlend,
-        WorleyLeastDistance,
+        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, Masked, MixCellGradients,
+        Normed, NormedByDerivative, Octave, Offset, PeakDerivativeContribution, Persistence,
+        QuickGradients, SNormToUNorm, Scaled, SimplecticBlend,
     },
     rng::{NoiseRng, SNorm},
 };
@@ -26,24 +22,11 @@ use rand::SeedableRng;
 use rand_distr::Distribution;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    default,
     f32::consts::PI,
     ops::{Index, IndexMut},
 };
 
 use crate::map::{Chunk, GRID_SQUARE_SIZE};
-
-#[derive(Default, Clone)]
-struct TestCurve;
-impl Curve<f32> for TestCurve {
-    fn domain(&self) -> Interval {
-        Interval::new(0., 1.).unwrap()
-    }
-
-    fn sample_unchecked(&self, t: f32) -> f32 {
-        1. - (t + 0.33)
-    }
-}
 
 type NoiseT = Noise<(
     LayeredNoise<
@@ -108,10 +91,6 @@ pub struct Hydrologypoint {
     ctrlpoint: bool,
     next: usize,
     prev: usize,
-}
-
-pub struct RiverPath {
-    paths: BTreeMap<usize, CubicHermite<Vec3>>,
 }
 
 pub struct Continent {

@@ -16,7 +16,7 @@ use bevy::{
         bloom::Bloom,
         experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
         prepass::DepthPrepass,
-    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, math::NormedVectorSpace, pbr::{
+    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, pbr::{
         light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere
     }, prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin}, render::{camera::Exposure, primitives::Aabb}
 };

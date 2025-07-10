@@ -1,18 +1,12 @@
-use std::{process::Child, sync::Arc};
-
 use bevy::{
-    asset::{LoadedFolder, RenderAssetUsages},
-    math::{NormedVectorSpace, VectorSpace},
+    asset::LoadedFolder,
+    math::NormedVectorSpace,
     pbr::{
         decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
         wireframe::{Wireframe, WireframeColor},
     },
     prelude::*,
-    render::{
-        primitives::Aabb,
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
-    },
-    text::cosmic_text::ttf_parser::ankr::Point,
+    render::primitives::Aabb,
 };
 
 use crate::{
@@ -455,7 +449,7 @@ fn select_world_part(
                         % ((Continent::CONTINENT_SIZE - Chunk::CHUNK_SIZE) as i64);
                     let in_chunk_pos = (pos
                         - map.chunks.get(chunk_position).unwrap().get_world_pos())
-                            / GRID_SQUARE_SIZE;
+                        / GRID_SQUARE_SIZE;
                     let continent_index = (
                         in_chunk_pos.x.floor() as u32 + continent_pos_offset.x as u32,
                         in_chunk_pos.z.floor() as u32 + continent_pos_offset.y as u32,
@@ -464,7 +458,12 @@ fn select_world_part(
                     let hydro = map
                         .continent
                         .get_hydro(continent_index.0, continent_index.1);
-                    let es = map.continent.to_sea.get(&hydro.source).or(map.continent.to_lake.get(&hydro.source)).map(|i| Continent::h2xy(*i));
+                    let es = map
+                        .continent
+                        .to_sea
+                        .get(&hydro.source)
+                        .or(map.continent.to_lake.get(&hydro.source))
+                        .map(|i| Continent::h2xy(*i));
                     if keyboard_input.just_pressed(MouseButton::Left) {
                         println!(
                             "{:?} {} {} - {:?} ---- {:?}",
