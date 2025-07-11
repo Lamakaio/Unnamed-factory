@@ -96,7 +96,7 @@ fn fragment(
         texture = snow_color;
     }
 
-    texture = mix(texture, ocean_color, mix_hydro);
+    // texture = mix(texture, ocean_color, mix_hydro);
 
     texture = apply_decal_base_color(
         in.world_position.xyz,

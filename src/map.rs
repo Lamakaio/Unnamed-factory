@@ -410,15 +410,15 @@ impl Map {
 }
 
 pub fn display_rivers(map: ResMut<Map>, mut gizmos: Gizmos) {
-    for c in &map.continent.river_paths {
-        let c = c.to_curve().unwrap();
-        let len = c.segments().len();
-        gizmos.curve_3d(
-            c,
-            (0..=200).map(|i| i as f32 / 200. * len as f32),
-            bevy::color::palettes::css::RED,
-        );
-    }
+    // for c in &map.continent.river_paths {
+    //     let c = c.0.to_curve().unwrap();
+    //     let len = c.segments().len();
+    //     gizmos.curve_3d(
+    //         c,
+    //         (0..=200).map(|i| i as f32 / 200. * len as f32),
+    //         bevy::color::palettes::css::RED,
+    //     );
+    // }
     for p in &map.continent.lakes {
         let pos = map.continent.to_world(*p);
         gizmos.sphere(

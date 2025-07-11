@@ -1,6 +1,10 @@
 use bevy::{
     log::{info, warn},
-    math::{NormedVectorSpace, Vec2, Vec3, cubic_splines::CubicHermite},
+    math::{
+        NormedVectorSpace, Vec2, Vec3,
+        cubic_splines::{CubicGenerator, CubicHermite, LinearSpline},
+    },
+    platform::collections::{HashMap, HashSet},
 };
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};
@@ -19,7 +23,7 @@ use noiz::{
     rng::{NoiseRng, SNorm},
 };
 use rand::SeedableRng;
-use rand_distr::Distribution;
+use rand_distr::{Distribution, num_traits::Float};
 use std::{
     collections::{BTreeMap, BTreeSet},
     f32::consts::PI,
@@ -98,7 +102,7 @@ pub struct Continent {
     hydrology: Vec<Hydrologypoint>,
     height_noise: NoiseT,
     offset: Vec2,
-    pub river_paths: Vec<CubicHermite<Vec3>>,
+    pub river_paths: Vec<(CubicHermite<Vec3>, LinearSpline<Vec2>)>,
     pub lakes: Vec<usize>,
     pub to_sea: BTreeMap<usize, usize>,
     pub to_lake: BTreeMap<usize, usize>,
@@ -108,6 +112,7 @@ impl Continent {
     pub const CONTINENT_SIZE_PO2: u8 = 11;
     pub const CONTINENT_SIZE: u32 = 1 << Self::CONTINENT_SIZE_PO2;
     pub const OCEAN_HEIGHT_LIMIT: f32 = 0.534;
+    const TILES_PER_POINT: u32 = 30;
 
     pub fn new_and_generate(seed: u32) -> Self {
         let mut new = Self {
@@ -325,19 +330,49 @@ impl Continent {
         self.fork_estuaries(estuary_groups, &mut forks, &mut chosen_sources);
         info!("Generate river curves");
         self.make_curves(&chosen_sources);
+
+        info!("Patching map for rivers");
+        self.patch_for_rivers();
         info!("Hydrology done.");
 
         self.to_sea = to_sea;
         self.to_lake = to_lake;
     }
 
+    fn patch_for_rivers(&mut self) {
+        const RANGE_DIVIDE: f32 = 20.;
+        let mut in_river = HashSet::new();
+        for (pos, a_m) in &self.river_paths {
+            let cpos = pos.to_curve().unwrap();
+            let cam = a_m.to_curve().unwrap();
+            let nsamples = 2 * Self::TILES_PER_POINT as usize * cpos.segments().len();
+            for (pos, a_m) in cpos
+                .iter_positions(nsamples)
+                .zip(cam.iter_positions(nsamples))
+            {
+                let amount = a_m.x;
+                let momentum = a_m.y;
+                let (x, y) = self.from_world(&pos);
+                let maxrange = (amount.sqrt() / RANGE_DIVIDE).round();
+                for xx in (x - maxrange as u32)..=(x + maxrange as u32) {
+                    for yy in (y - maxrange as u32)..=(y + maxrange as u32) {
+                        in_river
+                            .insert(Self::xy2h(xx, yy));
+                    }
+                }
+            }
+        }
+        for h in in_river {
+            self.points[h].height -= 0.001;
+        }
+    }
     fn make_curves(&mut self, sources: &BTreeSet<usize>) {
-        const TILES_PER_POINT: u32 = 30;
         let dist = rand_distr::Normal::new(0., 0.5).unwrap();
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
 
         for s in sources {
             let mut points = Vec::new();
+            let mut amounts_momentums: Vec<Vec2> = Vec::new();
             let mut velocities = Vec::new();
 
             let origin = *s;
@@ -351,17 +386,18 @@ impl Continent {
             {
                 let grad = Vec2::from_angle(dist.sample(&mut rng))
                     .rotate(self.hydrology[tile].momentum.normalize())
-                    * TILES_PER_POINT as f32
+                    * Self::TILES_PER_POINT as f32
                     / 2.;
                 let point = self.to_world(tile);
                 let h_grad = (point.y - prev.y) / (point.distance(prev));
                 points.push(point);
+                amounts_momentums.push((maxamount, self.hydrology[tile].momentum.norm()).into());
                 velocities.push(Vec3::new(grad.x, h_grad, grad.y));
                 self.hydrology[tile].ctrlpoint = true;
 
                 prev = point;
                 //go further in the curve
-                for _ in 0..TILES_PER_POINT {
+                for _ in 0..Self::TILES_PER_POINT {
                     //Stop if going out of bounds, or if looping on the same source
                     if self.hydrology[tile].next == 0
                         || (self.hydrology[tile].visit == 2
@@ -399,14 +435,19 @@ impl Continent {
             let point = self.to_world(tile);
             let h_grad = (point.y - prev.y) / (point.distance(prev));
             points.push(point);
+            amounts_momentums.push((maxamount, self.hydrology[tile].momentum.norm()).into());
             velocities.push(Vec3::new(grad.x, h_grad, grad.y));
 
             while points.len() < 3 {
                 points.push(points.last().unwrap().clone());
                 velocities.push(Vec3::ZERO);
+                amounts_momentums.push((maxamount, self.hydrology[tile].momentum.norm()).into());
             }
             if maxamount >= 80. {
-                self.river_paths.push(CubicHermite::new(points, velocities));
+                self.river_paths.push((
+                    CubicHermite::new(points, velocities),
+                    LinearSpline::new(amounts_momentums),
+                ));
             }
         }
     }
@@ -420,6 +461,18 @@ impl Continent {
         let (x, y) = (x as f32 * GRID_SQUARE_SIZE, y as f32 * GRID_SQUARE_SIZE);
         let h = self.points[p].height * Chunk::SCALE_Y + 1.;
         Vec3::new(x, h, y)
+    }
+
+    pub fn from_world(&self, p: &Vec3) -> (u32, u32) {
+        let (x, y) = (p.x / GRID_SQUARE_SIZE, p.z / GRID_SQUARE_SIZE);
+        let (x, y) = (
+            x.round() as i32 + Self::CONTINENT_SIZE as i32 / 2,
+            y.round() as i32 + Self::CONTINENT_SIZE as i32 / 2,
+        );
+        (
+            x.clamp(0, Self::CONTINENT_SIZE as i32 - 1) as u32,
+            y.clamp(0, Self::CONTINENT_SIZE as i32 - 1) as u32,
+        )
     }
 
     fn fork_estuaries(
