@@ -1,10 +1,7 @@
 use bevy::{
-    log::{info, warn},
-    math::{
-        NormedVectorSpace, Vec2, Vec3,
-        cubic_splines::{CubicGenerator, CubicHermite, LinearSpline},
-    },
-    platform::collections::{HashMap, HashSet},
+    asset::{Assets, Handle, RenderAssetUsages}, ecs::system::ResMut, log::{info, warn}, math::{
+        cubic_splines::{CubicGenerator, CubicHermite, LinearSpline}, curve::CurveExt, NormedVectorSpace, Vec2, Vec3, Vec3Swizzles
+    }, platform::collections::{HashMap, HashSet}, render::{mesh::{Indices, Mesh, MeshAabb, PrimitiveTopology}, primitives::Aabb}
 };
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};
@@ -97,12 +94,41 @@ pub struct Hydrologypoint {
     prev: usize,
 }
 
+pub enum MeshOrHandle {
+    Mesh(Box<Mesh>), 
+    Handle(Handle<Mesh>)
+}
+impl MeshOrHandle {
+    pub fn new(m: Mesh) -> Self {
+        Self::Mesh(Box::new(m))
+    }
+
+    pub fn get_handle(&mut self, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
+        match self {
+            MeshOrHandle::Mesh(_) => {
+                let mut old = Self::Handle(Handle::default());
+                std::mem::swap(self, &mut old);
+                if let MeshOrHandle::Mesh(mesh) = old {
+                    let handle = meshes.add(*mesh);
+                    *self = Self::Handle(handle.clone());
+                    handle
+                }
+                else {
+                    todo!()
+                }
+            },
+            MeshOrHandle::Handle(handle) => handle.clone(),
+        }
+    }
+}
+
 pub struct Continent {
     points: Vec<TerrainPoint>,
     hydrology: Vec<Hydrologypoint>,
     height_noise: NoiseT,
     offset: Vec2,
     pub river_paths: Vec<(CubicHermite<Vec3>, LinearSpline<Vec2>)>,
+    pub river_meshes: Vec<(Vec3, Option<Aabb>, MeshOrHandle)>,
     pub lakes: Vec<usize>,
     pub to_sea: BTreeMap<usize, usize>,
     pub to_lake: BTreeMap<usize, usize>,
@@ -127,6 +153,7 @@ impl Continent {
             height_noise: Self::get_noise(seed),
             offset: Vec2::new(0., 0.),
             river_paths: Vec::default(),
+            river_meshes: Vec::default(),
             lakes: Vec::default(),
             to_sea: BTreeMap::default(),
             to_lake: BTreeMap::default(),
@@ -223,7 +250,7 @@ impl Continent {
         }
         self.make_hydrology_map();
     }
-
+    //handle everything river and lake related
     fn make_hydrology_map(&mut self) {
         const HEIGHT_THRESHOLD: f32 = 0.05;
         //get sources
@@ -271,7 +298,7 @@ impl Continent {
 
         info!("Chosing relevant sources");
         let mut estuaries = Vec::<(u32, u32)>::default();
-        const SOURCE_CULLING_RADIUS: u32 = 30;
+        const SOURCE_CULLING_RADIUS: u32 = 60;
         const SEP_SLOPE_ANGLE: f32 = PI / 2.;
         let mut chosen_sources: BTreeSet<usize> = BTreeSet::default();
         let mut tree: KdTree<U32Value, 10> = KdTree::default();
@@ -339,33 +366,109 @@ impl Continent {
         self.to_lake = to_lake;
     }
 
+    //patch the terrain and create meshes for rivers
     fn patch_for_rivers(&mut self) {
+
         const RANGE_DIVIDE: f32 = 20.;
         let mut in_river = HashSet::new();
         for (pos, a_m) in &self.river_paths {
             let cpos = pos.to_curve().unwrap();
             let cam = a_m.to_curve().unwrap();
             let nsamples = 2 * Self::TILES_PER_POINT as usize * cpos.segments().len();
-            for (pos, a_m) in cpos
+            let mut vertices = Vec::new();
+            let mut uvs = Vec::new();
+            let mut indices = Vec::new();
+            let mut spos = cpos.position(cpos.segments().len() as f32);
+            if (spos - cpos.position(0.)).norm() < 0.01 || spos.is_nan() {
+                continue
+            }
+            spos.y *= Chunk::SCALE_Y;
+            for ((pos, vel), a_m) in cpos
                 .iter_positions(nsamples)
+                .zip(cpos.iter_velocities(nsamples))
                 .zip(cam.iter_positions(nsamples))
             {
                 let amount = a_m.x;
-                let momentum = a_m.y;
+                let momentum = (a_m.y * vel.normalize()).xz();
                 let (x, y) = self.from_world(&pos);
-                let maxrange = (amount.sqrt() / RANGE_DIVIDE).round();
-                for xx in (x - maxrange as u32)..=(x + maxrange as u32) {
-                    for yy in (y - maxrange as u32)..=(y + maxrange as u32) {
-                        in_river
-                            .insert(Self::xy2h(xx, yy));
+                let maxrange = amount.sqrt() / RANGE_DIVIDE;
+                //make mesh
+                let i = vertices.len() as u16;
+                //Create vertices
+                let mut v1 = pos + vel.cross(Vec3::Y).normalize() * maxrange;
+                v1.y = self.get_height(v1);
+                v1 -= spos; //put origin at source
+
+                let mut v2 = pos - vel.cross(Vec3::Y).normalize() * maxrange;
+                v2.y = self.get_height(v2);
+                v2 -= spos; //put origin at source
+
+                vertices.push(v1.to_array());
+                vertices.push(v2.to_array());
+
+                //water velocities
+                uvs.push(momentum.to_array());
+                uvs.push(momentum.to_array());
+
+                if i != 0 {
+                    //first triangle
+                    indices.push(i - 1);
+                    indices.push(i - 2);
+                    indices.push(i);
+                    //second triangle
+                    indices.push(i);
+                    indices.push(i + 1);
+                    indices.push(i - 1);
+                }
+                
+
+                // -2  -1
+                // 0   1
+                //patch terrain
+                let maxrange = maxrange.round();
+                for xx in (x - maxrange as u32)..=(x + maxrange.ceil() as u32) {
+                    for yy in (y - maxrange as u32)..=(y + maxrange.ceil() as u32) {
+                        in_river.insert(Self::xy2h(xx, yy));
                     }
                 }
             }
+
+            let mut mesh =     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+                .with_inserted_indices(Indices::U16(indices));
+            mesh.compute_smooth_normals();
+            let aabb = mesh.compute_aabb();
+
+            self.river_meshes.push((spos, aabb, MeshOrHandle::new(mesh)));
+
         }
         for h in in_river {
             self.points[h].height -= 0.001;
         }
     }
+    //gets the height of a point in the continent
+    pub fn get_height(&self, pos: Vec3) -> f32 {
+        let (x, y) = (pos.x / GRID_SQUARE_SIZE, pos.z / GRID_SQUARE_SIZE);
+        let xy: Vec2 = (
+            x + Self::CONTINENT_SIZE as f32 / 2.,
+            y + Self::CONTINENT_SIZE as f32 / 2.,
+        )
+            .into();
+
+        let floor = xy.floor();
+        let fract = xy.fract();
+        let h00 = self.points[Self::xy2h(floor.x as u32, floor.y as u32)].height;
+        let h01 = self.points[Self::xy2h(floor.x as u32, floor.y as u32 + 1)].height;
+        let h10 = self.points[Self::xy2h(floor.x as u32 + 1, floor.y as u32)].height;
+        let h11 = self.points[Self::xy2h(floor.x as u32 + 1, floor.y as u32 + 1)].height;
+        (h00 * (1. - fract.x) * (1. - fract.y)
+            + h01 * (1. - fract.x) * fract.y
+            + h10 * fract.x * (1. - fract.y)
+            + h11 * fract.x * fract.y)
+            * Chunk::SCALE_Y
+    }
+    //Creates the curves for rivers
     fn make_curves(&mut self, sources: &BTreeSet<usize>) {
         let dist = rand_distr::Normal::new(0., 0.5).unwrap();
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
@@ -451,7 +554,7 @@ impl Continent {
             }
         }
     }
-
+    //Convert an index to world point
     pub fn to_world(&self, p: usize) -> Vec3 {
         let (x, y) = Self::h2xy(p);
         let (x, y) = (
@@ -462,7 +565,7 @@ impl Continent {
         let h = self.points[p].height * Chunk::SCALE_Y + 1.;
         Vec3::new(x, h, y)
     }
-
+    //Convert world point to index
     pub fn from_world(&self, p: &Vec3) -> (u32, u32) {
         let (x, y) = (p.x / GRID_SQUARE_SIZE, p.z / GRID_SQUARE_SIZE);
         let (x, y) = (
@@ -474,7 +577,7 @@ impl Continent {
             y.clamp(0, Self::CONTINENT_SIZE as i32 - 1) as u32,
         )
     }
-
+    //Unmerge rivers that got merge when the diverge enough, adding a new fork
     fn fork_estuaries(
         &mut self,
         estuary_groups: BTreeMap<(u32, u32), Vec<(u32, u32)>>,
@@ -534,6 +637,7 @@ impl Continent {
         }
     }
 
+    //util functions to convert between xy and grid index
     pub fn xy2h(x: u32, y: u32) -> usize {
         fast_hilbert::xy2h(x, y, Self::CONTINENT_SIZE_PO2) as usize
     }
@@ -542,6 +646,7 @@ impl Continent {
         fast_hilbert::h2xy(h as u64, Self::CONTINENT_SIZE_PO2)
     }
 
+    //Group rivers when their estuaries or forks are close enough
     fn make_estuary_groups(
         &mut self,
         estuaries: Vec<(u32, u32)>,
@@ -611,6 +716,7 @@ impl Continent {
         estuary_groups
     }
 
+    //Propagate the amount of water in rivers
     fn propagate_amount(&mut self, s: usize) {
         let mut node = s;
         let mut next = s;
@@ -625,6 +731,7 @@ impl Continent {
         }
     }
 
+    //Make river path by following the gradient (with momentum)
     fn go_through_path(
         &mut self,
         s: usize,

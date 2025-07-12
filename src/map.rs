@@ -460,6 +460,28 @@ pub fn setup_map(
         base_color: bevy::color::palettes::css::LIGHT_BLUE.into(),
         ..default()
     });
+
+    let rivermat = mats.add(StandardMaterial {
+        base_color: bevy::color::palettes::css::ROYAL_BLUE.into(),
+        ..default()
+    });
+
+    for (origin, aabb, rmesh) in &mut map.continent.river_meshes {
+        if let Some(aabb) = aabb {
+            let he = aabb.half_extents;
+            if he.x <= 0. || he.y <= 0. || he.z <= 0. || he.is_nan() {
+                dbg!(&aabb);
+                dbg!(&origin);
+            }
+            commands.spawn((
+                Name::new("River"),
+                Mesh3d(rmesh.get_handle(&mut *meshes)),
+                MeshMaterial3d(rivermat.clone()),
+                Transform::from_translation(origin.clone()),
+                aabb.clone()
+            ));
+        }
+    }
     commands.spawn((
         Name::new("bottom plane"),
         Mesh3d(
