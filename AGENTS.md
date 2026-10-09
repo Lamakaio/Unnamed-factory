@@ -53,25 +53,28 @@ Design source: [`notes.md`](notes.md) (preliminary, in English with some typos).
 
 ---
 
-## 2. Repo map (as of commit `25565f6` + uncommitted river work)
+## 2. Repo map (as of the `bevy-upgrade` branch, 2026-10-09)
 
 ```
-Cargo.toml              bevy 0.20 (+ bevy_remote, trace_tracy, file_watcher), ron, serde, anyhow,
+Cargo.toml              bevy 0.20 (+ bevy_remote, trace_tracy, file_watcher, pan_orbit_camera,
+                        bevy_dev_tools, render_dev_tools), ron 0.12, serde, anyhow,
                         kdtree-collisions (user's own git crate, no bevy dep), noiz 0.5 (noise,
-                        [patch]ed to a local Bevy 0.20 port — see §4.1),
-                        rand/rand_distr, rhai 1.21, foldhash, fast_hilbert
+                        [patch]ed to a local Bevy 0.20 port — see §4.1), rand 0.10, rand_distr 0.6,
+                        rhai 1.26, foldhash 0.2, fast_hilbert 2.1. All versions pinned.
 rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers nightly.
 .cargo/config.toml      (git-ignored, local) rust-lld linker + `jobs = -4` to keep the PC usable while compiling
-.cargo/config.toml      rust-lld linker on windows-msvc
 notes.md                game design notes (see §1)
-src/main.rs        290  App setup, CameraSettings, orbit camera, sun, debug toggles (F2 AABB, F3 wireframe, F rotate sun)
-src/map.rs         563  MapPlugin, Map resource, Chunk (heightmap → mesh), terrain patch ops, chunk streaming, river gizmos
-src/mapgen.rs      732  Continent: 2048² noiz heightmap (Hilbert-curve indexed), hydrology, river path tracing → CubicHermite curves, lakes
-src/build.rs       520  BuildPlugin: Building asset type, placement following cursor, snapping (S), terraform tools, selection/highlight
-src/build_asset.rs  87  BuildAssetPlugin: RON `.bconf` loader → Building asset
-src/shaders.rs     231  ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>, RON `.mapmat` loader
-src/sim.rs         277  SimPlugin: Rhai script asset + loader, runs init/run scripts, auto-generated stat UI (Tab)
-src/ui.rs          205  UiPlugin: building list (scrollable), buttons that start a placement
+src/main.rs             only assembles plugins (DefaultPlugins, MeshPickingPlugin, feature plugins)
+src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
+src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
+src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
+src/map.rs              MapPlugin, Map resource, Chunk (heightmap → mesh), terrain patch ops, chunk streaming
+src/mapgen.rs           Continent: 2048² noiz heightmap (Hilbert-curve indexed), hydrology, rivers, lakes (user WIP)
+src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
+src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
+src/shaders.rs          ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>, RON `.mapmat` loader
+src/sim.rs              SimPlugin: Rhai script asset + loader, init/tick (FixedUpdate), stats screen (BSN)
+src/ui.rs               UiPlugin: build menu (BSN), `label()` text scene, PointerOverUi system param
 assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
 assets/materials/map.mapmat terrain material params (pbr + biome colors as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
@@ -79,23 +82,36 @@ assets/shaders/map_material.wesl   terrain fragment shader (WESL) (biome colouri
 assets/shaders/build_material.wgsl  unused (BuildMaterial is commented out)
 ```
 
-### Controls (current)
-Right mouse drag: orbit · Arrows: pan · Wheel: zoom · Left click: place / select ·
-Ctrl+click: keep placing · S: cycle snapping · F: rotate sun · F2: AABBs · F3: wireframe ·
-Tab: sim stats screen · Enter (held): run sim ticks · R: reset sim.
+### Controls
+Camera: right drag orbit · middle drag pan · wheel zoom (all anchored on the point under the
+cursor; nothing starts over UI) · arrows pan.
+Building: build menu button starts placing · left click places (drag resizes zones) ·
+Ctrl+click places and keeps placing · S cycles snapping · hover highlights a placed building ·
+click picks it up again.
+Sim: Enter (held) runs ticks at 20 Hz · R re-runs init · Tab stats screen.
+Debug: F rotate sun · F2 AABBs · F3 wireframe · F4 rivers/lakes · click terrain logs its data.
+(Bevy's `RenderDebugOverlay` defaults to F1/F2 but is disabled by default.)
 
 ---
 
 ## 3. Current architecture (how it actually works)
 
-### 3.1 App (`main.rs`)
-`DefaultPlugins` with nearest-neighbour images, plus `WireframePlugin`, TAA, `RemotePlugin`
-and `RemoteHttpPlugin` (for the BRP inspector). Feature plugins are `BuildPlugin`, `UiPlugin`,
-`MapPlugin { seed }`, `ShadersPlugin`, `BuildAssetPlugin` and `SimPlugin`. The camera
-(HDR, Bloom, TAA, `Atmosphere::EARTH`, `DistanceFog`, `AmbientLight` on the camera) and the
-sun are spawned in `setup_3d`. The orbit camera is hand-rolled: a `CameraTarget` component
-holds the focus point and distance, and the target is clamped to terrain height through
-`Map::get_height`.
+### 3.1 App (`main.rs`, `camera.rs`, `environment.rs`, `dev_tools.rs`)
+`main.rs` adds `DefaultPlugins` (nearest-neighbour images, includes TAA and UI widgets),
+`MeshPickingPlugin`, and one plugin per module.
+- **Camera** (`camera.rs`): HDR, Bloom, TAA, `AtmosphereSettings`, `DistanceFog` and an
+  `AmbientLight` override on the camera. It uses Bevy 0.20's `PanOrbitCamera`, which ships
+  without input bindings. The input mapping is adapted from Bevy's
+  `pan_orbit_camera_custom_input_plugin` example and runs in `PreUpdate`, before
+  `SyncCameraPosition`. The camera controller applies deltas to `Transform`, so
+  `keyboard_pan` (Update) and `keep_above_terrain` (PostUpdate) edit the transform directly.
+  The camera spawns looking at the terrain at the origin.
+- **Environment**: sun `DirectionalLight` (`lux::RAW_SUNLIGHT`) and an `Atmosphere` entity
+  (`ScatteringMedium::default()`).
+- **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`, gizmo
+  config groups `AabbGizmos` / `RiverGizmos` toggled with run conditions. Setting
+  `UF_SCREENSHOT=<png>` (and optionally `UF_SCREENSHOT_DELAY`, default 20 s) saves a
+  screenshot and exits. See §6.
 
 ### 3.2 Terrain (`mapgen.rs`, `map.rs`)
 - **`Continent`** is generated **synchronously inside `MapPlugin::build`**, which blocks
@@ -112,9 +128,9 @@ holds the focus point and distance, and the target is clamped to terrain height 
     markers, and `next == 0` / `tile == 0` stand for "none". This is fragile; prefer
     enums and `Option`.
 - **`Chunk`**: 256×256 heights copied from the continent. `WORLD_CHUNK_SIZE = 255 *
-  GRID_SQUARE_SIZE`, `SCALE_Y = 100`. Chunk → continent coordinates use
-  `(chunk_pos * 255 + 1024).abs() % (2048-256)`, which tiles or mirrors the world past
-  the continent. The same formula is duplicated in `build.rs::select_world_part`.
+  GRID_SQUARE_SIZE`, `SCALE_Y = 100`. `Chunk::continent_offset` maps chunk to continent
+  coordinates with `(chunk_pos * 255 + 1024).abs() % (2048-256)`, which tiles or mirrors the
+  world past the continent. `Map::continent_index(chunk, world_pos)` builds on it.
   - Mesh: a `TriangleList` with `u16` indices (65,536 vertices is exactly the u16 limit).
     UV0 is **abused as data**: `u` = height-derived biome coordinate and `v` = river flag
     (100 or 1). The terrain shader reads these values.
@@ -124,76 +140,82 @@ holds the focus point and distance, and the target is clamped to terrain height 
 - **`Map` resource**: material handle, `HashMap<I64Vec2, Chunk>`, a `KdTree<BuildingInstance>`
   of placed buildings, and the `Continent`. `get_chunk_mut` lazily creates chunks using
   hashbrown's `raw_entry_mut`. That still compiles, but the API is deprecated or removed
-  in newer hashbrown; switch to `entry` (borrow `&self.continent` separately). `get_height` does bilinear sampling and returns `SCALE_Y` when the chunk is
-  not loaded.
-- `spawn_chunk` spawns a 4×4 block of chunks around the camera target when `CameraTarget`
-  changes. Chunks are never despawned.
-- `display_rivers` draws debug gizmos for the river curves and lakes every frame.
+  in newer hashbrown; switch to `entry` (borrow `&self.continent` separately). `get_height`
+  does bilinear sampling and returns `SCALE_Y` when the chunk is not loaded.
+- `spawn_chunk` spawns a 4×4 block of chunks around the camera when its `Transform` changes.
+  Chunks are never despawned.
+- River and lake debug gizmos live in `dev_tools.rs` (F4).
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
 - `Building` is an `Asset` loaded from `.bconf` RON. All of them are loaded at startup
-  through `load_folder("buildings")`. `BuildingType` is `Single { model: Handle<Scene>,
-  scale }`, `Zone { color }` or `Tool { op: PatchOp, color }`. `size` and `script` exist
-  but are barely used.
-- **Placement flow is an implicit state machine keyed on component presence:**
-  1. The UI button spawns `(BuildId(handle), Name)`.
-  2. `spawn_build_from_part_id` picks up `BuildId` entities `Without<Transform>` and inserts
-     the visuals (`WorldAssetRoot`, a wireframe cuboid for zones, or a `ForwardDecal` for tools)
-     plus `SelectedBuild`.
-  3. `compute_aabb` merges the child AABBs into the root once the scene has spawned.
-  4. `build_follow_cursor` raycasts (`MeshRayCast`, filtered to `IsGround` chunks), snaps,
-     and handles drag-to-resize for zones.
-  5. `place_build` on mouse release flattens the terrain under the building (or applies the
-     tool op), inserts a `BuildingInstance` and registers it in `Map.entities`.
-- **Selection:** `select_world_part` raycasts, walks `ChildOf` up to the root, highlights
-  with a `Highlighted` marker, and observers move a single `SpotLight` ("highlight light")
-  onto the target. It also `println!`s terrain and hydrology debug info for ground clicks.
+  through `load_folder("buildings")`, and the `Buildings` resource keeps the folder handle.
+  `BuildingType` is `Single { model: Handle<WorldAsset>, scale }`, `Zone { color }` or
+  `Tool { op: PatchOp, color }`. `size` and `script` exist but are unused.
+- **Placement:**
+  1. The build menu triggers `StartPlacement(handle)`. Its observer despawns whatever is
+     being placed and spawns the new building with `SelectedBuild` and its visuals:
+     `WorldAssetRoot` for models, a wireframe cuboid for zones, or a `ForwardDecal` for tools.
+  2. For models, an entity observer on `WorldInstanceReady` computes the root `Aabb` once,
+     from the mesh assets of the spawned glTF hierarchy.
+  3. `build_follow_cursor` raycasts (`MeshRayCast`, filtered to `IsGround` chunks), snaps
+     (`Snapping::spacing`), and records a left press made while placing and not over UI
+     (`PlacementPress`). Zones resize while dragging from that press.
+  4. `place_build` (chained after it) runs on release, **only if `PlacementPress` was set**.
+     That way the menu click doesn't place anything. It flattens the terrain (or applies the
+     tool, then despawns it), inserts a `BuildingInstance`, and registers it in
+     `Map.entities`. With Ctrl held it triggers `StartPlacement` again.
+  5. While placing, the `InfiniteGrid` build grid is shown at cursor height + 0.5 with the
+     snapping spacing. It is a flat plane, so it disappears where the terrain rises above
+     it. Drawing grid lines in the terrain shader would be the proper solution.
+- **Selection** uses global picking observers: `PointerEnter` / `PointerLeave` on a
+  `BuildingInstance` root toggle `Highlighted`, and a primary `PointerClick` picks the
+  building up (removes `BuildingInstance`, inserts `SelectedBuild`). Nothing reacts while
+  placing. `On<Add/Remove<Highlighted>>` observers move a single `SpotLight` onto the
+  highlighted building.
 
 ### 3.4 Rendering (`shaders.rs`, `assets/shaders`)
 `MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>`. Five colours are bound as
 separate uniforms (bindings 100–104) and loaded from `.mapmat` RON, which also carries
-`StandardMaterialParams` (hex colours through `deser_color`). The shader is WGSL with
-naga_oil `#import` / `#ifdef` and `@group(2)`, so it **must be ported to WESL for Bevy 0.20**
-(§4).
+`StandardMaterialParams` (hex colours through `deser_color`). The shader is WESL
+(`map_material.wesl`).
 
 ### 3.5 Simulation (`sim.rs`, `assets/scripts`)
-- `RhaiScript` asset + loader. `Sim` resource holds the `rhai::Engine`, a `Scope` with one
-  `data` map, and handles to `init.rhai` / `run.rhai`.
+- `RhaiScript` asset + loader. The `Sim` resource (`FromWorld` loads the scripts) holds the
+  `rhai::Engine`, a `Scope` with one `data` map, and the numeric values keyed by path hash.
 - `init.rhai` builds the nested `data` map: `job.<name>.{population, productivity, demand, ...}`,
-  `stat.*`, `resource.*`, `aggregates.*`, `building.*`, `aims.*`.
+  `stat.*`, `resource.*`, `aggregates.*`, `building.*`, `aims.*`. `init_sim` runs it as soon
+  as it is loaded, and again on R. It then triggers `SimInitialized`.
 - `run.rhai` is one tick of the sim (food, materials, migration, natality, per-job growth,
-  demand, aggregates). **Ticks run every frame while Enter is held**; there is no fixed
-  timestep.
-- The UI is auto-generated from the map structure (`spawn_on`). Values are refreshed by
-  hashing the key path (`foldhash`) into `Sim.values`.
+  demand, aggregates). `tick_sim` runs in **`FixedUpdate` at 20 Hz while Enter is held**.
+  Script errors are logged, not propagated, since system errors panic in 0.20.
+- The stats screen is built from the structure of `data` as nested `bsn!` scenes
+  (`Box<dyn SceneBox>` for the recursion) by the `SimInitialized` observer. `update_stats`
+  runs only when `Sim` changed.
 - Building scripts (`Building.script`) are loaded but never executed.
 
 ### 3.6 UI (`ui.rs`)
-A left-side scrolling list of buildings, populated on `AssetEvent::LoadedWithDependencies`.
-Buttons are `ui_widgets::Button` with an `Activate` observer (`start_placement`) and a
-`Hovered`/`Pressed` styling system (ported from `Interaction` in the 0.20 upgrade). The font is
-stored in a `FontHandle` resource.
+The build menu is a `bsn!` scene, spawned once all buildings are loaded, with buttons sorted by
+name. Buttons are `ui_widgets::Button` with an `on(start_placement)` observer on `Activate`,
+styled from `Hovered` / `Pressed`. `label(text)` is the shared text scene; the font is an
+asset path in the scene (`UI_FONT`). Scenes with assets are spawned with
+`queue_spawn_scene`, which waits for the font. `PointerOverUi` (a `SystemParam`) tells camera
+and placement code when the cursor is over UI. Mouse-wheel scrolling of `Overflow::scroll_y`
+nodes is still manual (`update_scroll_position`), as in Bevy's own example.
 
 ### 3.7 Known issues / smells (fix opportunistically)
-- On 0.20, `cargo check` passes with only unused-import / dead-code warnings (dead
-  `TestCurve`, unread `ToolInstance` fields).
+- `cargo check` passes with only dead-code warnings: unused data fields, `TestCurve`
+  experiments, `ChunkMarker`.
 - `trace_tracy` is always on: it logs that memory grows until a Tracy client connects, plus a
   harmless `SymInitialize FAILED` line. Consider moving it behind an opt-in cargo feature.
+- `bevy_dev_tools` is enabled for the in-game build grid. Bevy says not to ship dev tools;
+  revisit (e.g. draw the grid in the terrain shader) before any release.
 - `assets/shaders/build_material.wgsl` is unused (BuildMaterial is commented out) and was never
   ported to WESL. Port it or delete it if BuildMaterial comes back.
-- Many unused imports, commented-out code blocks and `pub mod` in a binary crate. Prefer
-  private `mod` and `pub(crate)`.
-- `unwrap()` / `FIXME` in systems (e.g. `buildings.get(&p.0).unwrap()`). Return `Result`
-  instead (§5.6).
-- `select_world_part` and `display_rivers` take `ResMut<Map>` where `Res` would do. This
-  serializes the schedule needlessly.
-- Debug output uses `println!` / `dbg!`; use `debug!` / `info!` (bevy `log`).
+- `mapgen.rs` prints `dbg!(h_grad)` during generation (user WIP).
 - Continent generation blocks app startup. Move it to `AsyncComputeTaskPool` behind a
   loading state.
-- Sim speed is tied to frame rate. Use `FixedUpdate` with a configurable rate.
 - No tests. `mapgen` and the sim math are pure and easy to unit-test.
 - `Cargo.lock` is git-ignored. For a binary crate it **should be committed**.
-- Dependencies use `"*"` versions. Pin them.
 
 ---
 
@@ -210,8 +232,8 @@ commit each step.
 
 Gotchas hit during the upgrade:
 - The git-ignored local `Cargo.lock` held stale versions that broke builds (`tracy-client-sys`,
-  `gpu-allocator`). Fix them with a targeted `cargo update -p <crate>`. Avoid a blind
-  `cargo update`, since `rand = "*"` would jump to 0.10.
+  `gpu-allocator`). Fix them with a targeted `cargo update -p <crate>`. Since then all
+  dependencies are pinned and bumped (rand 0.10, rhai 1.26, ...).
 - 0.17: `TemporalAntiAliasPlugin` is in `DefaultPlugins`, so adding it again panics.
 - 0.18: the WGSL `apply_decal_base_color` was removed (clustered decals now use `apply_decals`).
 - 0.20: system errors panic through the fallback handler, so `query.single()?` on a
@@ -454,6 +476,15 @@ of the migration work.
 4. Keep `notes.md` as the design source of truth. If an implementation decision diverges from
    it, say so to the user.
 5. Commit in small steps (one migration step or one refactor per commit).
+6. **Verify visually without a human:** run
+   `UF_SCREENSHOT=<scratch>/shot.png cargo run` (optionally `UF_SCREENSHOT_DELAY=<secs>`). The
+   game saves a screenshot and exits, and you can then view the PNG. Also scan the log for
+   `ERROR` / `panicked`. To exercise interactive paths (placement, sim screen), apply a
+   *temporary* patch (e.g. a fake cursor at window centre, or trigger `StartPlacement` from
+   `auto_screenshot`), take the screenshot, then revert the patch. Never move the user's real
+   mouse.
+7. Full rebuilds take 10–20 minutes. Don't run a blind `cargo update`; prefer targeted
+   `cargo update -p <crate>`.
 
 ## 7. References
 - Bevy news / release notes: https://bevy.org/news/
