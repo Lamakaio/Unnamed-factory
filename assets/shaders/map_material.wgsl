@@ -27,11 +27,11 @@
 #import bevy_pbr::decal::forward::get_forward_decal_info
 #endif
 
-@group(2) @binding(100) var<uniform> grass_color: vec4<f32>;
-@group(2) @binding(101) var<uniform> ocean_color: vec4<f32>;
-@group(2) @binding(102) var<uniform> mountain_color: vec4<f32>;
-@group(2) @binding(103) var<uniform> snow_color: vec4<f32>;
-@group(2) @binding(104) var<uniform> sand_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> grass_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> ocean_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> mountain_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> snow_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> sand_color: vec4<f32>;
 
 @fragment
 fn fragment(

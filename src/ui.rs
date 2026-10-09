@@ -94,7 +94,7 @@ pub struct FontHandle(pub Handle<Font>);
 
 pub fn update_building_list(
     mut commands: Commands,
-    mut events: EventReader<AssetEvent<Building>>,
+    mut events: MessageReader<AssetEvent<Building>>,
     mut buildings: ResMut<Assets<Building>>,
     list_query: Single<Entity, With<BuildingList>>,
     font: Res<FontHandle>,
@@ -144,7 +144,7 @@ pub fn update_building_list(
 
 /// Updates the scroll position of scrollable nodes in response to mouse input
 pub fn update_scroll_position(
-    mut mouse_wheel_events: EventReader<MouseWheel>,
+    mut mouse_wheel_events: MessageReader<MouseWheel>,
     hover_map: Res<HoverMap>,
     mut scrolled_node_query: Query<&mut ScrollPosition>,
     //keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -161,7 +161,7 @@ pub fn update_scroll_position(
         for (_pointer, pointer_map) in hover_map.iter() {
             for (entity, _hit) in pointer_map.iter() {
                 if let Ok(mut scroll_position) = scrolled_node_query.get_mut(*entity) {
-                    scroll_position.offset_y -= dy;
+                    scroll_position.y -= dy;
                 }
             }
         }
@@ -189,16 +189,16 @@ fn button_system(
         match *interaction {
             Interaction::Pressed => {
                 *color = PRESSED_BUTTON.into();
-                border_color.0 = RED.into();
+                *border_color = BorderColor::all(RED);
                 commands.spawn((part_button.part_id.clone(), Name::new("building")));
             }
             Interaction::Hovered => {
                 *color = HOVERED_BUTTON.into();
-                border_color.0 = Color::WHITE;
+                *border_color = BorderColor::all(Color::WHITE);
             }
             Interaction::None => {
                 *color = NORMAL_BUTTON.into();
-                border_color.0 = Color::BLACK;
+                *border_color = BorderColor::all(Color::BLACK);
             }
         }
     }

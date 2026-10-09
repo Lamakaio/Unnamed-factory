@@ -3,6 +3,7 @@ use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
     render::render_resource::*,
+    shader::ShaderRef,
 };
 use serde::{Deserialize, Deserializer};
 
@@ -19,7 +20,7 @@ impl Plugin for ShadersPlugin {
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wgsl";
 
-#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Component, Reflect)]
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct TerrainShader {
     #[uniform(100)]
@@ -46,7 +47,7 @@ impl MaterialExtension for TerrainShader {
 
 // const BUILD_SHADER_ASSET_PATH: &str = "shaders/extended_material.wgsl";
 
-// #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Component, Reflect)]
+// #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 // #[reflect(PartialEq)]
 // pub struct BuildShader {
 //     //The color modification when a part is selected

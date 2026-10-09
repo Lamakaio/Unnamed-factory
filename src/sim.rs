@@ -151,7 +151,7 @@ fn spawn_on(
                         flex_wrap: FlexWrap::Wrap,
                         ..default()
                     },
-                    BorderColor(Color::hsv(rand::random_range(0.0..360.0), 0.3, 0.8)),
+                    BorderColor::all(Color::hsv(rand::random_range(0.0..360.0), 0.3, 0.8)),
                 ))
                 .with_children(|parent| {
                     parent.spawn((

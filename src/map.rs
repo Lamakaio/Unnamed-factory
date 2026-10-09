@@ -1,15 +1,9 @@
-use std::sync::Arc;
-
 use bevy::{
     asset::RenderAssetUsages,
-    math::{I64Vec2, IVec2, NormedVectorSpace},
-    pbr::{
-        ExtendedMaterial, OpaqueRendererMethod,
-        wireframe::{Wireframe, WireframeColor},
-    },
+    math::{I64Vec2, NormedVectorSpace},
+    mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
     platform::collections::HashMap,
     prelude::*,
-    render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
 };
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{

@@ -26,7 +26,7 @@
 #import bevy_pbr::decal::forward::get_forward_decal_info
 #endif
 
-@group(2) @binding(101) var highlight_color: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var highlight_color: vec4<f32>;
 
 @fragment
 fn fragment(

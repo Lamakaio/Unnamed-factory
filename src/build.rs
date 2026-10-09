@@ -1,18 +1,12 @@
-use std::{process::Child, sync::Arc};
-
 use bevy::{
-    asset::{LoadedFolder, RenderAssetUsages},
-    math::{NormedVectorSpace, VectorSpace},
+    asset::LoadedFolder,
+    camera::primitives::Aabb,
+    math::NormedVectorSpace,
     pbr::{
         decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt},
         wireframe::{Wireframe, WireframeColor},
     },
     prelude::*,
-    render::{
-        primitives::Aabb,
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
-    },
-    text::cosmic_text::ttf_parser::ankr::Point,
 };
 
 use crate::{
@@ -482,14 +476,14 @@ fn select_world_part(
 pub struct HighlightLight;
 
 fn on_add_highlight(
-    trigger: Trigger<OnAdd, Highlighted>,
+    add: On<Add, Highlighted>,
     part_query: Query<(&Transform, &Aabb), With<BuildId>>,
     mut light_query: Single<
         (&mut Transform, &mut SpotLight),
         (With<HighlightLight>, Without<BuildId>),
     >,
 ) {
-    if let Ok((part, aabb)) = part_query.get(trigger.target()) {
+    if let Ok((part, aabb)) = part_query.get(add.entity) {
         let (light_transform, light) = &mut *light_query;
         let pos = part.translation + Vec3::from(aabb.center) * part.scale;
         const LIGHT_DISTANCE: f32 = 10.;
@@ -501,7 +495,7 @@ fn on_add_highlight(
 }
 
 fn on_remove_highlight(
-    _trigger: Trigger<OnRemove, Highlighted>,
+    _remove: On<Remove, Highlighted>,
     mut light_query: Single<&mut Transform, With<HighlightLight>>,
 ) {
     light_query.translation = Vec3::new(0., -10., 0.);

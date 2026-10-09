@@ -1,3 +1,6 @@
+// The `AsBindGroup` derive exceeds the default trait-solver depth on recent nightlies.
+#![recursion_limit = "256"]
+
 pub mod build;
 pub mod build_asset;
 pub mod map;
@@ -12,13 +15,20 @@ use std::{
 };
 
 use bevy::{
-    color::palettes, core_pipeline::{
-        bloom::Bloom,
-        experimental::taa::{TemporalAntiAliasPlugin, TemporalAntiAliasing},
-        prepass::DepthPrepass,
-    }, input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll}, math::NormedVectorSpace, pbr::{
-        light_consts::lux, wireframe::{WireframeConfig, WireframePlugin}, Atmosphere
-    }, prelude::*, remote::{http::RemoteHttpPlugin, RemotePlugin}, render::{camera::Exposure, primitives::Aabb}
+    anti_alias::taa::TemporalAntiAliasing,
+    camera::{Exposure, primitives::Aabb},
+    color::palettes,
+    core_pipeline::prepass::DepthPrepass,
+    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    light::light_consts::lux,
+    pbr::{
+        Atmosphere,
+        wireframe::{WireframeConfig, WireframePlugin},
+    },
+    post_process::bloom::Bloom,
+    prelude::*,
+    remote::{RemotePlugin, http::RemoteHttpPlugin},
+    render::view::Hdr,
 };
 use build::BuildPlugin;
 use build_asset::BuildAssetPlugin;
@@ -35,7 +45,6 @@ fn main() {
     app.add_plugins((
         DefaultPlugins.set(ImagePlugin::default_nearest()),
         WireframePlugin::default(),
-        TemporalAntiAliasPlugin,
     ))
     .add_plugins(RemotePlugin::default())
     .add_plugins(RemoteHttpPlugin::default())
@@ -129,10 +138,7 @@ fn setup_3d(
             fov: PI / 3.,
             ..Default::default()
         }),
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        Hdr,
         Bloom::NATURAL,
         Exposure::SUNLIGHT,
         AmbientLight {
