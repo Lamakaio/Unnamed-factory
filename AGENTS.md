@@ -279,7 +279,7 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   decimation, ~50–400 triangles) for the bulk, Quaternius textured hero trees (≤ 4000
   triangles, rare), boulders, bushes and ground cover. Species and per-biome probabilities
   are the `SPECIES`, `large_rules` and `ground_rules` tables.
-  Placement grids: 0.6 (large) and 0.28 (ground cover). Background tasks (placement, near
+  Placement grids: 0.45 (large) and 0.28 (ground cover). Background tasks (placement, near
   meshes): 4 at once.
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)

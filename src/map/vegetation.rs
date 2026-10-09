@@ -61,7 +61,7 @@ const SPAWNS_PER_FRAME: usize = 600;
 const NEAR_DISTANCE: f32 = 90.;
 const LEVEL_MARGIN: f32 = 15.;
 /// Placement grid cells (world units) for large things and for ground cover.
-const LARGE_CELL: f32 = 0.6;
+const LARGE_CELL: f32 = 0.45;
 const GROUND_CELL: f32 = 0.28;
 /// Background tasks at once (placement, near meshes).
 const MAX_TASKS: usize = 4;
