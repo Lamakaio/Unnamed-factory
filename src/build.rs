@@ -22,6 +22,7 @@ use bevy::{
 };
 
 use crate::{
+    AppState,
     map::{BuildingInstance, Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
     sim::RhaiScript,
     ui::PointerOverUi,
@@ -35,12 +36,17 @@ impl Plugin for BuildPlugin {
             .init_resource::<Snapping>()
             .init_resource::<PlacementPress>()
             .init_resource::<PlacementCursor>()
-            .add_systems(Startup, (load_buildings, spawn_highlight_light, spawn_build_grid))
+            .add_systems(
+                Startup,
+                (load_buildings, spawn_highlight_light, spawn_build_grid),
+            )
             .add_systems(
                 Update,
                 (
                     cycle_snapping.run_if(input_just_pressed(KeyCode::KeyS)),
-                    (build_follow_cursor, place_build).chain(),
+                    (build_follow_cursor, place_build)
+                        .chain()
+                        .run_if(in_state(AppState::InGame)),
                     update_build_grid,
                 ),
             )
@@ -65,9 +71,17 @@ pub struct Building {
 /// Split between zoning and individual buildings (and maybe more things in the future, e.g. roads)
 #[derive(Debug)]
 pub enum BuildingType {
-    Zone { color: Color },
-    Single { model: Handle<WorldAsset>, scale: f32 },
-    Tool { op: PatchOp, color: Color },
+    Zone {
+        color: Color,
+    },
+    Single {
+        model: Handle<WorldAsset>,
+        scale: f32,
+    },
+    Tool {
+        op: PatchOp,
+        color: Color,
+    },
 }
 
 /// Start placing a building: spawns it under the cursor, replacing any building being placed.
@@ -450,10 +464,7 @@ fn place_build(
 
 /// Show the grid while placing, at the cursor height and matching the snapping.
 fn update_build_grid(
-    grid: Single<
-        (&mut Transform, &mut Visibility, &mut InfiniteGridSettings),
-        With<BuildGrid>,
-    >,
+    grid: Single<(&mut Transform, &mut Visibility, &mut InfiniteGridSettings), With<BuildGrid>>,
     cursor: Res<PlacementCursor>,
     snapping: Res<Snapping>,
 ) {
@@ -506,13 +517,13 @@ fn pick_up_on_click(
     mut commands: Commands,
     buildings: Query<&BuildingInstance>,
     placing: Query<(), With<SelectedBuild>>,
-    mut map: ResMut<Map>,
+    map: Option<ResMut<Map>>,
 ) {
     let target = click.event_target();
     if click.button != PointerButton::Primary || !placing.is_empty() {
         return;
     }
-    let Ok(instance) = buildings.get(target) else {
+    let (Ok(instance), Some(mut map)) = (buildings.get(target), map) else {
         return;
     };
     map.entities.remove_one(instance.clone());
@@ -534,9 +545,8 @@ fn on_add_highlight(
     let pos = building.translation + Vec3::from(aabb.center) * building.scale;
     light_transform.translation = pos + Vec3::Y * HIGHLIGHT_LIGHT_DISTANCE;
     light_transform.look_at(pos, Vec3::Y);
-    light.outer_angle = ((Vec3::from(aabb.half_extents) * building.scale).norm()
-        / HIGHLIGHT_LIGHT_DISTANCE)
-        .atan();
+    light.outer_angle =
+        ((Vec3::from(aabb.half_extents) * building.scale).norm() / HIGHLIGHT_LIGHT_DISTANCE).atan();
 }
 
 fn on_remove_highlight(

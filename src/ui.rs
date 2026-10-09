@@ -15,20 +15,24 @@ use bevy::{
     ui_widgets::{Activate, Button},
 };
 
-use crate::build::{Building, Buildings, StartPlacement};
+use crate::{
+    AppState,
+    build::{Building, Buildings, StartPlacement},
+};
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                spawn_build_menu.run_if(buildings_loaded),
-                update_scroll_position,
-                update_button_appearance,
-            ),
-        );
+        app.add_systems(OnEnter(AppState::Loading), spawn_loading_text)
+            .add_systems(
+                Update,
+                (
+                    spawn_build_menu.run_if(buildings_loaded),
+                    update_scroll_position,
+                    update_button_appearance,
+                ),
+            );
     }
 }
 
@@ -46,6 +50,22 @@ const PANEL_BACKGROUND: Color = Color::srgb(0.10, 0.10, 0.10);
 /// A build menu button, starting the placement of its building.
 #[derive(Component, FromTemplate)]
 struct PartButton(Handle<Building>);
+
+/// Centered text shown while the world is generated.
+fn spawn_loading_text(mut commands: Commands) {
+    commands
+        .queue_spawn_scene(bsn! {
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+            }
+            Children [ @label("Generating world...") ]
+        })
+        .insert(DespawnOnExit(AppState::Loading));
+}
 
 /// Run condition: every building definition in the `buildings` folder is loaded.
 fn buildings_loaded(folder: Res<Buildings>, asset_server: Res<AssetServer>) -> bool {
@@ -150,7 +170,12 @@ fn start_placement(activate: On<Activate>, buttons: Query<&PartButton>, mut comm
 /// Restyle part buttons according to their hovered / pressed state.
 fn update_button_appearance(
     mut buttons: Query<
-        (&Hovered, Has<Pressed>, &mut BackgroundColor, &mut BorderColor),
+        (
+            &Hovered,
+            Has<Pressed>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
         With<PartButton>,
     >,
 ) {

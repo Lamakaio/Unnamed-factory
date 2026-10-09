@@ -19,6 +19,7 @@ use bevy::{
 };
 
 use crate::{
+    AppState,
     build::BuildId,
     map::{IsGround, Map},
 };
@@ -43,7 +44,9 @@ impl Plugin for DevToolsPlugin {
                 toggle_wireframe.run_if(input_just_pressed(KeyCode::F3)),
                 toggle_gizmos::<RiverGizmos>.run_if(input_just_pressed(KeyCode::F4)),
                 draw_building_aabbs.run_if(gizmos_enabled::<AabbGizmos>),
-                draw_rivers.run_if(gizmos_enabled::<RiverGizmos>),
+                draw_rivers
+                    .run_if(gizmos_enabled::<RiverGizmos>)
+                    .run_if(in_state(AppState::InGame)),
             ),
         );
         if let Ok(path) = std::env::var("UF_SCREENSHOT") {
@@ -106,11 +109,7 @@ fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) -> Result {
     for river in &map.continent.river_paths {
         let curve = river.position.to_curve()?;
         let len = curve.segments().len();
-        gizmos.curve_3d(
-            curve,
-            (0..=200).map(|i| i as f32 / 200. * len as f32),
-            RED,
-        );
+        gizmos.curve_3d(curve, (0..=200).map(|i| i as f32 / 200. * len as f32), RED);
     }
 
     for lake in &map.continent.lakes {
@@ -121,8 +120,8 @@ fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) -> Result {
 }
 
 /// Log the generation data of the terrain point under a click.
-fn log_terrain_on_click(click: On<PointerClick>, chunks: Query<&IsGround>, map: Res<Map>) {
-    let Ok(IsGround(chunk_position)) = chunks.get(click.event_target()) else {
+fn log_terrain_on_click(click: On<PointerClick>, chunks: Query<&IsGround>, map: Option<Res<Map>>) {
+    let (Ok(IsGround(chunk_position)), Some(map)) = (chunks.get(click.event_target()), map) else {
         return;
     };
     let Some(index) = click

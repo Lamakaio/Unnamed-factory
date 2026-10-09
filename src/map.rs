@@ -4,11 +4,14 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
     platform::collections::HashMap,
     prelude::*,
+    tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
+use std::time::Instant;
 use kdtree_collisions::{KdTree, KdValue};
 use serde::Deserialize;
 
 use crate::{
+    AppState,
     build::Building,
     mapgen::Continent,
     shaders::MapMaterial,
@@ -18,15 +21,58 @@ pub struct MapPlugin {
 }
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Map {
-            material: Handle::default(),
-            chunks: HashMap::new(),
-            entities: KdTree::default(),
-            continent: Continent::new_and_generate(self.seed as u32),
-        });
-        app.add_systems(Update, spawn_chunk);
-        app.add_systems(Startup, setup_map);
+        let seed = self.seed as u32;
+        app.add_systems(
+            Startup,
+            (spawn_bottom_plane, move |commands: Commands| {
+                start_generation(commands, seed)
+            }),
+        )
+        .add_systems(
+            Update,
+            (
+                finish_generation.run_if(in_state(AppState::Loading)),
+                spawn_chunk.run_if(in_state(AppState::InGame)),
+            ),
+        );
     }
+}
+
+const MAP_MATERIAL: &str = "materials/map.mapmat";
+
+/// The continent being generated on the [`AsyncComputeTaskPool`].
+#[derive(Resource)]
+struct ContinentGeneration(Task<Continent>);
+
+/// Generate the continent in the background, so the window stays responsive.
+fn start_generation(mut commands: Commands, seed: u32) {
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let start = Instant::now();
+        let continent = Continent::new_and_generate(seed);
+        info!("World generated in {:.1?}", start.elapsed());
+        continent
+    });
+    commands.insert_resource(ContinentGeneration(task));
+}
+
+/// Once the continent is ready, insert the [`Map`] and enter [`AppState::InGame`].
+fn finish_generation(
+    mut commands: Commands,
+    mut generation: ResMut<ContinentGeneration>,
+    asset_server: Res<AssetServer>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let Some(continent) = check_ready(&mut generation.0) else {
+        return;
+    };
+    commands.remove_resource::<ContinentGeneration>();
+    commands.insert_resource(Map {
+        material: asset_server.load(MAP_MATERIAL),
+        chunks: HashMap::new(),
+        entities: KdTree::default(),
+        continent,
+    });
+    next_state.set(AppState::InGame);
 }
 
 pub const GRID_SQUARE_SIZE: f32 = 0.25;
@@ -442,15 +488,11 @@ impl Map {
     }
 }
 
-pub fn setup_map(
+fn spawn_bottom_plane(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut map: ResMut<Map>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
-    let mat = asset_server.load("materials/map.mapmat");
-    map.material = mat.clone();
     let bottomplanemat = mats.add(StandardMaterial {
         base_color: bevy::color::palettes::css::LIGHT_BLUE.into(),
         ..default()

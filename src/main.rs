@@ -25,6 +25,7 @@ fn main() {
             DefaultPlugins.set(ImagePlugin::default_nearest()),
             MeshPickingPlugin,
         ))
+        .init_state::<AppState>()
         .add_plugins((
             dev_tools::DevToolsPlugin,
             environment::EnvironmentPlugin,
@@ -37,4 +38,14 @@ fn main() {
             sim::SimPlugin,
         ))
         .run();
+}
+
+/// Top-level game state.
+#[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AppState {
+    /// The world is being generated in the background.
+    #[default]
+    Loading,
+    /// The world is ready: terrain, camera control, placement and debug tools run.
+    InGame,
 }
