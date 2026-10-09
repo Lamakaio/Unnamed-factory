@@ -51,7 +51,7 @@ impl Plugin for MapPlugin {
     }
 }
 
-pub const GRID_SQUARE_SIZE: f32 = 0.5;
+pub const GRID_SQUARE_SIZE: f32 = 0.25;
 /// An instance of a specific building at a position
 /// Might contain other instance-specific stats in the future (damage, etc)
 #[derive(PartialEq, Clone, Component)]
@@ -96,7 +96,7 @@ pub struct ChunkMarker(pub I64Vec2);
 /// A chunk, containing terrain data
 pub struct Chunk {
     grid: Vec<f32>,
-    hydro: Vec<f32>,
+    hydro: Vec<bool>,
     chunk_position: I64Vec2,
     cached_mesh: Option<Handle<Mesh>>,
     spawned: bool,
@@ -230,7 +230,7 @@ impl Chunk {
                 let pos = (x + world_pos.x as u32, z + world_pos.y as u32);
                 let sample: f32 = continent[pos].height;
                 self.grid.push(sample);
-                self.hydro.push(continent.get_hydro(pos.0, pos.1).amount);
+                self.hydro.push(continent.get_hydro(pos.0, pos.1).river);
             }
         }
     }
@@ -256,7 +256,7 @@ impl Chunk {
             let z = GRID_SQUARE_SIZE * (i as u32 % Self::CHUNK_SIZE) as f32;
             vertex_positions.push([x + offset, sq * Self::SCALE_Y, z + offset]);
             let uv_x = 1.3 * (*sq) - 0.35;
-            let uv_y = self.hydro[i];
+            let uv_y = if self.hydro[i] {100.} else {1.};
             //print!("{uv_y} ");
             uv.push([uv_x, uv_y]);
         }
@@ -449,9 +449,14 @@ impl Map {
 
 pub fn display_rivers(map: ResMut<Map>, mut gizmos: Gizmos) {
     for c in &map.continent.river_paths {
-        let c = c.to_curve().unwrap();
+        let c = c.position.to_curve().unwrap();
         let len = c.segments().len();
         gizmos.curve_3d(c, (0..=200).map(|i| i as f32 / 200. * len as f32), bevy::color::palettes::css::RED);
+    }
+
+    for l in &map.continent.lakes {
+        let pos = map.continent.to_world(*l);
+        gizmos.sphere(Isometry3d::from_translation(pos), 10., bevy::color::palettes::css::PURPLE);
     }
 }
 

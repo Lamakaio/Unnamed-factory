@@ -1,5 +1,7 @@
 use bevy::math::{
-    Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace, cubic_splines::CubicHermite, curve::Interval,
+    Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace,
+    cubic_splines::{CubicBSpline, CubicGenerator, CubicHermite, LinearSpline},
+    curve::{CurveExt, Interval},
 };
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};
@@ -104,10 +106,12 @@ pub struct Hydrologypoint {
     ctrlpoint: bool,
     next: usize,
     prev: usize,
+    pub river: bool
 }
 
 pub struct RiverPath {
-    paths: BTreeMap<usize, CubicHermite<Vec3>>,
+    pub position: CubicHermite<Vec3>,
+    pub amount: LinearSpline<f32>,
 }
 
 pub struct Continent {
@@ -115,7 +119,8 @@ pub struct Continent {
     hydrology: Vec<Hydrologypoint>,
     height_noise: NoiseT,
     offset: Vec2,
-    pub river_paths: Vec<CubicHermite<Vec3>>,
+    pub river_paths: Vec<RiverPath>,
+    pub lakes: Vec<usize>,
 }
 
 impl Continent {
@@ -135,6 +140,7 @@ impl Continent {
             height_noise: Self::get_noise(seed),
             offset: Vec2::new(0., 0.),
             river_paths: Vec::default(),
+            lakes: Vec::default(),
         };
         new.generate();
         new
@@ -223,6 +229,60 @@ impl Continent {
             })
         }
         self.make_hydrology_map();
+        self.patch_terrain_for_rivers();
+    }
+
+    const SAMPLE_PER_POINT: u32 = Self::TILES_PER_POINT * 3;
+    fn patch_terrain_for_rivers(&mut self) {
+        for curve in &self.river_paths {
+            let c_pos = curve.position.to_curve().unwrap();
+            let c_amount = curve.amount.to_curve().unwrap();
+            let samples = c_pos.segments().len() * Self::SAMPLE_PER_POINT as usize;
+            for v in c_pos
+                .sample_iter((0..=samples).map(|s| s as f32 / Self::SAMPLE_PER_POINT as f32))
+                .zip(c_amount.sample_iter(
+                    (0..=samples).map(|s| s as f32 / Self::SAMPLE_PER_POINT as f32 / 2.), //cubic b-spline has 4 points per segment (I think)
+                ))
+            {
+                if let (Some(pos), Some(amount)) = v {
+                    
+                    let radius = (amount + 50.).log10() - 50f32.log10();
+                    //dbg!(radius, amount);
+                    let i = self.from_world(pos);
+                    let (xcenter, ycenter) = Self::h2xy(i);
+
+                    let min = self.from_world(pos - radius);
+                    let max = self.from_world(pos + radius);
+                    let (xmin, ymin) = Self::h2xy(min);
+                    let (xmax, ymax) = Self::h2xy(max);
+
+                    
+                    fn mix(x: f32, y: f32, d: f32) -> f32 {
+                        let d = d.clamp(0., 1.);
+                        x * (1. - d) + y * d 
+                    }
+                    
+                    fn d(a: (u32, u32), b: (u32, u32)) -> f32 {
+                        Vec2::new(a.0 as f32, a.1 as f32).distance(Vec2::new(b.0 as f32, b.1 as f32))
+                    }
+                    let coord_radius = d((xmin, ymin), (xmax, ymax)) / 2.;
+
+                    for x in xmin..=xmax {
+                        for y in ymin..=ymax {
+                            let p = Self::xy2h(x, y);
+                            if self.hydrology[p].visit != 12 {
+                                let old = self.points[p].height;
+                                let new = pos.y / Chunk::SCALE_Y - 0.002;
+                                let new = mix(new, old, (d((x, y), (xcenter, ycenter))/(coord_radius + 1.)).powi(2));
+                                self.points[p].height = old.min(new);
+                                self.hydrology[p].river = true;
+                            }
+                            self.hydrology[p].visit = 12;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn make_hydrology_map(&mut self) {
@@ -307,43 +367,59 @@ impl Continent {
         for s in chosen_sources.iter().rev() {
             self.propagate_amount(*s);
         }
-
         let estuary_groups = self.make_estuary_groups(estuaries);
 
         self.fork_estuaries(estuary_groups, &mut forks);
         self.make_curves(&chosen_sources);
     }
-
+    const TILES_PER_POINT: u32 = 15;
     fn make_curves(&mut self, sources: &Vec<usize>) {
-        const TILES_PER_POINT: u32 = 30;
-        let dist = rand_distr::Normal::new(0., 0.5).unwrap();
+        let dist = rand_distr::Normal::<f32>::new(0., 0.2).unwrap();
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.height_noise.seed.0 as u64);
 
         for s in sources {
             let mut points = Vec::new();
             let mut velocities = Vec::new();
+            let mut amounts = Vec::new();
 
             let origin = self.hydrology[*s].source;
             let mut tile = *s;
-            let mut prev = self.to_world(*s) - Vec3::new(1., 0., 1.);
-
+            let mut prev = self.to_world(*s) - Vec3::new(1., -0.1, 1.);
+            let mut tile_per_point_dyn;
+            let mut rng_sign = -1.;
+            let mut skew = 0.;
             while self.hydrology[tile].source == origin
                 && tile != 0
                 && self.hydrology[tile].visit != 2
             {
-                let grad = Vec2::from_angle(dist.sample(&mut rng))
-                    .rotate(self.hydrology[tile].momentum.normalize())
-                    * TILES_PER_POINT as f32
-                    / 2.;
+                skew += dist.sample(&mut rng);
+                
                 let point = self.to_world(tile);
                 let h_grad = (point.y - prev.y) / (point.distance(prev));
+
+                //bigger turns if flatter land
+                if h_grad.abs() <= 0.1 {
+                    dbg!(h_grad);
+                    tile_per_point_dyn = 2*Self::TILES_PER_POINT;
+                }
+                else {
+                    tile_per_point_dyn = Self::TILES_PER_POINT;
+                }
+
+                let grad = Vec2::from_angle(skew * rng_sign)
+                    .rotate(self.hydrology[tile].momentum.normalize())
+                    * tile_per_point_dyn as f32
+                    / 2.;
+                rng_sign *= -1.;
+
                 points.push(point);
                 velocities.push(Vec3::new(grad.x, h_grad, grad.y));
+                amounts.push(self.hydrology[tile].amount);
                 self.hydrology[tile].ctrlpoint = true;
 
                 prev = point;
                 //go further in the curve
-                for _ in 0..TILES_PER_POINT {
+                for _ in 0..tile_per_point_dyn {
                     //Stop if going out of bounds, or if looping on the same source
                     if self.hydrology[tile].next == 0
                         || (self.hydrology[tile].visit == 2
@@ -364,7 +440,12 @@ impl Continent {
                 }
             }
 
-            while self.hydrology[tile].source != origin && self.hydrology[tile].next != 0 && !self.hydrology[tile].ctrlpoint  {
+            while self.hydrology[tile].source != origin
+                && self.hydrology[tile].next != 0
+                && !self.hydrology[tile].ctrlpoint
+                && self.hydrology[tile].visit != 13 as u8
+            {
+                self.hydrology[tile].visit = 13 as u8;
                 tile = self.hydrology[tile].next;
             }
             //put last point in curve for nice merging
@@ -374,22 +455,35 @@ impl Continent {
             let h_grad = (point.y - prev.y) / (point.distance(prev));
             points.push(point);
             velocities.push(Vec3::new(grad.x, h_grad, grad.y));
+            amounts.push(self.hydrology[tile].amount);
 
             if points.len() >= 3 && self.hydrology[tile].amount >= 80. {
-                self.river_paths.push(CubicHermite::new(points, velocities));
+                self.river_paths.push(RiverPath {
+                    position: CubicHermite::new(points, velocities),
+                    amount: LinearSpline { points: amounts },
+                });
             }
         }
     }
 
-    fn to_world(&self, p: usize) -> Vec3 {
+    pub fn to_world(&self, p: usize) -> Vec3 {
         let (x, y) = Self::h2xy(p);
         let (x, y) = (
             x as i32 - Self::CONTINENT_SIZE as i32 / 2,
             y as i32 - Self::CONTINENT_SIZE as i32 / 2,
         );
         let (x, y) = (x as f32 * GRID_SQUARE_SIZE, y as f32 * GRID_SQUARE_SIZE);
-        let h = self.points[p].height * Chunk::SCALE_Y + 1.;
+        let h = self.points[p].height * Chunk::SCALE_Y;
         Vec3::new(x, h, y)
+    }
+
+    fn from_world(&self, v: Vec3) -> usize {
+        let (x, y) = (v.x as f32 / GRID_SQUARE_SIZE, v.z as f32 / GRID_SQUARE_SIZE);
+        let (x, y) = (
+            x as i32 + Self::CONTINENT_SIZE as i32 / 2,
+            y as i32 + Self::CONTINENT_SIZE as i32 / 2,
+        );
+        Self::xy2h(x as u32, y as u32)
     }
 
     fn fork_estuaries(
@@ -427,6 +521,7 @@ impl Continent {
                         //Change the fork dest to the main river
                         if let Some(fork) = forks.get_mut(v) {
                             *fork = prev;
+                            self.hydrology[*fork].next = prev;
                         }
                     }
                     //split if needed
@@ -524,6 +619,15 @@ impl Continent {
             self.hydrology[node].visit = 3;
             node = next;
             next = self.hydrology[node].next;
+        }
+
+        //loop case
+        if self.points[node].height >= 0.538
+            && (self.hydrology[next].source == self.hydrology[node].source
+                || self.hydrology[next].source == 0)
+            && self.hydrology[node].amount >= 70.
+        {
+            self.lakes.push(node);
         }
     }
 
