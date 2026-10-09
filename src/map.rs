@@ -490,7 +490,10 @@ pub fn spawn_chunk(
     mut map: ResMut<Map>,
     camera: Query<&CameraTarget, (With<Camera>, Changed<CameraTarget>)>,
 ) -> Result {
-    let camera_transform = camera.single()?;
+    // Nothing to do on frames where the camera target did not move.
+    let Ok(camera_transform) = camera.single() else {
+        return Ok(());
+    };
     let camera_chunk_pos = camera_transform.pos / Chunk::WORLD_CHUNK_SIZE;
     let mat = map.material.clone();
     for (x, z) in [-2., -1., 0., 1.]

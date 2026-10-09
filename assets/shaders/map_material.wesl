@@ -1,36 +1,30 @@
 // File mostly taken from https://github.com/janhohenheim/bevy_wind_waker_shader
 // dual licensed MIT / Apache 2.0
 
-
-#import bevy_pbr::{
-    pbr_fragment::pbr_input_from_vertex_output,
+import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
-    mesh_view_bindings as view_bindings,
-}
+};
 
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::{
-    prepass_io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
-}
-#else
-#import bevy_pbr::{
+@if(PREPASS_PIPELINE)
+import bevy_pbr::{
+    prepass::io::{VertexOutput, FragmentOutput},
+    deferred::functions::deferred_output,
+};
+@else
+import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
-    pbr_functions,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
-}
-#endif
+};
 
-#ifdef FORWARD_DECAL
-#import bevy_pbr::decal::forward::get_forward_decal_info
-#endif
+@if(VISIBILITY_RANGE_DITHER)
+import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> grass_color: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> ocean_color: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> mountain_color: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var<uniform> snow_color: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> sand_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> grass_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> ocean_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<uniform> mountain_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var<uniform> snow_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var<uniform> sand_color: vec4<f32>;
 
 @fragment
 fn fragment(
@@ -39,31 +33,24 @@ fn fragment(
 ) -> FragmentOutput {
     // If we're in the crossfade section of a visibility range, conditionally
     // discard the fragment according to the visibility pattern.
-#ifdef VISIBILITY_RANGE_DITHER
-    pbr_functions::visibility_range_dither(in.position, in.visibility_range_dither);
-#endif
-
-#ifdef FORWARD_DECAL
-    let forward_decal_info = get_forward_decal_info(in);
-    in.world_position = forward_decal_info.world_position;
-    in.uv = forward_decal_info.uv;
-#endif
-
+@if(VISIBILITY_RANGE_DITHER)
+    visibility_range_dither(in.position, in.visibility_range_dither);
 
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     // alpha discard
-    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    pbr_input.material.base_color = alpha_discard(
+        pbr_input.material.flags,
+        pbr_input.material.alpha_cutoff,
+        pbr_input.material.base_color
+    );
 
-
-    
-#ifdef PREPASS_PIPELINE
-    // in deferred mode we can't modify anything after that, as lighting is run in a separate fullscreen shader.
-    let out = deferred_output(in, pbr_input);
-#else
-
-    // remove texture
     var out: FragmentOutput;
+@if(PREPASS_PIPELINE) {
+    // in deferred mode we can't modify anything after that, as lighting is run in a separate fullscreen shader.
+    out = deferred_output(in, pbr_input);
+} @else {
+    // remove texture
     var texture: vec4<f32>;
     let height = in.uv.x;
 
@@ -97,7 +84,6 @@ fn fragment(
 
     texture = mix(texture, ocean_color, mix_hydro);
 
-
     pbr_input.material.base_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
 
     out.color = apply_pbr_lighting(pbr_input);
@@ -121,11 +107,7 @@ fn fragment(
     // apply in-shader post processing (fog, alpha-premultiply, and also tonemapping, debanding if the camera is non-hdr)
     // note this does not include fullscreen postprocessing effects like bloom.
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-#endif
-
-#ifdef FORWARD_DECAL
-    out.color.a = min(forward_decal_info.alpha, out.color.a);
-#endif
+}
 
     return out;
 }

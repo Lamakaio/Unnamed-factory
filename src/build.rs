@@ -476,7 +476,7 @@ fn select_world_part(
 pub struct HighlightLight;
 
 fn on_add_highlight(
-    add: On<Add, Highlighted>,
+    add: On<Add<Highlighted>>,
     part_query: Query<(&Transform, &Aabb), With<BuildId>>,
     mut light_query: Single<
         (&mut Transform, &mut SpotLight),
@@ -495,7 +495,7 @@ fn on_add_highlight(
 }
 
 fn on_remove_highlight(
-    _remove: On<Remove, Highlighted>,
+    _remove: On<Remove<Highlighted>>,
     mut light_query: Single<&mut Transform, With<HighlightLight>>,
 ) {
     light_query.translation = Vec3::new(0., -10., 0.);

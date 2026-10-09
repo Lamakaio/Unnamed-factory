@@ -1,7 +1,9 @@
-use bevy::math::{
-    Curve, NormedVectorSpace, Vec2, Vec3, VectorSpace,
-    cubic_splines::{CubicBSpline, CubicGenerator, CubicHermite, LinearSpline},
-    curve::{CurveExt, Interval},
+use bevy::{
+    curve::{
+        Curve, CurveExt, Interval,
+        cubic_splines::{CubicGenerator, CubicHermite, LinearSpline},
+    },
+    math::{NormedVectorSpace, Vec2, Vec3},
 };
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};

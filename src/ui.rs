@@ -1,8 +1,10 @@
 use bevy::{
     color::palettes::basic::*,
     input::mouse::{MouseScrollUnit, MouseWheel},
-    picking::hover::HoverMap,
+    picking::hover::{HoverMap, Hovered},
     prelude::*,
+    ui::Pressed,
+    ui_widgets::{Activate, ActivateOnPress, Button},
 };
 
 use crate::build::{BuildId, Building, setup_parts};
@@ -12,7 +14,10 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         //setup ui needs the parts list first
         app.add_systems(Startup, setup_ui.after(setup_parts));
-        app.add_systems(Update, (update_scroll_position, button_system, update_building_list));
+        app.add_systems(
+            Update,
+            (update_scroll_position, update_button_appearance, update_building_list),
+        );
         app.insert_resource(FontHandle::default());
     }
 }
@@ -108,6 +113,9 @@ pub fn update_building_list(
                 parent
                     .spawn((
                         Button,
+                        // Start placing on press rather than on release.
+                        ActivateOnPress,
+                        Hovered::default(),
                         Node {
                             min_height: Val::Px(2. * LINE_HEIGHT),
                             max_height: Val::Px(2. * LINE_HEIGHT),
@@ -122,6 +130,7 @@ pub fn update_building_list(
                             part_id: BuildId(building_handle),
                         },
                     ))
+                    .observe(start_placement)
                     .with_children(|parent| {
                         parent
                             .spawn((
@@ -172,34 +181,29 @@ const NORMAL_BUTTON: Color = Color::srgb(0.15, 0.15, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.25, 0.25, 0.25);
 const PRESSED_BUTTON: Color = Color::srgb(0.35, 0.75, 0.35);
 
-/// Change the button appearance when it is pressed.
-fn button_system(
-    mut commands: Commands,
-    mut interaction_query: Query<
-        (
-            &Interaction,
-            &mut BackgroundColor,
-            &mut BorderColor,
-            &PartButton,
-        ),
-        (Changed<Interaction>, With<Button>),
+/// Start placing the building of a part button when it is activated.
+fn start_placement(activate: On<Activate>, buttons: Query<&PartButton>, mut commands: Commands) {
+    if let Ok(part_button) = buttons.get(activate.entity) {
+        commands.spawn((part_button.part_id.clone(), Name::new("building")));
+    }
+}
+
+/// Restyle part buttons according to their hovered / pressed state.
+fn update_button_appearance(
+    mut buttons: Query<
+        (&Hovered, Has<Pressed>, &mut BackgroundColor, &mut BorderColor),
+        With<PartButton>,
     >,
 ) {
-    for (interaction, mut color, mut border_color, part_button) in &mut interaction_query {
-        match *interaction {
-            Interaction::Pressed => {
-                *color = PRESSED_BUTTON.into();
-                *border_color = BorderColor::all(RED);
-                commands.spawn((part_button.part_id.clone(), Name::new("building")));
-            }
-            Interaction::Hovered => {
-                *color = HOVERED_BUTTON.into();
-                *border_color = BorderColor::all(Color::WHITE);
-            }
-            Interaction::None => {
-                *color = NORMAL_BUTTON.into();
-                *border_color = BorderColor::all(Color::BLACK);
-            }
-        }
+    for (hovered, pressed, mut color, mut border_color) in &mut buttons {
+        let (background, border) = if pressed {
+            (PRESSED_BUTTON, RED.into())
+        } else if hovered.get() {
+            (HOVERED_BUTTON, Color::WHITE)
+        } else {
+            (NORMAL_BUTTON, Color::BLACK)
+        };
+        color.set_if_neq(background.into());
+        border_color.set_if_neq(BorderColor::all(border));
     }
 }

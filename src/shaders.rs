@@ -18,7 +18,7 @@ impl Plugin for ShadersPlugin {
     }
 }
 
-const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wgsl";
+const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
