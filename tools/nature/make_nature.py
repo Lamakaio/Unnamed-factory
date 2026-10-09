@@ -6,7 +6,11 @@
 #   per-face vertex colours averaged from the textures. Trees and bushes: convex hull of the
 #   foliage + a trunk prism; rocks: the decimated rock.
 #
-# Usage: blender -b -P make_nature.py -- <out_dir> name=kind=path ...
+# Low-poly kinds (`lowtree`, `lowrock`, `lowwood`: flat-coloured models such as Kenney's) are
+# recoloured by material name to the game's palette and baked to vertex colours as one mesh;
+# LOD1 and LOD2 are the same model decimated.
+#
+# Usage: blender -b -P make_nature.py -- <out_dir> name=kind=path[=leaf colour][=scale] ...
 import os
 import random
 import sys
@@ -19,14 +23,27 @@ from mathutils import Vector
 args = sys.argv[sys.argv.index("--") + 1 :]
 out_dir = os.path.abspath(args[0])
 os.makedirs(out_dir, exist_ok=True)
-# name=kind=path[=leaf colour as sRGB hex, overriding the texture average]
-entries = [(a.split("=") + [""])[:4] for a in args[1:]]
+# name=kind=path[=leaf colour as sRGB hex, overriding the texture average][=scale to metres]
+entries = [(a.split("=") + ["", ""])[:5] for a in args[1:]]
 
 LOD0_BUDGET = {"tree": 4000, "bush": 2000, "rock": 1500, "ground": 600, "wood": 2000}
 # Faces of the stand-ins: (lod1, lod2) for the foliage hull, and trunk sides.
 HULL_FACES = {"tree": (36, 18), "bush": (24, 10), "rock": (80, 14), "wood": (60, 12)}
 # Foliage clusters (separate hulls) of the stand-ins: lobed crowns, tiered pines.
 CLUSTERS = {"tree": (3, 1), "bush": (2, 1)}
+# Faces of the decimated low-poly models: (lod1, lod2).
+LOW_FACES = {"lowtree": (90, 28), "lowrock": (40, 14), "lowwood": (40, 14)}
+
+# The game's palette (sRGB) for the materials of low-poly packs, by material name.
+PALETTE = {
+    "birch": "d9d2c2",
+    "inner": "c9a77f",
+    "wood": "6b4a33",
+    "grass": "5f8a2c",
+    "dirt": "8c8379",
+    "stone": "8d8a85",
+    "default": "8d8a85",
+}
 TRUNK_SIDES = (5, 3)
 
 
@@ -165,6 +182,76 @@ def prism(name, base_radius, top_radius, top, sides):
     return obj
 
 
+def palette_color(material_name, leaf_hex):
+    name = material_name.lower()
+    if name.startswith("leaf"):
+        return hex_color(leaf_hex or "4a6c22")
+    for key in ("birch", "inner", "wood", "grass", "dirt", "stone"):
+        if key in name:
+            return hex_color(PALETTE[key])
+    return hex_color(PALETTE["default"])
+
+
+def tint_leaves(obj, leaf_hex):
+    """Packs with tintable leaves (Quaternius: `X_C.png` coloured, `X.png` white): use the
+    white texture tinted with the leaf colour, so leaves match the palette and the stand-ins."""
+    tint = [int(leaf_hex[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    for slot in obj.material_slots:
+        material = slot.material
+        if material is None or not material.use_nodes:
+            continue
+        for node in material.node_tree.nodes:
+            if node.type != "TEX_IMAGE" or node.image is None:
+                continue
+            source = bpy.path.abspath(node.image.filepath)
+            stem, ext = os.path.splitext(source)
+            if not stem.endswith("_C") or not os.path.exists(stem[:-2] + ext):
+                continue
+            white = bpy.data.images.load(stem[:-2] + ext)
+            pixels = np.empty(white.size[0] * white.size[1] * 4, dtype=np.float32)
+            white.pixels.foreach_get(pixels)
+            pixels = pixels.reshape(-1, 4)
+            pixels[:, :3] *= np.array(tint, dtype=np.float32)
+            tinted = bpy.data.images.new(
+                f"{os.path.basename(stem[:-2])}_{leaf_hex}", white.size[0], white.size[1], alpha=True
+            )
+            tinted.pixels.foreach_set(pixels.ravel())
+            tinted.file_format = "PNG"
+            tinted.pack()
+            node.image = tinted
+
+
+def proxy_material():
+    """One shared vertex-colour material, so joined meshes are a single primitive."""
+    material = bpy.data.materials.get("proxy")
+    if material is None:
+        material = bpy.data.materials.new("proxy")
+        material.use_nodes = True
+        nodes, links = material.node_tree.nodes, material.node_tree.links
+        bsdf = nodes.get("Principled BSDF")
+        attr = nodes.new("ShaderNodeVertexColor")
+        attr.layer_name = "Col"
+        links.new(attr.outputs["Color"], bsdf.inputs["Base Color"])
+        bsdf.inputs["Roughness"].default_value = 1.0
+    return material
+
+
+def paint_by_material(obj, colors, seed):
+    """Flat per-face colours from each face's material colour, slightly varied."""
+    rng = random.Random(seed)
+    mesh = obj.data
+    attribute = mesh.color_attributes.new("Col", "FLOAT_COLOR", "CORNER")
+    mesh.color_attributes.active_color = attribute
+    for polygon in mesh.polygons:
+        base = colors[polygon.material_index] if colors else hex_color(PALETTE["default"])
+        shade = 1 + rng.uniform(-0.04, 0.04)
+        c = [min(1.0, x * shade) for x in base] + [1.0]
+        for loop in polygon.loop_indices:
+            attribute.data[loop].color = c
+    mesh.materials.clear()
+    mesh.materials.append(proxy_material())
+
+
 def paint(obj, color, height_range, seed):
     """Flat per-face colours: the base colour, darker toward the bottom, slightly varied."""
     rng = random.Random(seed)
@@ -181,28 +268,40 @@ def paint(obj, color, height_range, seed):
             attribute.data[loop].color = c
     for polygon in mesh.polygons:
         polygon.use_smooth = False
-    material = bpy.data.materials.get("proxy")
-    if material is None:
-        # One shared material, so the joined stand-in is a single primitive.
-        material = bpy.data.materials.new("proxy")
-        material.use_nodes = True
-        nodes, links = material.node_tree.nodes, material.node_tree.links
-        bsdf = nodes.get("Principled BSDF")
-        attr = nodes.new("ShaderNodeVertexColor")
-        attr.layer_name = "Col"
-        links.new(attr.outputs["Color"], bsdf.inputs["Base Color"])
-        bsdf.inputs["Roughness"].default_value = 1.0
     mesh.materials.clear()
-    mesh.materials.append(material)
+    mesh.materials.append(proxy_material())
 
 
 def hex_color(text):
     return srgb_to_linear([int(text[i : i + 2], 16) / 255 for i in (0, 2, 4)])
 
 
-for name, kind, path, leaf_hex in entries:
+for name, kind, path, leaf_hex, scale in entries:
     reset()
     obj = load(path)
+    if scale:
+        for v in obj.data.vertices:
+            v.co *= float(scale)
+    if leaf_hex and not kind.startswith("low"):
+        tint_leaves(obj, leaf_hex)
+    if kind.startswith("low"):
+        colors = [
+            palette_color(slot.material.name if slot.material else "", leaf_hex)
+            for slot in obj.material_slots
+        ]
+        paint_by_material(obj, colors, hash(name))
+        height = max(v.co.z for v in obj.data.vertices)
+        export([obj], os.path.join(out_dir, f"{name}_lod0.glb"), vertex_colors=True)
+        report = f"NATURE {name} {kind} height {height:.2f} tris {triangles(obj)}"
+        for level, faces in enumerate(LOW_FACES[kind]):
+            simple = obj.copy()
+            simple.data = obj.data.copy()
+            bpy.context.scene.collection.objects.link(simple)
+            decimate(simple, faces)
+            export([simple], os.path.join(out_dir, f"{name}_lod{level + 1}.glb"), vertex_colors=True)
+            report += f" lod{level + 1} {triangles(simple)}"
+        print(report)
+        continue
     source_tris = triangles(obj)
     vertices = [obj.matrix_world @ v.co for v in obj.data.vertices]
     height = max(v.z for v in vertices)

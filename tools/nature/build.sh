@@ -1,51 +1,67 @@
 #!/usr/bin/env bash
-# Build assets/models/nature from the source packs (see tools/nature/README.md).
-#
-# 1. Unreal (headless): export the candidate meshes as FBX and their textures + a material
-#    mapping:   UnrealEditor-Cmd.exe <Test.uproject> -run=pythonscript
-#                 -script=tools/nature/unreal_export.py -EnablePlugins=PythonScriptPlugin
-#                 -unattended -nop4 -nosplash -NullRHI
-# 2. Blender: rebuild the materials (rewire.py), then the LODs (make_nature.py, below).
+# Build assets/models/nature (see tools/nature/README.md) from the CC0 packs:
+# - Kenney Nature Kit (https://kenney.nl): low-poly trees, rocks, stumps (recoloured, LODs by
+#   decimation);
+# - Quaternius Stylized Nature MegaKit (https://quaternius.com): textured hero trees, rocks,
+#   bushes and ground cover (LOD stand-ins from convex hulls).
 set -euo pipefail
 
 BLENDER=${BLENDER:-"/c/Program Files/Blender Foundation/Blender 5.2/blender.exe"}
-EXPORT=${EXPORT:-D:/3d/_export}
+KENNEY=${KENNEY:-"D:/3d/Kenney_Nature_Kit/Models/GLTF format"}
+QUATERNIUS=${QUATERNIUS:-D:/3d/Quaternius_Stylized_Nature/glTF}
 OUT=${OUT:-assets/models/nature}
 HERE=$(dirname "$0")
+K=$KENNEY
+Q=$QUATERNIUS
 
-for pack in "$EXPORT"/candidates/*/; do
-    pack=$(basename "$pack")
-    "$BLENDER" -b -P "$HERE/rewire.py" -- "$EXPORT/materials.json" "$EXPORT/textures" \
-        "$EXPORT/glb/$pack" "$EXPORT/candidates/$pack"/*.fbx
-done
-
-G=$EXPORT/glb
-# name=kind=source[=leaf colour override, sRGB hex]
+# name=kind=source[=leaf colour, sRGB hex][=scale to metres]
 "$BLENDER" -b -P "$HERE/make_nature.py" -- "$OUT" \
-    broadleaf_round=tree=$G/StylizedProvencal/SM_Tree_02.glb=4a6c22 \
-    broadleaf_tall=tree=$G/Fantastic_Hills/SM_Tree_0_2.glb=3e631f \
-    broadleaf_wide=tree=$G/Fantastic_Hills/SM_Tree_02.glb=456524 \
-    cypress=tree=$G/StylizedProvencal/SM_Tree_Cypress.glb=2f491e \
-    pine=tree=$G/Fantastic_Hills/SM_PineTree05.glb=254225 \
-    dead_pine=tree=$G/Taiga_Biome/SM_Dead_Pine_01.glb \
-    bush_round=bush=$G/StylizedProvencal/SM_Bush_01.glb=486825 \
-    bush_flowers=bush=$G/StylizedProvencal/SM_Bush_04.glb=536c2d \
-    bush_leafy=bush=$G/Fantastic_Hills/SM_Bushes.glb=3d5f21 \
-    rock_a=rock=$G/NordicVillage/SM_Rock02.glb \
-    rock_b=rock=$G/NordicVillage/SM_Rock03.glb \
-    rock_c=rock=$G/NordicVillage/SM_Rock04.glb \
-    rock_d=rock=$G/NordicVillage/SM_Rock05.glb \
-    rock_large_a=rock=$G/StylizedProvencal/SM_Rock_Large_01.glb \
-    rock_large_b=rock=$G/StylizedProvencal/SM_Rock_Large_02.glb \
-    rock_small_a=rock=$G/StylizedProvencal/SM_Rock_Small_01.glb \
-    rock_small_b=rock=$G/StylizedProvencal/SM_Rock_Small_02.glb \
-    rock_small_c=rock=$G/StylizedProvencal/SM_Rock_Small_03.glb \
-    cliff=rock=$G/StylizedProvencal/SM_Rock_Cliff_01.glb \
-    logs=wood=$G/Taiga_Biome/SM_Log_Set_02.glb \
-    stump=wood=$G/Taiga_Biome/SM_Pine_Stump_01.glb \
-    fern=ground=$G/NordicVillage/SM_Fern.glb \
-    flowers_a=ground=$G/StylizedProvencal/SM_Flower_01_c.glb \
-    flowers_b=ground=$G/StylizedProvencal/SM_Flower_02_a.glb \
-    flowers_c=ground=$G/StylizedProvencal/SM_Flower_03_a.glb \
-    grass_a=ground=$G/StylizedProvencal/SM_GrassField_01_a.glb \
-    grass_b=ground=$G/StylizedProvencal/SM_GrassField_02_a.glb
+    "oak_round=lowtree=$K/tree_default.glb=4a6c22=7" \
+    "oak_detailed=lowtree=$K/tree_detailed.glb=456524=7" \
+    "oak=lowtree=$K/tree_oak.glb=3e631f=7" \
+    "oak_fat=lowtree=$K/tree_fat.glb=4f6f25=7" \
+    "poplar=lowtree=$K/tree_tall.glb=3c5e27=7" \
+    "pine_round_a=lowtree=$K/tree_pineRoundA.glb=254225=7" \
+    "pine_round_c=lowtree=$K/tree_pineRoundC.glb=2b4a2a=7" \
+    "pine_round_e=lowtree=$K/tree_pineRoundE.glb=23402a=7" \
+    "pine_tall_a=lowtree=$K/tree_pineTallA_detailed.glb=254225=7" \
+    "pine_tall_c=lowtree=$K/tree_pineTallC_detailed.glb=2b4a2a=7" \
+    "pine_small=lowtree=$K/tree_pineSmallA.glb=2b4a2a=7" \
+    "cypress=lowtree=$K/tree_cone.glb=2f491e=7" \
+    "umbrella_pine=lowtree=$K/tree_plateau.glb=4a5f28=7" \
+    "rock_a=lowrock=$K/rock_largeA.glb==3" \
+    "rock_b=lowrock=$K/rock_largeB.glb==3" \
+    "rock_c=lowrock=$K/rock_largeC.glb==3" \
+    "rock_d=lowrock=$K/rock_largeD.glb==3" \
+    "rock_e=lowrock=$K/rock_largeE.glb==3" \
+    "rock_f=lowrock=$K/rock_largeF.glb==3" \
+    "rock_tall_a=lowrock=$K/rock_tallA.glb==4" \
+    "rock_tall_b=lowrock=$K/rock_tallB.glb==4" \
+    "rock_tall_c=lowrock=$K/rock_tallC.glb==4" \
+    "rock_tall_d=lowrock=$K/rock_tallD.glb==4" \
+    "stone_a=lowrock=$K/stone_largeA.glb==3" \
+    "stone_c=lowrock=$K/stone_largeC.glb==3" \
+    "stone_e=lowrock=$K/stone_largeE.glb==3" \
+    "stump=lowwood=$K/stump_old.glb==2.5" \
+    "logs=lowwood=$K/log_stack.glb==2.5" \
+    "common_tree_a=tree=$Q/CommonTree_1.gltf=4a6c22" \
+    "common_tree_b=tree=$Q/CommonTree_3.gltf=456524" \
+    "hero_pine=tree=$Q/Pine_2.gltf=254225" \
+    "twisted_tree=tree=$Q/TwistedTree_1.gltf=456524" \
+    "dead_tree_a=wood=$Q/DeadTree_2.gltf" \
+    "dead_tree_b=wood=$Q/DeadTree_4.gltf" \
+    "boulder_a=rock=$Q/Rock_Medium_1.gltf" \
+    "boulder_b=rock=$Q/Rock_Medium_2.gltf" \
+    "boulder_c=rock=$Q/Rock_Medium_3.gltf" \
+    "bush_common=bush=$Q/Bush_Common.gltf=486825" \
+    "bush_flowers=bush=$Q/Bush_Common_Flowers.gltf=536c2d" \
+    "pebbles_a=ground=$Q/Pebble_Round_1.gltf" \
+    "pebbles_b=ground=$Q/Pebble_Round_2.gltf" \
+    "fern=ground=$Q/Fern_1.gltf" \
+    "flowers_a=ground=$Q/Flower_3_Group.gltf" \
+    "flowers_b=ground=$Q/Flower_4_Group.gltf" \
+    "grass_a=ground=$Q/Grass_Common_Short.gltf" \
+    "grass_b=ground=$Q/Grass_Wispy_Short.gltf" \
+    "clover=ground=$Q/Clover_1.gltf" \
+    "mushrooms=ground=$Q/Mushroom_Common.gltf" \
+    "plant=ground=$Q/Plant_1.gltf"

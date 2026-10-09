@@ -70,7 +70,7 @@ src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arr
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
 src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs, ground.rs (ground material textures), vegetation.rs (trees, rocks, LODs)
-tools/nature/           asset pipeline for the nature models (Unreal headless export + Blender LOD builder, see its README)
+tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
 crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
 src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
@@ -272,9 +272,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     background task. Each vertex carries its object's origin (UV0 = x, z; UV1.x = y), and
     `LodToonMaterial` (toon.wesl with `LOD_FADE`, no depth prepass) dithers every object out
     exactly where its LOD0 model fades in, with Bevy's visibility range dither pattern;
-  - LOD0 textured models (≤ 4000 triangles) are entities only within 15 of the camera
-    (`VisibilityRange` 13–17), spawned and despawned as the camera moves (600 per frame
-    at most); ground cover likewise, fading out at 12–16.
+  - LOD0 models are entities only within 20 of the camera (`VisibilityRange` 18–22),
+    spawned and despawned as the camera moves (600 per frame at most); ground cover
+    likewise, fading out at 14–18.
+  Models: Kenney low-poly trees / rocks / stumps (recoloured to the palette, LODs by
+  decimation, ~50–400 triangles) for the bulk, Quaternius textured hero trees (≤ 4000
+  triangles, rare), boulders, bushes and ground cover. Species and per-biome probabilities
+  are the `SPECIES`, `large_rules` and `ground_rules` tables.
   Placement grids: 0.6 (large) and 0.28 (ground cover). Background tasks (placement, near
   meshes): 4 at once.
 
