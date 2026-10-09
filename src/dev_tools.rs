@@ -2,7 +2,7 @@
 //!
 //! - F2: building bounding boxes
 //! - F3: global wireframe
-//! - F4: river paths and lakes (on by default)
+//! - F4: river center lines
 //! - Clicking the terrain logs its generation data (height, gradient, hydrology).
 //!
 //! Setting `UF_SCREENSHOT=<path.png>` saves a screenshot after `UF_SCREENSHOT_DELAY` seconds
@@ -10,7 +10,7 @@
 
 use bevy::{
     camera::primitives::Aabb,
-    color::palettes::css::{ORANGE_RED, PURPLE, RED},
+    color::palettes::css::{ORANGE_RED, RED},
     input::common_conditions::input_just_pressed,
     pbr::wireframe::{WireframeConfig, WireframePlugin},
     prelude::*,
@@ -22,7 +22,6 @@ use crate::{
     AppState,
     build::BuildId,
     map::{IsGround, Map},
-    mapgen::Continent,
 };
 
 pub struct DevToolsPlugin;
@@ -71,6 +70,7 @@ struct RiverGizmos;
 
 fn configure_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
     config_store.config_mut::<AabbGizmos>().0.enabled = false;
+    config_store.config_mut::<RiverGizmos>().0.enabled = false;
 }
 
 /// Run condition: skip building gizmos for a disabled group.
@@ -106,18 +106,16 @@ fn draw_building_aabbs(
     }
 }
 
-fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) -> Result {
-    for river in &map.continent.river_paths {
-        let curve = river.position.to_curve()?;
-        let len = curve.segments().len();
-        gizmos.curve_3d(curve, (0..=200).map(|i| i as f32 / 200. * len as f32), RED);
+fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) {
+    for river in &map.continent.rivers {
+        gizmos.linestrip(
+            river
+                .points
+                .iter()
+                .map(|point| point.position + Vec3::Y * 0.1),
+            RED,
+        );
     }
-
-    for lake in &map.continent.lakes {
-        let pos = map.continent.to_world(*lake);
-        gizmos.sphere(Isometry3d::from_translation(pos), 10., PURPLE);
-    }
-    Ok(())
 }
 
 /// Log the generation data of the terrain point under a click.
@@ -134,24 +132,22 @@ fn log_terrain_on_click(
         return;
     };
     let sample = map.sample(pos);
-    let Some(index) = Continent::grid_coords(pos.xz()) else {
+    let continent = &map.continent;
+    let Some((x, z)) = continent.world_to_cell(pos.xz()) else {
         info!(
             "terrain {pos}: height {} (off the continent)",
             sample.height
         );
         return;
     };
-    let point = &map.continent[index];
-    let hydro = map.continent.get_hydro(index.0, index.1);
+    let i = z * continent.size() + x;
     info!(
-        "terrain {index:?}: height {} wetness {} - base {} grad {} - water {} momentum {} - visit {}",
+        "terrain ({x}, {z}): height {} wetness {} - base {} drainage {} lake {:?}",
         sample.height,
         sample.wetness,
-        point.height,
-        point.grad,
-        hydro.amount,
-        hydro.momentum,
-        hydro.visit
+        continent.heights[i],
+        continent.drainage[i],
+        continent.lake_of[i]
     );
 }
 

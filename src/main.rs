@@ -9,7 +9,6 @@ mod camera;
 mod dev_tools;
 mod environment;
 mod map;
-mod mapgen;
 mod shaders;
 mod sim;
 mod ui;

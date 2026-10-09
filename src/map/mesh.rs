@@ -16,7 +16,7 @@ use bevy::{
     prelude::*,
 };
 
-use super::{CHUNK_SIZE, GRID_SQUARE_SIZE, MIN_CELL, SCALE_Y, heights::TerrainHeights};
+use super::{CHUNK_SIZE, MIN_CELL, heights::TerrainHeights};
 
 /// Quads per patch side.
 const PATCH_RES: usize = 16;
@@ -24,8 +24,12 @@ const PATCH_RES: usize = 16;
 const ERROR_PER_DISTANCE: f32 = 0.0015;
 /// Coarsest cell size allowed for rivers and edits, per world unit of camera distance.
 const FEATURE_CELL_PER_DISTANCE: f32 = 0.003;
-/// Base terrain detail stops at half the heightmap resolution: there is no data below.
-const MIN_BASE_CELL: f32 = GRID_SQUARE_SIZE / 2.;
+/// Base terrain detail stops at this fraction of the heightmap resolution.
+const MIN_BASE_CELL_RATIO: f32 = 0.25;
+/// Terrain shader color coordinate (`u`) at sea level, and per world unit above it: sand at
+/// the coast, grass, rock from ~16, snow above ~45.
+const COLOR_AT_SEA_LEVEL: f32 = 0.345;
+const COLOR_PER_HEIGHT: f32 = 0.00455;
 /// Skirt depth, in cells.
 const SKIRT_CELLS: f32 = 2.;
 
@@ -93,7 +97,8 @@ impl MeshBuilder<'_> {
         let curvature = self.heights.max_curvature(min, max);
         if curvature > 1e-6 {
             let tolerance = distance * ERROR_PER_DISTANCE;
-            cell = (GRID_SQUARE_SIZE * (8. * tolerance / curvature).sqrt()).max(MIN_BASE_CELL);
+            let g = self.heights.base_cell();
+            cell = (g * (8. * tolerance / curvature).sqrt()).max(g * MIN_BASE_CELL_RATIO);
         }
         if let Some(feature_cell) = self.heights.feature_cell(min, max) {
             cell = cell.min(feature_cell.max(distance * FEATURE_CELL_PER_DISTANCE));
@@ -113,7 +118,7 @@ impl MeshBuilder<'_> {
                 self.normals.push(self.heights.normal(p).to_array());
                 // Read by the terrain shader: u = biome coordinate from height, v = river flag.
                 self.uvs.push([
-                    1.3 * sample.height / SCALE_Y - 0.35,
+                    COLOR_AT_SEA_LEVEL + sample.height * COLOR_PER_HEIGHT,
                     1. + 99. * sample.wetness,
                 ]);
             }

@@ -1,0 +1,12 @@
+[package]
+name = "worldgen"
+version = "0.1.0"
+edition = "2024"
+description = "Continent generation: macro shape, stream-power erosion, rivers and lakes."
+
+[dependencies]
+bevy_math = { version = "0.20", default-features = false, features = ["std"] }
+rand = "0.10"
+
+[dev-dependencies]
+png = "0.18"

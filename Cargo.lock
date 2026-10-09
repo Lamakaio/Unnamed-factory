@@ -2749,12 +2749,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fast_hilbert"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f551b382f601850b4f57052d064d1c60dca971aeee4ccb40ac103b87f766640"
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4070,16 +4064,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
 dependencies = [
  "spin 0.5.2",
-]
-
-[[package]]
-name = "noiz"
-version = "0.5.0"
-dependencies = [
- "bevy_curve",
- "bevy_math",
- "bevy_reflect",
- "serde",
 ]
 
 [[package]]
@@ -5893,15 +5877,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "fast_hilbert",
  "foldhash 0.2.0",
  "kdtree-collisions",
- "noiz",
  "rand",
- "rand_distr",
  "rhai",
  "ron",
  "serde",
+ "worldgen",
 ]
 
 [[package]]
@@ -6892,6 +6874,15 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "worldgen"
+version = "0.1.0"
+dependencies = [
+ "bevy_math",
+ "png",
+ "rand",
 ]
 
 [[package]]

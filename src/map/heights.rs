@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 
+use worldgen::Continent;
+
 use super::{
-    GRID_SQUARE_SIZE, SCALE_Y,
     edits::{EditLayer, TerrainEdit},
     rivers::RiverLayer,
 };
-use crate::mapgen::Continent;
 
 /// Distance used to compute normals by finite differences. It is the same at every LOD level,
 /// so lighting matches across LOD seams.
@@ -22,7 +22,7 @@ const NORMAL_EPSILON: f32 = 1. / 16.;
 pub struct TerrainSample {
     /// World height.
     pub height: f32,
-    /// How much the point is covered by a river, from 0 to 1.
+    /// How much the point is covered by a river or lake, from 0 to 1.
     pub wetness: f32,
 }
 
@@ -37,14 +37,17 @@ impl TerrainHeights {
     pub fn new(continent: &Continent) -> Self {
         Self {
             base: Arc::new(BaseGrid::new(continent)),
-            rivers: Arc::new(RiverLayer::new(&continent.river_paths)),
+            rivers: Arc::new(RiverLayer::new(&continent.rivers)),
             edits: default(),
         }
     }
 
     pub fn sample(&self, p: Vec2) -> TerrainSample {
         let mut height = self.base.height(p);
-        let wetness = self.rivers.carve(p, &mut height);
+        let wetness = self
+            .rivers
+            .carve(p, &mut height)
+            .max(self.base.lake_wetness(p));
         self.edits.apply(p, &mut height);
         TerrainSample { height, wetness }
     }
@@ -76,6 +79,11 @@ impl TerrainHeights {
         }
     }
 
+    /// Spacing of the base heightmap samples, in world units.
+    pub fn base_cell(&self) -> f32 {
+        self.base.cell
+    }
+
     /// Maximum curvature of the base terrain over `min..max` (see [`BaseGrid`]).
     pub fn max_curvature(&self, min: Vec2, max: Vec2) -> f32 {
         self.base.max_curvature(min, max)
@@ -88,8 +96,12 @@ impl TerrainHeights {
 /// Outside the continent, heights extend the border values (flat ocean).
 struct BaseGrid {
     size: usize,
+    /// Sample spacing, in world units.
+    cell: f32,
     /// Row-major (`z * size + x`) world heights.
     heights: Vec<f32>,
+    /// 1 on lake cells, 0 elsewhere.
+    lakes: Vec<f32>,
     /// `curvature[level]` has `size >> level` texels per side; each texel is the maximum
     /// absolute second difference (world units) over the grid points it covers.
     curvature: Vec<Vec<f32>>,
@@ -97,13 +109,13 @@ struct BaseGrid {
 
 impl BaseGrid {
     fn new(continent: &Continent) -> Self {
-        let size = Continent::CONTINENT_SIZE as usize;
-        let mut heights = vec![0.; size * size];
-        for z in 0..size {
-            for x in 0..size {
-                heights[z * size + x] = continent[(x as u32, z as u32)].height * SCALE_Y;
-            }
-        }
+        let size = continent.size();
+        let heights = continent.heights.clone();
+        let lakes = continent
+            .lake_of
+            .iter()
+            .map(|lake| if lake.is_some() { 1. } else { 0. })
+            .collect();
 
         let at = |x: usize, z: usize| heights[z * size + x];
         let mut level0 = vec![0.; size * size];
@@ -134,19 +146,40 @@ impl BaseGrid {
 
         Self {
             size,
+            cell: continent.settings.cell_size,
             heights,
+            lakes,
             curvature,
         }
     }
 
     /// Continuous grid coordinates of a world position.
     fn grid_position(&self, p: Vec2) -> Vec2 {
-        p / GRID_SQUARE_SIZE + (self.size / 2) as f32
+        p / self.cell + (self.size / 2) as f32
     }
 
     fn at(&self, x: i32, z: i32) -> f32 {
         let max = self.size as i32 - 1;
         self.heights[z.clamp(0, max) as usize * self.size + x.clamp(0, max) as usize]
+    }
+
+    /// Bilinear interpolation of the lake mask (0 outside the grid).
+    fn lake_wetness(&self, p: Vec2) -> f32 {
+        let g = self.grid_position(p);
+        let cell = g.floor();
+        let t = g - cell;
+        let (x, z) = (cell.x as i32, cell.y as i32);
+        let max = self.size as i32 - 1;
+        let at = |x: i32, z: i32| {
+            if x < 0 || z < 0 || x > max || z > max {
+                0.
+            } else {
+                self.lakes[z as usize * self.size + x as usize]
+            }
+        };
+        let bottom = at(x, z) + (at(x + 1, z) - at(x, z)) * t.x;
+        let top = at(x, z + 1) + (at(x + 1, z + 1) - at(x, z + 1)) * t.x;
+        bottom + (top - bottom) * t.y
     }
 
     /// Bicubic (Catmull-Rom) interpolation of the heightmap.

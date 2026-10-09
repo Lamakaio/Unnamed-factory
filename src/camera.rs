@@ -33,11 +33,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 
-use crate::{
-    AppState,
-    map::{Map, SCALE_Y},
-    ui::PointerOverUi,
-};
+use crate::{AppState, map::Map, ui::PointerOverUi};
 
 pub struct CameraPlugin;
 
@@ -58,7 +54,7 @@ impl Plugin for CameraPlugin {
                     .after(PickingSystems::Last)
                     .before(SyncCameraPosition),
             )
-            .add_systems(OnEnter(AppState::InGame), look_at_origin)
+            .add_systems(OnEnter(AppState::InGame), look_at_start)
             .add_systems(Update, keyboard_pan.run_if(in_state(AppState::InGame)))
             .add_systems(
                 PostUpdate,
@@ -78,12 +74,12 @@ const KEYBOARD_PAN_SPEED: f32 = 1.5;
 /// Minimum clearance between the camera and the terrain.
 const MIN_HEIGHT_ABOVE_TERRAIN: f32 = 1.0;
 /// Initial camera offset from the point it looks at.
-const INITIAL_OFFSET: Vec3 = Vec3::splat(6.0);
+const INITIAL_OFFSET: Vec3 = Vec3::new(0., 30., 40.);
 
 /// Spawn the camera at startup (it also renders the loading screen).
 fn spawn_camera(mut commands: Commands) {
     // Provisional position until the terrain exists, see `look_at_origin`.
-    let target = Vec3::new(0.0, SCALE_Y / 2., 0.0);
+    let target = Vec3::new(0.0, 30., 0.0);
 
     commands.spawn((
         Name::new("3d camera"),
@@ -124,9 +120,11 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// Once the world is generated, look at the terrain at the origin.
-fn look_at_origin(mut camera: Single<&mut Transform, With<PanOrbitCamera>>, map: Res<Map>) {
-    let target = Vec3::new(0.0, map.get_height(Vec3::ZERO), 0.0);
+/// Once the world is generated, look at the suggested starting point.
+fn look_at_start(mut camera: Single<&mut Transform, With<PanOrbitCamera>>, map: Res<Map>) {
+    let start = map.continent.start_point();
+    let target = Vec3::new(start.x, 0., start.y);
+    let target = target.with_y(map.get_height(target));
     **camera = Transform::from_translation(target + INITIAL_OFFSET).looking_at(target, Vec3::Y);
 }
 

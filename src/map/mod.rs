@@ -1,7 +1,9 @@
 //! The world map: generation, the continuous terrain height function, adaptive LOD terrain
 //! chunks, and the placed buildings.
 //!
-//! - The continent is generated in the background at startup (`AppState::Loading`).
+//! - The continent is generated in the background at startup (`AppState::Loading`) by the
+//!   `worldgen` crate (erosion, rivers, lakes).
+//! - Water surfaces (sea, lakes, rivers) are meshes built from the generated data ([`water`]).
 //! - Terrain heights come from [`heights::TerrainHeights`]: base heightmap + rivers + edits.
 //! - Chunks around the camera are meshed in background tasks with a quadtree LOD
 //!   ([`mesh`]), and re-meshed when the camera moves enough or an edit touches them.
@@ -11,6 +13,7 @@ mod heights;
 mod mesh;
 mod rivers;
 mod spatial;
+mod water;
 
 use std::time::Instant;
 
@@ -26,13 +29,13 @@ use serde::Deserialize;
 pub use edits::TerrainEdit;
 pub use heights::TerrainSample;
 
-use crate::{AppState, build::Building, mapgen::Continent, shaders::MapMaterial};
+use worldgen::{Continent, WorldgenSettings};
+
+use crate::{AppState, build::Building, shaders::MapMaterial};
 use heights::TerrainHeights;
 
 /// Size of a heightmap cell, in world units.
 pub const GRID_SQUARE_SIZE: f32 = 0.25;
-/// Normalized heights from map generation are multiplied by this.
-pub const SCALE_Y: f32 = 100.;
 /// Size of a terrain chunk, in world units.
 pub const CHUNK_SIZE: f32 = 64.;
 /// Finest terrain mesh cell, used around rivers and edits.
@@ -56,21 +59,19 @@ pub struct MapPlugin {
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         let seed = self.seed as u32;
-        app.add_systems(
-            Startup,
-            (spawn_bottom_plane, move |commands: Commands| {
+        app.add_plugins(water::WaterPlugin)
+            .add_systems(Startup, move |commands: Commands| {
                 start_generation(commands, seed)
-            }),
-        )
-        .add_systems(
-            Update,
-            (
-                finish_generation.run_if(in_state(AppState::Loading)),
-                (spawn_chunks, schedule_chunk_meshes, finish_chunk_meshes)
-                    .chain()
-                    .run_if(in_state(AppState::InGame)),
-            ),
-        );
+            })
+            .add_systems(
+                Update,
+                (
+                    finish_generation.run_if(in_state(AppState::Loading)),
+                    (spawn_chunks, schedule_chunk_meshes, finish_chunk_meshes)
+                        .chain()
+                        .run_if(in_state(AppState::InGame)),
+                ),
+            );
     }
 }
 
@@ -167,9 +168,18 @@ struct Generation(Task<(Continent, TerrainHeights)>);
 fn start_generation(mut commands: Commands, seed: u32) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let start = Instant::now();
-        let continent = Continent::new_and_generate(seed);
+        let continent = worldgen::generate(&WorldgenSettings {
+            seed: seed.into(),
+            ..default()
+        });
         let heights = TerrainHeights::new(&continent);
-        info!("World generated in {:.1?}", start.elapsed());
+        info!(
+            "World generated in {:.1?} ({} rivers, {} lakes): {:?}",
+            start.elapsed(),
+            continent.rivers.len(),
+            continent.lakes.len(),
+            continent.timings
+        );
         (continent, heights)
     });
     commands.insert_resource(Generation(task));
@@ -195,22 +205,6 @@ fn finish_generation(
         continent,
     });
     next_state.set(AppState::InGame);
-}
-
-fn spawn_bottom_plane(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands.spawn((
-        Name::new("bottom plane"),
-        Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(100000., 1., 100000.)))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: bevy::color::palettes::css::LIGHT_BLUE.into(),
-            ..default()
-        })),
-        Transform::from_xyz(0., 0., 0.),
-    ));
 }
 
 /// Marks terrain chunk entities, with their chunk coordinates.
