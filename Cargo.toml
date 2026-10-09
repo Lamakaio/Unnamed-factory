@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.20", features = ["bevy_remote", "trace_tracy", "file_watcher", "pan_orbit_camera", "bevy_dev_tools", "render_dev_tools"] }
+bevy = { version = "0.20", features = ["bevy_remote", "file_watcher", "pan_orbit_camera", "bevy_dev_tools", "render_dev_tools"] }
 ron = "0.12"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
@@ -16,6 +16,10 @@ rhai = { version = "1.26", features = ["sync", "metadata", "no_closure", "no_cus
 foldhash = "0.2"
 fast_hilbert = "2.1"
 
+
+[features]
+# Profile with Tracy: `cargo run --features tracy`, then connect the Tracy client.
+tracy = ["bevy/trace_tracy"]
 
 # noiz has no Bevy 0.20 release yet: use a local port (../noiz-bevy-0.20, branch `bevy-0.20`).
 # Remove this patch once noiz publishes a Bevy 0.20 compatible version.
