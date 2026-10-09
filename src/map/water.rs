@@ -19,6 +19,8 @@ const SEA_SIZE: f32 = 8000.;
 const RIVER_OVERLAP: f32 = 0.25;
 /// Rivers float this much above their water line, to avoid fighting with lakes and the sea.
 const RIVER_OFFSET: f32 = 0.02;
+/// River ribbon directions are measured over this many points on each side.
+const RIVER_TANGENT_SPAN: usize = 2;
 
 pub struct WaterPlugin;
 
@@ -96,6 +98,26 @@ impl SurfaceBuilder {
             .extend([first, first + 2, first + 1, first + 1, first + 2, first + 3]);
     }
 
+    /// A ribbon quad (`[a_left, a_right, b_left, b_right]`), split along the diagonal giving
+    /// the better triangles: at a pinched bend, the usual diagonal can fall outside the quad
+    /// and flip a triangle.
+    fn ribbon_quad(&mut self, corners: [Vec3; 4]) {
+        let area = |a: usize, b: usize, c: usize| {
+            (corners[b] - corners[a]).xz().perp_dot((corners[c] - corners[a]).xz())
+        };
+        let usual = area(0, 2, 1).min(area(1, 2, 3));
+        let other = area(0, 3, 1).min(area(0, 2, 3));
+        if other <= usual {
+            self.quad(corners);
+            return;
+        }
+        let first = self.positions.len() as u32;
+        self.positions
+            .extend(corners.map(|corner| corner.to_array()));
+        self.indices
+            .extend([first, first + 3, first + 1, first, first + 2, first + 3]);
+    }
+
     fn build(self) -> Mesh {
         let normals = vec![[0., 1., 0.]; self.positions.len()];
         Mesh::new(
@@ -162,24 +184,42 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             RiverEnd::Junction(_) => (f32::MIN, 0.),
         };
         let points = &river.points;
-        let edges: Vec<(Vec3, Vec3)> = (0..points.len())
+        let tangents: Vec<Vec2> = (0..points.len())
             .map(|i| {
-                let previous = points[i.saturating_sub(1)].position;
-                let next = points[(i + 1).min(points.len() - 1)].position;
-                let normal = (next - previous).xz().normalize_or_zero().perp();
-                let half = points[i].width / 2. + RIVER_OVERLAP;
-                let center = points[i].position + Vec3::Y * RIVER_OFFSET;
-                let offset = Vec3::new(normal.x, 0., normal.y) * half;
-                (center - offset, center + offset)
+                let previous = points[i.saturating_sub(RIVER_TANGENT_SPAN)].position;
+                let next = points[(i + RIVER_TANGENT_SPAN).min(points.len() - 1)].position;
+                (next - previous).xz().normalize_or_zero()
             })
             .collect();
+        // Offset each side, but never let an edge step backwards along the river: on bends
+        // tighter than the river is wide, the inner edge pinches instead of folding over.
+        let side = |sign: f32| -> Vec<Vec3> {
+            let mut edge: Vec<Vec3> = Vec::with_capacity(points.len());
+            for (i, (point, tangent)) in points.iter().zip(&tangents).enumerate() {
+                let normal = tangent.perp() * sign;
+                let half = point.width / 2. + RIVER_OVERLAP;
+                let center = point.position + Vec3::Y * RIVER_OFFSET;
+                let mut vertex = center + Vec3::new(normal.x, 0., normal.y) * half;
+                if let Some(&last) = edge.last() {
+                    let step = (point.position - points[i - 1].position).xz();
+                    let advance = (vertex - last).xz();
+                    if advance.dot(*tangent) <= 0. || advance.dot(step) <= 0. {
+                        vertex = last.with_y(vertex.y.min(last.y));
+                    }
+                }
+                edge.push(vertex);
+            }
+            edge
+        };
+        let (lefts, rights) = (side(-1.), side(1.));
+        let edges: Vec<(Vec3, Vec3)> = lefts.into_iter().zip(rights).collect();
         for (pair, ends) in edges.windows(2).zip(points.windows(2)) {
             let ground = continent.surface.bilinear(ends[1].position.xz());
             if ends[1].position.y <= end_level + margin || ground <= end_level {
                 break;
             }
             let ((a_left, a_right), (b_left, b_right)) = (pair[0], pair[1]);
-            builder.quad([a_left, a_right, b_left, b_right]);
+            builder.ribbon_quad([a_left, a_right, b_left, b_right]);
         }
     }
     builder.build()
