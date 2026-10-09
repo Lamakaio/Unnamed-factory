@@ -23,6 +23,7 @@ pub fn climate(
     heights: &[f32],
     base_level: &[bool],
     shore: &[f32],
+    deltas: &[f32],
     lake_of: &[Option<u16>],
     drainage: &[f32],
 ) -> Climate {
@@ -60,7 +61,8 @@ pub fn climate(
             Biome::Sea
         } else if lake_of[i].is_some() {
             Biome::Lake
-        } else if shore[i] < 3.5 + wobble * 8. && h < 2. && slope < 0.5 {
+        } else if shore[i] < beach_width(noise, p, deltas[i]) && h < 2. + deltas[i] && slope < 0.5
+        {
             Biome::Beach
         } else if temperature[i] < 0.08 {
             Biome::Snow
@@ -86,4 +88,11 @@ pub fn climate(
         temperature,
         biome,
     }
+}
+
+/// Width of the beach (cells from the shore): varying along the coast, and wide on the
+/// sediment around river mouths.
+fn beach_width(noise: Noise, p: Vec2, delta: f32) -> f32 {
+    let variation = 0.5 + 0.5 * noise.layer(21).fbm(p / 45., 3);
+    1. + 3.5 * variation * variation + 9. * delta
 }

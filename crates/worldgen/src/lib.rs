@@ -362,6 +362,8 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_levels,
     );
     flatten_floodplains(size, &mut heights, &lake_of, &valley);
+    let deltas = river_deltas(settings, &rivers);
+    deposit_sediment(&mut heights, &shape.base_level, &lake_of, &shore, &deltas);
     let drainage = flow::FlowGraph::new(size, &routing, &shape.base_level).accumulate(|_| 1.);
     lap("rivers", &mut timings);
 
@@ -371,6 +373,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &heights,
         &shape.base_level,
         &shore,
+        &deltas,
         &lake_of,
         &drainage,
     );
@@ -464,6 +467,54 @@ fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
             point.position.y = point.position.y.min(terrain).min(previous);
             previous = point.position.y;
         }
+    }
+}
+
+/// Sediment around the mouth of each river reaching the sea (0..1 per cell): larger rivers
+/// spread a wider fan.
+fn river_deltas(settings: &WorldgenSettings, rivers: &[River]) -> Vec<f32> {
+    let size = settings.size;
+    let half = (size / 2) as f32;
+    let mut deltas = vec![0f32; size * size];
+    for river in rivers.iter().filter(|river| river.end == RiverEnd::Sea) {
+        let Some(mouth) = river.points.last() else {
+            continue;
+        };
+        let center = mouth.position.truncate().with_y(mouth.position.z) / settings.cell_size + half;
+        let radius = 6. + 5. * mouth.width / settings.cell_size;
+        let (min, max) = ((center - radius).floor(), (center + radius).ceil());
+        for z in (min.y.max(0.) as usize)..=(max.y.min(size as f32 - 1.) as usize) {
+            for x in (min.x.max(0.) as usize)..=(max.x.min(size as f32 - 1.) as usize) {
+                let d = center.distance(Vec2::new(x as f32, z as f32));
+                let value = noise::smoothstep(radius, radius * 0.3, d);
+                deltas[z * size + x] = deltas[z * size + x].max(value);
+            }
+        }
+    }
+    deltas
+}
+
+/// River mouths: the land around them is a low, flat deposit plain, and the sea in front of
+/// them a shallow sediment fan.
+fn deposit_sediment(
+    heights: &mut [f32],
+    base_level: &[bool],
+    lake_of: &[Option<u16>],
+    shore: &[f32],
+    deltas: &[f32],
+) {
+    for i in 0..heights.len() {
+        let delta = deltas[i];
+        if delta <= 0. || lake_of[i].is_some() {
+            continue;
+        }
+        let h = heights[i];
+        let deposit = if base_level[i] {
+            h.max(-0.3 + 0.06 * shore[i]).min(-0.05)
+        } else {
+            h.min(0.25 + 0.06 * shore[i].max(0.))
+        };
+        heights[i] = h + (deposit - h) * delta;
     }
 }
 

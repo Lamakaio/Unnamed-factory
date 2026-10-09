@@ -8,7 +8,7 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use worldgen::Continent;
+use worldgen::{Continent, RiverEnd};
 
 use super::Map;
 use crate::AppState;
@@ -153,6 +153,13 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
 fn rivers_mesh(continent: &Continent) -> Mesh {
     let mut builder = SurfaceBuilder::default();
     for river in &continent.rivers {
+        // Stop where the river reaches the water it flows into: overlapping translucent
+        // surfaces would show as a darker patch.
+        let end_level = match river.end {
+            RiverEnd::Sea => 0.,
+            RiverEnd::Lake(lake) => continent.lakes[lake].level,
+            RiverEnd::Junction(_) => f32::MIN,
+        };
         let points = &river.points;
         let edges: Vec<(Vec3, Vec3)> = (0..points.len())
             .map(|i| {
@@ -165,7 +172,10 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
                 (center - offset, center + offset)
             })
             .collect();
-        for pair in edges.windows(2) {
+        for (pair, ends) in edges.windows(2).zip(points.windows(2)) {
+            if ends[1].position.y <= end_level + 1e-3 {
+                break;
+            }
             let ((a_left, a_right), (b_left, b_right)) = (pair[0], pair[1]);
             builder.quad([a_left, a_right, b_left, b_right]);
         }

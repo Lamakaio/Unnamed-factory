@@ -172,10 +172,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      to the terrain under each point. Floodplains are flattened to water + 0.4 around
      meandering reaches (`lib.rs::flatten_floodplains`, soft edges). The final clamp
      (`clamp_rivers_to_terrain`) uses the lowest fine surface across the channel width.
+     River mouths on the sea (`river_deltas`, radius 6 + 5·width cells) get sediment
+     (`deposit_sediment`): a low flat deposit plain on land and a shallow fan at sea.
   5. **Climate** (`climate.rs`): moisture = orographic rain on the final terrain + wet valley
      floors (drainage, blurred so single-cell flow lines don't show), temperature from
      altitude (`snow_line`), and a `Biome` per cell (beach, marsh, meadow, steppe, forests,
-     alpine, rock, snow; `Biome::color()` is shared by previews and the game).
+     alpine, rock, snow; `Biome::color()` is shared by previews and the game). Beach width
+     varies along the coast (noise, 1–4.5 cells) and widens on river mouth sediment.
   6. **Detail** (`detail.rs`): the eroded grid upsampled ×4 (bicubic, 0.25 units) into
      `Continent::surface`, with gullies on slopes (branching "erosion noise" stripes,
      rotated lattice per octave, patchy strength) and small fBm roughness, scaled by
@@ -236,7 +239,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   170k vertices per chunk on the eroded terrain.
 - **Water** (`map/water.rs`): one translucent, double-sided `StandardMaterial` for a sea plane
   at 0, lake surfaces (lake cells plus shore cells above the water), and river ribbons at the
-  water line (width + 0.25 per side). Water has `Pickable::IGNORE` and `NotShadowCaster`.
+  water line (width + 0.25 per side). Ribbons stop where the water reaches the sea or the lake the
+  river flows into (overlapping translucent surfaces look darker). Water has `Pickable::IGNORE` and `NotShadowCaster`.
 - River center-line debug gizmos live in `dev_tools.rs` (F4, off by default).
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
@@ -308,7 +312,6 @@ nodes is still manual (`update_scroll_position`), as in Bevy's own example.
 - Tests exist only for `worldgen`. The sim maths is pure and easy to unit-test too.
 - Lake dams are discs, so some show up as rounded hills next to their lake.
 - Plateau tops can hold small depression lakes (cap + slope limiting leave pits).
-- The beach is a fixed-width band (biome by distance to the sea and height).
 
 ---
 
