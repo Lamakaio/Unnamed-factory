@@ -58,9 +58,8 @@ Design source: [`notes.md`](notes.md) (preliminary, in English with some typos).
 ```
 Cargo.toml              bevy 0.20 (+ bevy_remote, file_watcher, pan_orbit_camera,
                         bevy_dev_tools, render_dev_tools), ron 0.12, serde, anyhow,
-                        kdtree-collisions (user's own git crate, no bevy dep), noiz 0.5 (noise,
-                        [patch]ed to a local Bevy 0.20 port — see §4.1), rand 0.10, rand_distr 0.6,
-                        rhai 1.26, foldhash 0.2, fast_hilbert 2.1. All versions pinned.
+                        kdtree-collisions (user's own git crate, no bevy dep), rand 0.10, rhai 1.26,
+                        foldhash 0.2, worldgen (path). Workspace with crates/worldgen. All versions pinned.
                         Feature `tracy`: `cargo run --features tracy` for Tracy profiling.
 Cargo.lock              tracked
 rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers nightly.
@@ -70,8 +69,8 @@ src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
-src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), spatial.rs
-src/mapgen.rs           Continent: 2048² noiz heightmap (Hilbert-curve indexed), hydrology, rivers, lakes (user WIP)
+src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs
+crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
 src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
 src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
 src/shaders.rs          ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>, RON `.mapmat` loader
@@ -118,33 +117,57 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `UF_SCREENSHOT=<png>` (and optionally `UF_SCREENSHOT_DELAY`, default 20 s) saves a
   screenshot and exits. See §6.
 
-### 3.2 Terrain (`mapgen.rs`, `map/`)
-- **`Continent`** (`mapgen.rs`, user WIP) is generated on the `AsyncComputeTaskPool` at
-  startup, together with the `TerrainHeights` (~1.9 s). `finish_generation` polls the task
-  with `check_ready`, inserts `Map` (and loads the terrain material), and enters
-  `AppState::InGame`. The continent holds 2048×2048 `TerrainPoint`s (normalized height,
-  gradient) indexed by **Hilbert curve** (`fast_hilbert::xy2h/h2xy`). Grid cell (x, y) is at
-  world ((x − 1024)·0.25, (y − 1024)·0.25), so the continent spans ±256 world units.
-  - The height comes from a big composed `noiz` noise type (`NoiseT`), multiplied by an
-    edge falloff.
-  - Hydrology: each cell flows along its gradient. Sources are cells nothing flows into,
-    culled with a kd-tree. Paths are traced (`go_through_path`), amounts are propagated,
-    estuaries are grouped and forked, and control points become `CubicHermite<Vec3>`
-    river curves (`RiverPath`, with an `amount` spline). Rivers are **not** baked into the
-    heightmap; see the river layer below.
-  - The `Hydrologypoint.visit` field reuses magic numbers (1, 2, 3, 12, 13) as per-pass
-    markers, and `next == 0` / `tile == 0` stand for "none". This is fragile; prefer
-    enums and `Option`.
+### 3.2 World generation (`crates/worldgen`) and terrain (`map/`)
+- **`worldgen` crate** (workspace member, no Bevy ECS; depends on `bevy_math` and `rand`;
+  `opt-level = 3` even in dev). `worldgen::generate(&WorldgenSettings)` builds one
+  **continent**: a 512×512 grid of 1-unit cells (the continent spans ±256 world units around
+  its own center; sea level is 0). Plan: several independent continents placed at offsets
+  instead of one bigger map (generation cost grows with area). Stages, ~2.5–3 s in total
+  (shape ~0.5 s, erosion ~2 s):
+  1. **Shape** (`terrain.rs::shape`): domain-warped noisy disc coastline (sea forced near the
+     borders), uplift = hills + ridged mountain ranges in noise-selected regions − low plains,
+     erodibility (rock hardness) patches. Noise is the crate's own `noise.rs`
+     (Perlin + fBm / ridged / warp).
+  2. **Erosion** (`terrain.rs::erode`): stream power law `dh/dt = U − K·A^m·S` (n = 1), solved
+     implicitly from the outlets upstream (Braun & Willett 2013), plus hillslope diffusion.
+     Each step does a Priority-Flood with epsilon (Barnes 2014; depressions are filled), then
+     **stochastic D8** routing (random slope weights against grid-aligned valleys), then
+     drainage accumulation. The sea is base level, fixed at 0 during erosion. Afterwards land
+     is scaled so the highest summit is `max_height` (60), and sea cells get their sea floor
+     depth.
+  3. **Lakes** (`lakes.rs`): valley sites (enough drainage, inland, spaced apart). A
+     moraine-like dam disc 20–40 cells downstream is raised to the lake level, growing until it
+     seals the valley; the valley is flooded upstream and the bed deepened. `find_lakes` then
+     finds lakes with a Priority-Flood without epsilon (flat surfaces, ≥ 20 cells).
+  4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
+     ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
+     lake) upstream, the main stem following the largest donor, and tributaries end exactly on
+     their parent's polyline (`RiverEnd::Junction(parent)`, parent index < own index).
+     Then Chaikin smoothing and resampling every 0.5 units. Width ∝ √discharge, depth
+     ∝ discharge^0.4. Meanders where the valley is flat (wavelength ≈ 12 widths, amplitude in
+     widths × flatness, tapered at the ends). Water levels follow the terrain
+     (**breaching**, never filling), are never increasing downstream, and are finally clamped
+     to the terrain under each point. Floodplains are flattened to water + 0.4 around
+     meandering reaches (`lib.rs::flatten_floodplains`).
+  - Output `Continent`: `heights`, `drainage`, `lake_of`, `lakes` (level + cells), `rivers`
+    (polylines of `RiverPoint { position, width, depth }` + `RiverEnd`), `timings`,
+    `start_point()` (beside the widest lowland river; the camera starts there).
+  - **Preview tool**: `cargo run -p worldgen --release --example preview -- <out_dir> [seeds…]`
+    writes shaded-relief PNGs with rivers and lakes, and prints stats and timings. Use it to
+    tune generation without the game. Tests: `cargo test -p worldgen --release`.
+- In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
+  the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
+  `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.
 - **Height function** (`map/heights.rs`, `TerrainHeights`, cheap `Arc` clones for tasks):
-  `height(p)` = base heightmap with bicubic (Catmull-Rom) interpolation → river layer → edit
-  layer. Beyond the continent the border values extend (flat ocean). `Map::get_height` /
+  `height(p)` = base heightmap (the continent's 1-unit grid) with bicubic (Catmull-Rom)
+  interpolation → river layer → edit layer. Beyond the continent the border values extend
+  (open sea). Wetness = river wetness, or bilinear lake mask. `Map::get_height` /
   `Map::sample` use it, so the camera, placement and mesh always agree. Normals use finite
   differences at a fixed epsilon (1/16).
-  - **River layer** (`map/rivers.rs`): river curves sampled into polyline segments (45 per curve
-    segment) in a spatial grid. At a point, the nearest segments carve
-    `min(h, lerp(bed, h, (d/reach)²))`, with bed = water line − 0.2,
-    reach = r·√2 + 0.25, and r = log10(amount + 50) − log10(50). This reproduces the old
-    baked carving, at any resolution. Wetness (1 within r, fading over 0.25) feeds the shader.
+  - **River layer** (`map/rivers.rs`): the generated river polylines, as segments in a spatial
+    grid. Cross-section: a parabolic channel (`width`, `depth` below the water line), then
+    banks from water + 0.15 back to the terrain over max(0.8, 0.6·width). It only ever lowers
+    the terrain. The valleys themselves are baked by erosion. Wetness is 1 in the channel.
   - **Edit layer** (`map/edits.rs`): `TerrainEdit::Flatten` (building foundations: flat over
     the inner 60% of the radius, smootherstep blend outside) and `Raise` (tools: ±10 units,
     smootherstep bell). Edits apply in insertion order and are found through a spatial grid.
@@ -154,21 +177,23 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   go from 4 units down to `MIN_CELL` = 1/16. A node splits while its cell is larger than
   needed:
   - for the base terrain: curvature (max-curvature pyramid in `BaseGrid`) against an error
-    tolerance of 0.0015 × camera distance, never finer than 0.125;
-  - for rivers / edits overlapping it: river radius / 4, or edit falloff width / 8, relaxed to
+    tolerance of 0.0015 × camera distance, never finer than a quarter of the base cell;
+  - for rivers / edits overlapping it: river width / 6, or edit falloff width / 8, relaxed to
     0.003 × camera distance.
   Patches don't share vertices across levels; skirts (2 cells deep) hide cracks. Vertex UV0 is
-  still **used as data** for the existing shader: `u` = 1.3·height/100 − 0.35 (biome),
-  `v` = 1 + 99·wetness (river).
+  still **used as data** for the existing shader: `u` = 0.345 + 0.00455·height (sea level →
+  sand, grass, rock from ~16, snow above ~45), `v` = 1 + 99·wetness.
 - **Chunks** (`map/mod.rs`): entities with `IsGround(coords)` + `TerrainChunk` LOD state,
   spawned within 6 chunks of the camera (never despawned). `schedule_chunk_meshes` starts
   at most 4 background mesh tasks, edited chunks first and then nearest. A chunk is re-meshed
   when an edit touched it, or when the camera moved by max(4, 25% of its distance) since its
   mesh was built. `finish_chunk_meshes` swaps the mesh asset in place. Mesh build times and
-  vertex counts are logged at `debug` (`RUST_LOG=info,unnamed_factory=debug`): ~0.5 ms /
-  1.4k vertices for flat sea, up to ~0.4 s / 370k vertices for river-dense chunks next to the
-  camera.
-- River and lake debug gizmos live in `dev_tools.rs` (F4).
+  vertex counts are logged at `debug` (`RUST_LOG=info,unnamed_factory=debug`): up to ~0.1 s /
+  170k vertices per chunk on the eroded terrain.
+- **Water** (`map/water.rs`): one translucent, double-sided `StandardMaterial` for a sea plane
+  at 0, lake surfaces (lake cells plus shore cells above the water), and river ribbons at the
+  water line (width + 0.25 per side). Water has `Pickable::IGNORE` and `NotShadowCaster`.
+- River center-line debug gizmos live in `dev_tools.rs` (F4, off by default).
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
 - `Building` is an `Asset` loaded from `.bconf` RON. All of them are loaded at startup
@@ -232,8 +257,8 @@ nodes is still manual (`update_scroll_position`), as in Bevy's own example.
   experiments, `ChunkMarker`.
 - `bevy_dev_tools` is enabled for the in-game build grid. Bevy says not to ship dev tools;
   revisit (e.g. draw the grid in the terrain shader) before any release.
-- `mapgen.rs` prints `dbg!(h_grad)` during generation (user WIP).
-- No tests. `mapgen` and the sim math are pure and easy to unit-test.
+- Tests exist only for `worldgen`. The sim maths is pure and easy to unit-test too.
+- Lake dams are discs, so some show up as rounded hills next to their lake.
 
 ---
 
@@ -261,14 +286,9 @@ Gotchas hit during the upgrade:
 - Bevy 0.20 needs **rustc ≥ 1.97.1**. The toolchain is pinned to `nightly-2026-10-08` (the
   user prefers nightly). Bump the date deliberately. A recent-nightly lint required
   `#![recursion_limit = "256"]` in `main.rs` for the `AsBindGroup` derive.
-- `noiz`: 0.2 → bevy 0.16, 0.3 → 0.17, 0.4 → 0.18, **0.5 → 0.19**. There was no 0.20 release on
-  2026-10-09, so `Cargo.toml` uses `[patch.crates-io] noiz = { path = "../noiz-bevy-0.20" }`.
-  That is a local clone (branch `bevy-0.20`, one commit) where `Curve`/`Interval`/`derivatives`
-  imports moved from `bevy_math` to the new `bevy_curve` crate. **Once upstream publishes a
-  Bevy 0.20 release, bump `noiz` and delete the patch.** (`C:/Users/timot/Documents/noiz` is a
-  different, older clone of the user's with local edits. Don't touch it.)
-  The noise type in `mapgen.rs` is a deep generic composition and may need adjusting
-  across noiz versions.
+- `noiz` was used for noise until the world generation rework. It was dropped, together with
+  the local Bevy 0.20 port it needed (`../noiz-bevy-0.20`, safe to delete). `worldgen` has its
+  own small noise module.
 - `kdtree-collisions`: the user's own crate (github.com/Lamakaio/kdtree-collisions), 2018
   edition, no deps. It's free to modify, or to replace with a simple uniform grid / a
   maintained crate.
@@ -390,7 +410,7 @@ of the migration work.
   src/ui/{mod, build_menu, widgets}.rs
   src/states.rs          AppState / Screen states
   ```
-- Keep **pure algorithms** (mapgen, hydrology, sim maths) free of ECS types so they can be
+- Keep **pure algorithms** (world generation, sim maths) free of ECS types so they can be
   tested and run on background threads. Bevy math types (`Vec2`, curves) are fine.
 
 ### 5.2 Components, bundles, spawning
@@ -485,7 +505,7 @@ of the migration work.
 
 ## 6. Working on this repo (agent checklist)
 
-1. `git status` first. The user often has WIP (e.g. river generation in `mapgen.rs` / `map.rs`).
+1. `git status` first. The user often has uncommitted WIP.
    Don't discard or reformat their uncommitted work.
 2. Build: `cargo run` (dev profile opt-level 1, deps opt-level 3). The first build is slow. The
    game needs `assets/models/*.glb`, which is not in git and must be present locally.
