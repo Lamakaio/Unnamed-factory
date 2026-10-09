@@ -73,7 +73,7 @@ pub struct Building {
 #[derive(Debug)]
 pub enum BuildingType {
     Zone { color: Color },
-    Single { model: Handle<Scene>, scale: f32 },
+    Single { model: Handle<WorldAsset>, scale: f32 },
     Tool { op: PatchOp, color: Color },
 }
 
@@ -161,7 +161,7 @@ fn spawn_build_from_part_id(
 
         match &part.typ {
             BuildingType::Single { model, scale } => commands.entity(e).insert((
-                SceneRoot(model.clone()),
+                WorldAssetRoot(model.clone()),
                 Transform::from_scale(Vec3::splat(*scale)),
                 SelectedBuild,
                 Visibility::Hidden,

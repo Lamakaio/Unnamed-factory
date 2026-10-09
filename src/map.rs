@@ -1,5 +1,5 @@
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{AssetMut, RenderAssetUsages},
     math::{I64Vec2, NormedVectorSpace},
     mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
     platform::collections::HashMap,
@@ -288,7 +288,7 @@ impl Chunk {
         }
     }
 
-    fn get_mesh_mut<'a>(&mut self, meshes: &'a mut Assets<Mesh>) -> &'a mut Mesh {
+    fn get_mesh_mut<'a>(&mut self, meshes: &'a mut Assets<Mesh>) -> AssetMut<'a, Mesh> {
         let handle = self.get_mesh(meshes);
         meshes.get_mut(&handle).expect("Mesh not found")
     }
@@ -303,7 +303,7 @@ impl Chunk {
         radius: f32,
         operation: PatchOp,
     ) -> Vec<(i64, i64)> {
-        let mesh = self.get_mesh_mut(meshes);
+        let mut mesh = self.get_mesh_mut(meshes);
 
         let mut ret = Vec::new();
         {

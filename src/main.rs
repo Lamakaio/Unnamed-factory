@@ -16,19 +16,18 @@ use std::{
 
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing,
-    camera::{Exposure, primitives::Aabb},
+    camera::{Exposure, Hdr, primitives::Aabb},
     color::palettes,
     core_pipeline::prepass::DepthPrepass,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
-    light::light_consts::lux,
+    light::{Atmosphere, atmosphere::ScatteringMedium, light_consts::lux},
     pbr::{
-        Atmosphere, ScatteringMedium,
+        AtmosphereSettings,
         wireframe::{WireframeConfig, WireframePlugin},
     },
     post_process::bloom::Bloom,
     prelude::*,
     remote::{RemotePlugin, http::RemoteHttpPlugin},
-    render::view::Hdr,
 };
 use build::BuildPlugin;
 use build_asset::BuildAssetPlugin;
@@ -107,7 +106,7 @@ fn setup_3d(
     commands.spawn((
         Name::new("Sun"),
         DirectionalLight {
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             illuminance: lux::RAW_SUNLIGHT,
             shadow_depth_bias: 0.05,
             ..default()
@@ -126,6 +125,12 @@ fn setup_3d(
     //     MeshMaterial3d(materials.add(Color::from(bevy::color::palettes::css::SILVER))),
     //     Transform::from_scale(Vec3::splat(44.0)).with_translation(Vec3::new(0.,0., 0.)).with_rotation(Quat::from_axis_angle(Vec3::Z, 0.))
     // ));
+
+    // The atmosphere is its own entity; the camera only carries `AtmosphereSettings`.
+    commands.spawn((
+        Name::new("Atmosphere"),
+        Atmosphere::earth(scattering_mediums.add(ScatteringMedium::default())),
+    ));
 
     commands.spawn((
         Name::new("3d camera"),
@@ -151,7 +156,7 @@ fn setup_3d(
         Msaa::Off,
         TemporalAntiAliasing::default(),
         Transform::from_xyz(20.0, 20., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
+        AtmosphereSettings::default(),
         DistanceFog {
             color: Color::srgba(0.55, 0.58, 0.72, 0.6),
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),

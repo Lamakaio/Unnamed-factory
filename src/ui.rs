@@ -65,8 +65,8 @@ fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>, mut font: Re
                             parent.spawn((
                                 Text::new("Vertically Scrolling List"),
                                 TextFont {
-                                    font: font.0.clone(),
-                                    font_size: FONT_SIZE,
+                                    font: font.0.clone().into(),
+                                    font_size: FontSize::Px(FONT_SIZE),
                                     ..default()
                                 },
                                 Label,
@@ -127,7 +127,7 @@ pub fn update_building_list(
                             .spawn((
                                 Text(format!("Item {:}", building.name)),
                                 TextFont {
-                                    font: font.0.clone(),
+                                    font: font.0.clone().into(),
                                     ..default()
                                 },
                                 Label,

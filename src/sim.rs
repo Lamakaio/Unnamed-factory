@@ -113,7 +113,7 @@ fn run_rhai(
         }
         sim.initialized = true;
     }
-    if let Some(sc) = scripts.get_mut(&sim.run) {
+    if let Some(mut sc) = scripts.get_mut(&sim.run) {
         if sc.ast.is_none() {
             sc.ast = Some(sim.engine.compile_with_scope(&sim.scope, &sc.text)?);
         }
@@ -161,7 +161,7 @@ fn spawn_on(
                         },
                         Text(name.to_string()),
                         TextFont {
-                            font: font.clone(),
+                            font: font.clone().into(),
                             ..default()
                         },
                         Label,
@@ -178,7 +178,7 @@ fn spawn_on(
                 },
                 Text(format!("{} : {}", name, f)),
                 TextFont {
-                    font: font.clone(),
+                    font: font.clone().into(),
                     ..default()
                 },
                 Label,
