@@ -7,7 +7,6 @@
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
     mesh_view_bindings as view_bindings,
-    decal::clustered::apply_decal_base_color,
 }
 
 #ifdef PREPASS_PIPELINE
@@ -97,12 +96,6 @@ fn fragment(
     }
 
     texture = mix(texture, ocean_color, mix_hydro);
-
-    texture = apply_decal_base_color(
-        in.world_position.xyz,
-        in.position.xy,
-        texture
-    );
 
 
     pbr_input.material.base_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);

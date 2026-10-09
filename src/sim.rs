@@ -14,7 +14,7 @@ pub struct RhaiScript {
     ast: Option<rhai::AST>,
 }
 
-#[derive(Default)]
+#[derive(Default, TypePath)]
 pub struct RhaiScriptLoader;
 
 impl AssetLoader for RhaiScriptLoader {

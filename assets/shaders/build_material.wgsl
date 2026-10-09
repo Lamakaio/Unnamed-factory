@@ -6,7 +6,6 @@
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::alpha_discard,
     mesh_view_bindings as view_bindings,
-    decal::clustered::apply_decal_base_color,
 }
 
 #ifdef PREPASS_PIPELINE
@@ -51,12 +50,6 @@ fn fragment(
     // alpha discard
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-    // clustered decals
-    pbr_input.material.base_color = apply_decal_base_color(
-        in.world_position.xyz,
-        in.position.xy,
-        pbr_input.material.base_color
-    );
 
 #ifdef PREPASS_PIPELINE
     // write the gbuffer, lighting pass id, and optionally normal and motion_vector textures

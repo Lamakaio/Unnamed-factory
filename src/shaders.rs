@@ -162,7 +162,7 @@ pub struct MapMaterialParams {
 //     pub highlight_color: LinearRgba,
 // }
 
-#[derive(Default)]
+#[derive(Default, TypePath)]
 pub struct MapMaterialLoader;
 
 impl AssetLoader for MapMaterialLoader {

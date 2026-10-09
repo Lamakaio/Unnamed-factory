@@ -33,7 +33,7 @@ struct BuildingFile {
     script: String,
 }
 
-#[derive(Default)]
+#[derive(Default, TypePath)]
 pub struct BuildingLoader;
 
 impl AssetLoader for BuildingLoader {

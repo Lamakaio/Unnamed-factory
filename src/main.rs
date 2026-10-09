@@ -22,7 +22,7 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     light::light_consts::lux,
     pbr::{
-        Atmosphere,
+        Atmosphere, ScatteringMedium,
         wireframe::{WireframeConfig, WireframePlugin},
     },
     post_process::bloom::Bloom,
@@ -101,6 +101,7 @@ struct Sun;
 /// Setup the 3D environnement. Mostly a placeholder.
 fn setup_3d(
     mut commands: Commands,
+    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
     //mut materials: ResMut<Assets<StandardMaterial>>, mut meshes: ResMut<Assets<Mesh>>
 ) {
     commands.spawn((
@@ -150,7 +151,7 @@ fn setup_3d(
         Msaa::Off,
         TemporalAntiAliasing::default(),
         Transform::from_xyz(20.0, 20., 20.0).looking_at(Vec3::ZERO, Vec3::Y),
-        Atmosphere::EARTH,
+        Atmosphere::earthlike(scattering_mediums.add(ScatteringMedium::default())),
         DistanceFog {
             color: Color::srgba(0.55, 0.58, 0.72, 0.6),
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
@@ -189,7 +190,7 @@ fn toggle_bounding_box(
     }
     if bb_config.0 {
         for (aabb, transform) in aabb_query {
-            gizmos.cuboid(
+            gizmos.cube(
                 Transform::from_translation(
                     Vec3::from(aabb.center) * transform.scale() + transform.translation(),
                 )
