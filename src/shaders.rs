@@ -12,7 +12,6 @@ impl Plugin for ShadersPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             MaterialPlugin::<MapMaterial>::default(),
-            //MaterialPlugin::<BuildMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
@@ -45,26 +44,6 @@ impl MaterialExtension for TerrainShader {
     }
 }
 
-// const BUILD_SHADER_ASSET_PATH: &str = "shaders/extended_material.wgsl";
-
-// #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
-// #[reflect(PartialEq)]
-// pub struct BuildShader {
-//     //The color modification when a part is selected
-//     #[uniform(101)]
-//     pub highlight_color: LinearRgba,
-// }
-
-// impl MaterialExtension for BuildShader {
-//     fn fragment_shader() -> ShaderRef {
-//         BUILD_SHADER_ASSET_PATH.into()
-//     }
-
-//     fn deferred_fragment_shader() -> ShaderRef {
-//         BUILD_SHADER_ASSET_PATH.into()
-//     }
-// }
-
 fn deser_color<'de, D>(deserializer: D) -> Result<LinearRgba, D::Error>
 where D: Deserializer<'de> {
     let buf = <String>::deserialize(deserializer)?;
@@ -72,7 +51,6 @@ where D: Deserializer<'de> {
 }
 
 pub type MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>;
-//pub type BuildMaterial = ExtendedMaterial<StandardMaterial, BuildShader>;
 
 #[derive(Deserialize)]
 #[serde(default)]
@@ -153,15 +131,6 @@ pub struct MapMaterialParams {
     pub sand_color: LinearRgba,
 }
 
-// #[derive(Deserialize)]
-// pub struct BuildMaterialParams {
-//     #[serde(default)]
-//     #[serde(flatten)]
-//     pub pbr: StandardMaterialParams, 
-//     #[serde(deserialize_with = "deser_color")]
-//     pub highlight_color: LinearRgba,
-// }
-
 #[derive(Default, TypePath)]
 pub struct MapMaterialLoader;
 
@@ -198,13 +167,6 @@ impl AssetLoader for MapMaterialLoader {
     }
 }
 
-
-// #[derive(Default)]
-// pub struct BuildMaterialLoader;
-
-// impl AssetLoader for BuildMaterialLoader {
-//     type Asset = BuildMaterial;
-
 //     type Settings = ();
 
 //     type Error = anyhow::Error;
@@ -216,15 +178,6 @@ impl AssetLoader for MapMaterialLoader {
 //         load_context: &mut LoadContext<'_>,
 //     ) -> Result<Self::Asset, Self::Error> {
 //         let mut bytes = Vec::new();
-
-//         reader.read_to_end(&mut bytes).await?;
-//         let mat_params = ron::de::from_bytes::<BuildMaterialParams>(&bytes)?;
-//         let base = mat_params.pbr.to_mat(load_context);
-//         let extension = BuildShader {
-//             highlight_color: mat_params.highlight_color,
-//         };
-//         Ok(BuildMaterial {base, extension})
-//     }
 
 //     fn extensions(&self) -> &[&str] {
 //         &["bmat"]
