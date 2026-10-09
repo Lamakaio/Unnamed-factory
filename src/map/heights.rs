@@ -6,13 +6,23 @@
 
 use std::sync::Arc;
 
-use bevy::prelude::*;
-use worldgen::{Continent, Heightmap};
+use bevy::{
+    asset::RenderAssetUsages,
+    image::ImageSampler,
+    prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+};
+use half::f16;
+use worldgen::{Continent, Heightmap, noise::Noise};
 
 use super::{
     edits::{EditLayer, TerrainEdit},
     rivers::RiverLayer,
 };
+
+/// Ground colors are sampled at positions warped by up to this distance (world units), so
+/// borders between biomes don't follow the cell grid.
+const COLOR_WARP: f32 = 0.8;
 
 /// Distance used to compute normals by finite differences. It is the same at every LOD level,
 /// so lighting matches across LOD seams.
@@ -66,11 +76,49 @@ impl TerrainHeights {
     }
 
     pub fn normal(&self, p: Vec2) -> Vec3 {
-        let dx =
-            self.height(p + Vec2::X * NORMAL_EPSILON) - self.height(p - Vec2::X * NORMAL_EPSILON);
-        let dz =
-            self.height(p + Vec2::Y * NORMAL_EPSILON) - self.height(p - Vec2::Y * NORMAL_EPSILON);
-        Vec3::new(-dx, 2. * NORMAL_EPSILON, -dz).normalize()
+        let gradient = gradient(p, |q| self.height(q));
+        Vec3::new(-gradient.x, 1., -gradient.y).normalize()
+    }
+
+    /// Slope added by rivers and edits to the base surface (see [`Self::gradient_texture`]).
+    pub fn feature_gradient(&self, p: Vec2) -> Vec2 {
+        gradient(p, |q| self.height(q)) - gradient(p, |q| self.base.surface.bicubic(q))
+    }
+
+    /// The base surface height gradient as a texture (one texel per surface sample), for
+    /// per-pixel terrain normals, and the mapping from world xz to its coordinates
+    /// (`uv = xz * zw + xy`).
+    pub fn gradient_texture(&self) -> (Image, Vec4) {
+        let surface = &self.base.surface;
+        let size = surface.size;
+        let mut data = Vec::with_capacity(size * size * 4);
+        for z in 0..size as i64 {
+            for x in 0..size as i64 {
+                let gradient = Vec2::new(
+                    surface.at(x + 1, z) - surface.at(x - 1, z),
+                    surface.at(x, z + 1) - surface.at(x, z - 1),
+                ) / (2. * surface.cell);
+                for value in [gradient.x, gradient.y] {
+                    data.extend(f16::from_f32(value).to_le_bytes());
+                }
+            }
+        }
+        let mut image = Image::new(
+            Extent3d {
+                width: size as u32,
+                height: size as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rg16Float,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        image.sampler = ImageSampler::linear();
+        // Texel k is centered on world (k - size / 2) * cell.
+        let scale = 1. / (surface.cell * size as f32);
+        let offset = ((size / 2) as f32 + 0.5) / size as f32;
+        (image, Vec4::new(offset, offset, scale, scale))
     }
 
     pub fn add_edit(&mut self, edit: TerrainEdit) {
@@ -97,6 +145,14 @@ impl TerrainHeights {
     pub fn max_curvature(&self, min: Vec2, max: Vec2) -> f32 {
         self.base.max_curvature(min, max)
     }
+}
+
+/// Height gradient of `height` at `p`, by central differences.
+fn gradient(p: Vec2, height: impl Fn(Vec2) -> f32) -> Vec2 {
+    Vec2::new(
+        height(p + Vec2::X * NORMAL_EPSILON) - height(p - Vec2::X * NORMAL_EPSILON),
+        height(p + Vec2::Y * NORMAL_EPSILON) - height(p - Vec2::Y * NORMAL_EPSILON),
+    ) / (2. * NORMAL_EPSILON)
 }
 
 /// The continent's fine surface, lake mask and ground colors, with a max-curvature pyramid used
@@ -171,6 +227,7 @@ impl BaseGrid {
     }
 
     fn color(&self, p: Vec2) -> Vec3 {
+        let p = p + Noise::new(0xC010).warp(p / 3., 2, COLOR_WARP);
         Vec3::new(
             self.colors[0].bilinear(p),
             self.colors[1].bilinear(p),

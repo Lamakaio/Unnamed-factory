@@ -77,9 +77,9 @@ src/shaders.rs          ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMa
 src/sim.rs              SimPlugin: Rhai script asset + loader, init/tick (FixedUpdate), stats screen (BSN)
 src/ui.rs               UiPlugin: build menu (BSN), `label()` text scene, PointerOverUi system param
 assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
-assets/materials/map.mapmat terrain material params (pbr + biome colors as hex)
+assets/materials/map.mapmat terrain material params (pbr + tint as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
-assets/shaders/map_material.wesl   terrain fragment shader (WESL) (biome colouring from UV; based on bevy_wind_waker_shader)
+assets/shaders/map_material.wesl   terrain fragment shader (WESL): per-pixel normals from a gradient texture, rock on steep slopes
 ```
 
 ### Controls
@@ -108,9 +108,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `pan_orbit_camera_custom_input_plugin` example and runs in `PreUpdate`, before
   `SyncCameraPosition`. The camera controller applies deltas to `Transform`, so
   `keyboard_pan` (Update) and `keep_above_terrain` (PostUpdate) edit the transform directly.
-  The camera spawns at startup (it renders the loading screen) and `look_at_origin` places it
-  over the terrain at the origin on entering `InGame`.
-- **Environment**: sun `DirectionalLight` (`lux::RAW_SUNLIGHT`) and an `Atmosphere` entity
+  The camera spawns at startup (it renders the loading screen) and `look_at_start` places it
+  over `Continent::start_point()` on entering `InGame` (`UF_CAMERA=x,z[,dx,dy,dz]` overrides
+  the target and offset, for automated screenshots). The ambient light is a weak sky blue so
+  the sun shapes the relief.
+- **Environment**: sun `DirectionalLight` (`lux::RAW_SUNLIGHT`, low and from the side of the
+  starting view: front lighting makes the terrain look flat), 4 shadow cascades (first bound
+  25, max 600) with a 4096 shadow map, and an `Atmosphere` entity
   (`ScatteringMedium::default()`).
 - **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`, gizmo
   config groups `AabbGizmos` / `RiverGizmos` toggled with run conditions. Setting
@@ -122,19 +126,36 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `opt-level = 3` even in dev). `worldgen::generate(&WorldgenSettings)` builds one
   **continent**: a 512×512 grid of 1-unit cells (the continent spans ±256 world units around
   its own center; sea level is 0). Plan: several independent continents placed at offsets
-  instead of one bigger map (generation cost grows with area). Stages, ~2.5–3 s in total
-  (shape ~0.5 s, erosion ~2 s):
+  instead of one bigger map (generation cost grows with area). Stages, ~3.5–4.5 s in total
+  (shape ~0.7 s, erosion + post-processing ~2–3 s):
   1. **Shape** (`terrain.rs::shape`): domain-warped noisy disc coastline (sea forced near the
-     borders), uplift = hills + ridged mountain ranges in noise-selected regions − low plains,
-     erodibility (rock hardness) patches. Noise is the crate's own `noise.rs`
-     (Perlin + fBm / ridged / warp).
+     borders), then **tectonic provinces**: ~10 plates (warped Voronoi, blended over
+     `province_blend` cells), each with a random velocity and an interior type: plains, hill
+     country or plateau (`province_weights`). Per cell, `(d_k − d1)/2` approximates the
+     distance to the boundary with plate k (continuous where the nearest plate changes):
+     - strongly **converging** boundaries get a **mountain range belt** (`range_width` cells
+       each side) made of several parallel ridges (`ridge_spacing`, wavy) broken into peaks
+       and passes by ridged noise, plus wider foothills;
+     - **diverging** boundaries get rift basins (lowered uplift).
+     Provinces set uplift, erodibility (plateaus are hard caprock) and hillslope diffusion
+     (hills are rounded). `Shape::range` (belt weight) drives the `Landform` classification
+     and the detail ruggedness. Rain: orographic sweep along a prevailing wind (random per
+     seed), with sideways mixing and a blur, so ranges leave dry rain shadows. Noise is the
+     crate's own `noise.rs` (Perlin + fBm / ridged / warp).
   2. **Erosion** (`terrain.rs::erode`): stream power law `dh/dt = U − K·A^m·S` (n = 1), solved
      implicitly from the outlets upstream (Braun & Willett 2013), plus hillslope diffusion.
      Each step does a Priority-Flood with epsilon (Barnes 2014; depressions are filled), then
      **stochastic D8** routing (random slope weights against grid-aligned valleys), then
-     drainage accumulation. The sea is base level, fixed at 0 during erosion. Afterwards land
-     is scaled so the highest summit is `max_height` (60), and sea cells get their sea floor
-     depth.
+     drainage accumulation. The sea is base level, fixed at 0 during erosion. Afterwards:
+     - land is scaled so the 99th percentile of range cells is `max_height` (38), and sea
+       cells get their sea floor depth;
+     - `smooth_cells`: a light binomial blur (erosion leaves a 1-cell checker on flats);
+     - `shape_coast`: land rises `inland_rise` (3) over 100 cells from the coast, and is
+       capped by a ramp from the shore (gentle beaches; no cliffs dropping into the sea); the
+       sea floor starts as a shallow shelf;
+     - `cap_plateaus`: plateau provinces are cut at their cap level (tablelands, escarpments);
+     - `limit_slopes`: thermal erosion to a talus slope (~0.45–0.7 per cell, steeper on
+       plateau edges), so nothing is abruptly steep.
   3. **Lakes** (`lakes.rs`): valley sites (enough drainage, inland, spaced apart). A
      moraine-like dam disc 20–40 cells downstream is raised to the lake level, growing until it
      seals the valley; the valley is flooded upstream and the bed deepened. `find_lakes` then
@@ -148,22 +169,39 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      widths × flatness, tapered at the ends). Water levels follow the terrain
      (**breaching**, never filling), are never increasing downstream, and are finally clamped
      to the terrain under each point. Floodplains are flattened to water + 0.4 around
-     meandering reaches (`lib.rs::flatten_floodplains`).
-  - Output `Continent`: `heights`, `drainage`, `lake_of`, `lakes` (level + cells), `rivers`
-    (polylines of `RiverPoint { position, width, depth }` + `RiverEnd`), `timings`,
-    `start_point()` (beside the widest lowland river; the camera starts there).
+     meandering reaches (`lib.rs::flatten_floodplains`, soft edges). The final clamp
+     (`clamp_rivers_to_terrain`) uses the lowest fine surface across the channel width.
+  5. **Climate** (`climate.rs`): moisture = orographic rain on the final terrain + wet valley
+     floors (drainage, blurred so single-cell flow lines don't show), temperature from
+     altitude (`snow_line`), and a `Biome` per cell (beach, marsh, meadow, steppe, forests,
+     alpine, rock, snow; `Biome::color()` is shared by previews and the game).
+  6. **Detail** (`detail.rs`): the eroded grid upsampled ×4 (bicubic, 0.25 units) into
+     `Continent::surface`, with gullies on slopes (branching "erosion noise" stripes,
+     rotated lattice per octave, patchy strength) and small fBm roughness, scaled by
+     ruggedness and faded near rivers and lakes. Threaded with `std::thread::scope`.
+  - Output `Continent`: `heights` (coarse), `surface` (fine, what the game renders),
+    `drainage`, `lake_of`, `lakes` (level + cells), `rivers` (polylines of
+    `RiverPoint { position, width, depth }` + `RiverEnd`), `landform`, `ruggedness`,
+    `moisture`, `temperature`, `biome`, `wind_angle`, `timings`, `start_point()` (beside the
+    widest lowland river; the camera starts there).
   - **Preview tool**: `cargo run -p worldgen --release --example preview -- <out_dir> [seeds…]`
-    writes shaded-relief PNGs with rivers and lakes, and prints stats and timings. Use it to
-    tune generation without the game. Tests: `cargo test -p worldgen --release`.
+    writes `<seed>_biomes/_landforms/_relief.png` (hillshaded, with rivers and lakes) and
+    `<seed>_detail.png` (a crop of the fine surface), and prints per-landform height / slope
+    stats and timings. Use it to tune generation without the game. Don't pipe its output into
+    `head`: the broken pipe kills it before it writes the images. Tests:
+    `cargo test -p worldgen --release`.
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
   `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.
 - **Height function** (`map/heights.rs`, `TerrainHeights`, cheap `Arc` clones for tasks):
-  `height(p)` = base heightmap (the continent's 1-unit grid) with bicubic (Catmull-Rom)
+  `height(p)` = the continent's fine surface (0.25 units) with bicubic (Catmull-Rom)
   interpolation → river layer → edit layer. Beyond the continent the border values extend
-  (open sea). Wetness = river wetness, or bilinear lake mask. `Map::get_height` /
-  `Map::sample` use it, so the camera, placement and mesh always agree. Normals use finite
-  differences at a fixed epsilon (1/16).
+  (open sea). Wetness = river wetness, or bilinear lake mask. Ground colour = biome colours
+  (bilinear per cell, sampled at a noise-warped position so borders don't follow the grid).
+  `Map::get_height` / `Map::sample` use it, so the camera, placement and mesh always agree.
+  Normals use finite differences at a fixed epsilon (1/16). `gradient_texture()` bakes the
+  base surface gradient into an `Rg16Float` texture (one texel per surface sample) for the
+  terrain shader; `feature_gradient(p)` is what rivers and edits add on top.
   - **River layer** (`map/rivers.rs`): the generated river polylines, as segments in a spatial
     grid. Cross-section: a parabolic channel (`width`, `depth` below the water line), then
     banks from water + 0.15 back to the terrain over max(0.8, 0.6·width). It only ever lowers
@@ -180,9 +218,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     tolerance of 0.0015 × camera distance, never finer than a quarter of the base cell;
   - for rivers / edits overlapping it: river width / 6, or edit falloff width / 8, relaxed to
     0.003 × camera distance.
-  Patches don't share vertices across levels; skirts (2 cells deep) hide cracks. Vertex UV0 is
-  still **used as data** for the existing shader: `u` = 0.345 + 0.00455·height (sea level →
-  sand, grass, rock from ~16, snow above ~45), `v` = 1 + 99·wetness.
+  Patches don't share vertices across levels. Edge vertices next to a coarser leaf (found by
+  re-running the split test from the chunk root, `leaf_at`) are snapped onto the coarser
+  edge, so there are no T-junction cracks; skirts (2 cells deep) still hide cracks against
+  chunks meshed for another camera position. Vertex colours = biome colour, darkened in
+  river beds and under the sea. **UV0 is data**: the feature gradient (slope added by rivers
+  and edits), which the shader adds to the gradient texture.
 - **Chunks** (`map/mod.rs`): entities with `IsGround(coords)` + `TerrainChunk` LOD state,
   spawned within 6 chunks of the camera (never despawned). `schedule_chunk_meshes` starts
   at most 4 background mesh tasks, edited chunks first and then nearest. A chunk is re-meshed
@@ -224,10 +265,14 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   highlighted building.
 
 ### 3.4 Rendering (`shaders.rs`, `assets/shaders`)
-`MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>`. Five colours are bound as
-separate uniforms (bindings 100–104) and loaded from `.mapmat` RON, which also carries
-`StandardMaterialParams` (hex colours through `deser_color`). The shader is WESL
-(`map_material.wesl`).
+`MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>`, loaded from `.mapmat` RON
+(`StandardMaterialParams` + a `tint`, hex colours through `deser_color`). `TerrainShader`
+binds `tint` (100), the base surface gradient texture + sampler (101, 102) and its world →
+uv mapping (103). `map::bind_gradient_texture` sets the texture once the material is loaded
+(and again after a hot reload). The shader is WESL (`map_material.wesl`): base colour = vertex
+colour × tint; normal per pixel = texture gradient + UV feature gradient, so lighting keeps
+the full surface detail at any mesh LOD (vertex normals alone alias into a regular pattern on
+coarse patches); bare rock blends in on steep slopes (1 − N.y from 0.3 to 0.55).
 
 ### 3.5 Simulation (`sim.rs`, `assets/scripts`)
 - `RhaiScript` asset + loader. The `Sim` resource (`FromWorld` loads the scripts) holds the
@@ -259,6 +304,8 @@ nodes is still manual (`update_scroll_position`), as in Bevy's own example.
   revisit (e.g. draw the grid in the terrain shader) before any release.
 - Tests exist only for `worldgen`. The sim maths is pure and easy to unit-test too.
 - Lake dams are discs, so some show up as rounded hills next to their lake.
+- Plateau tops can hold small depression lakes (cap + slope limiting leave pits).
+- The beach is a fixed-width band (biome by distance to the sea and height).
 
 ---
 
@@ -517,7 +564,8 @@ of the migration work.
 5. Commit in small steps (one migration step or one refactor per commit).
 6. **Verify visually without a human:** run
    `UF_SCREENSHOT=<scratch>/shot.png cargo run` (optionally `UF_SCREENSHOT_DELAY=<secs>`). The
-   game saves a screenshot and exits, and you can then view the PNG. Also scan the log for
+   game saves a screenshot and exits, and you can then view the PNG. `UF_CAMERA=x,z[,dx,dy,dz]`
+   points the start view at world (x, z) from offset (dx, dy, dz). Also scan the log for
    `ERROR` / `panicked`. To exercise interactive paths (placement, sim screen), apply a
    *temporary* patch (e.g. a fake cursor at window centre, or trigger `StartPlacement` from
    `auto_screenshot`), take the screenshot, then revert the patch. Never move the user's real

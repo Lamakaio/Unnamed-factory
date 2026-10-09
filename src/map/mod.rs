@@ -70,6 +70,7 @@ impl Plugin for MapPlugin {
                     (spawn_chunks, schedule_chunk_meshes, finish_chunk_meshes)
                         .chain()
                         .run_if(in_state(AppState::InGame)),
+                    bind_gradient_texture.run_if(in_state(AppState::InGame)),
                 ),
             );
     }
@@ -79,6 +80,8 @@ impl Plugin for MapPlugin {
 #[derive(Resource)]
 pub struct Map {
     material: Handle<MapMaterial>,
+    /// Base surface gradient texture of the terrain shader, and its world mapping.
+    gradient: (Handle<Image>, Vec4),
     heights: TerrainHeights,
     /// Loaded chunk entities.
     chunks: HashMap<I64Vec2, Entity>,
@@ -160,9 +163,10 @@ pub enum PatchOp {
     Smooth,
 }
 
-/// The continent and its height function being generated on the [`AsyncComputeTaskPool`].
+/// The continent, its height function and gradient texture, being generated on the
+/// [`AsyncComputeTaskPool`].
 #[derive(Resource)]
-struct Generation(Task<(Continent, TerrainHeights)>);
+struct Generation(Task<(Continent, TerrainHeights, (Image, Vec4))>);
 
 /// Generate the world in the background, so the window stays responsive.
 fn start_generation(mut commands: Commands, seed: u32) {
@@ -173,6 +177,7 @@ fn start_generation(mut commands: Commands, seed: u32) {
             ..default()
         });
         let heights = TerrainHeights::new(&continent);
+        let gradient = heights.gradient_texture();
         info!(
             "World generated in {:.1?} ({} rivers, {} lakes): {:?}",
             start.elapsed(),
@@ -180,7 +185,7 @@ fn start_generation(mut commands: Commands, seed: u32) {
             continent.lakes.len(),
             continent.timings
         );
-        (continent, heights)
+        (continent, heights, gradient)
     });
     commands.insert_resource(Generation(task));
 }
@@ -190,14 +195,17 @@ fn finish_generation(
     mut commands: Commands,
     mut generation: ResMut<Generation>,
     asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some((continent, heights)) = check_ready(&mut generation.0) else {
+    let Some((continent, heights, (gradient, gradient_map))) = check_ready(&mut generation.0)
+    else {
         return;
     };
     commands.remove_resource::<Generation>();
     commands.insert_resource(Map {
         material: asset_server.load(MAP_MATERIAL),
+        gradient: (images.add(gradient), gradient_map),
         heights,
         chunks: default(),
         chunk_edits: default(),
@@ -205,6 +213,18 @@ fn finish_generation(
         continent,
     });
     next_state.set(AppState::InGame);
+}
+
+/// Give the terrain material its gradient texture, once loaded (and again after a hot reload).
+fn bind_gradient_texture(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial>>) {
+    let (texture, mapping) = &map.gradient;
+    let bound = materials
+        .get(&map.material)
+        .is_none_or(|material| material.extension.gradient.as_ref() == Some(texture));
+    if !bound && let Some(mut material) = materials.get_mut(&map.material) {
+        material.extension.gradient = Some(texture.clone());
+        material.extension.gradient_map = *mapping;
+    }
 }
 
 /// Marks terrain chunk entities, with their chunk coordinates.

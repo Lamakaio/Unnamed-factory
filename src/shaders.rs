@@ -20,12 +20,19 @@ impl Plugin for ShadersPlugin {
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 
 /// Terrain material extension. Ground colors come from the mesh vertex colors (biomes);
-/// `tint` multiplies them.
+/// `tint` multiplies them. Normals come from `gradient` (see `TerrainHeights::gradient_texture`).
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct TerrainShader {
     #[uniform(100)]
     pub tint: LinearRgba,
+    /// Base surface height gradient over the continent.
+    #[texture(101)]
+    #[sampler(102)]
+    pub gradient: Option<Handle<Image>>,
+    /// Mapping from world xz to `gradient` coordinates: `uv = xz * zw + xy`.
+    #[uniform(103)]
+    pub gradient_map: Vec4,
 }
 
 impl MaterialExtension for TerrainShader {
@@ -140,6 +147,8 @@ impl AssetLoader for MapMaterialLoader {
         let base = mat_params.pbr.to_mat(load_context);
         let extension = TerrainShader {
             tint: mat_params.tint,
+            gradient: None,
+            gradient_map: Vec4::ZERO,
         };
         Ok(MapMaterial {base, extension})
     }

@@ -49,14 +49,18 @@ pub struct WorldgenSettings {
     pub province_weights: [f32; 3],
     /// Width (cells) of the blend between neighbouring provinces.
     pub province_blend: f32,
-    /// Half-width (cells) of mountain ranges.
+    /// Half-width (cells) of mountain range belts.
     pub range_width: f32,
+    /// Distance (cells) between the parallel ridges of a range.
+    pub ridge_spacing: f32,
     /// Height (world units) of plateau tops.
     pub plateau_level: f32,
     /// Height of the highest summit, in world units.
     pub max_height: f32,
     /// Depth of the open sea, in world units.
     pub sea_depth: f32,
+    /// How much the land rises from the coast to 100 cells inland, in world units.
+    pub inland_rise: f32,
     pub erosion_steps: usize,
     pub erosion_dt: f32,
     /// Stream power erodibility K.
@@ -111,10 +115,12 @@ impl Default for WorldgenSettings {
             plate_count: 10,
             province_weights: [0.35, 0.4, 0.25],
             province_blend: 20.,
-            range_width: 18.,
-            plateau_level: 26.,
-            max_height: 60.,
+            range_width: 28.,
+            ridge_spacing: 13.,
+            plateau_level: 17.,
+            max_height: 38.,
             sea_depth: 20.,
+            inland_rise: 3.,
             erosion_steps: 60,
             erosion_dt: 2.,
             erodibility: 0.25,
@@ -125,7 +131,7 @@ impl Default for WorldgenSettings {
             base_rain: 0.012,
             orographic_rain: 0.1,
             land_evaporation: 0.6,
-            snow_line: 52.,
+            snow_line: 34.,
             lake_count: 5,
             lake_min_area: 300.,
             lake_spacing: 60.,
@@ -335,7 +341,10 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
             *h *= settings.max_height / reference;
         }
     }
+    terrain::smooth_cells(settings, &shape, &mut heights);
+    terrain::shape_coast(settings, &shape, noise, &mut heights);
     terrain::cap_plateaus(&shape, &mut heights);
+    terrain::limit_slopes(settings, &shape, &mut heights);
     lap("erosion", &mut timings);
 
     lakes::carve_lakes(settings, &mut heights, &shape.base_level, &shape.land, &mut rng);
@@ -427,13 +436,23 @@ fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16
     calm
 }
 
-/// Keep every river's water line at or below the surface under it (smoothing and meanders can
-/// move points over lower ground), and never flowing uphill.
+/// Keep every river's water line at or below the surface under it, across the whole channel
+/// width (smoothing and meanders can move points over lower ground, and coasts are low), and
+/// never flowing uphill.
 fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
     for river in rivers {
         let mut previous = f32::MAX;
-        for point in &mut river.points {
-            let terrain = surface.bilinear(point.position.truncate().with_y(point.position.z));
+        for i in 0..river.points.len() {
+            let points = &river.points;
+            let center = points[i].position.truncate().with_y(points[i].position.z);
+            let next = points[(i + 1).min(points.len() - 1)].position;
+            let last = points[i.saturating_sub(1)].position;
+            let across = (next - last).truncate().with_y(next.z - last.z).normalize_or_zero().perp();
+            let terrain = [-0.5, 0., 0.5]
+                .map(|side| surface.bilinear(center + across * side * points[i].width))
+                .into_iter()
+                .fold(f32::MAX, f32::min);
+            let point = &mut river.points[i];
             point.position.y = point.position.y.min(terrain).min(previous);
             previous = point.position.y;
         }
@@ -449,7 +468,7 @@ fn flatten_floodplains(
     valley: &[rivers::ValleyPoint],
 ) {
     for point in valley.iter().filter(|p| p.floodplain > 0.) {
-        let radius = point.floodplain * 1.3 + 1.;
+        let radius = point.floodplain * 1.5 + 2.;
         let target = point.water_level + 0.4;
         let (min, max) = (
             (point.position - radius).floor().max(Vec2::ZERO),
@@ -464,7 +483,7 @@ fn flatten_floodplains(
                     continue;
                 }
                 let distance = point.position.distance(Vec2::new(x as f32, z as f32));
-                let t = noise::smoothstep(radius * 0.6, radius, distance);
+                let t = noise::smoothstep(radius * 0.4, radius, distance);
                 heights[i] = heights[i].min(target + (heights[i] - target) * t);
             }
         }

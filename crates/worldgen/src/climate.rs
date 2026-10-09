@@ -6,7 +6,7 @@ use crate::{
     Biome, WorldgenSettings,
     flow::neighbours,
     noise::Noise,
-    terrain::rain_from,
+    terrain::{blur, rain_from},
 };
 
 pub struct Climate {
@@ -53,15 +53,21 @@ pub fn climate(
         frontier = next;
     }
 
+    // Valley floors along big drainage are wet. Spread over a few cells: single-cell drainage
+    // lines run straight across flat ground and would show as lines of vegetation.
+    let valley: Vec<f32> = drainage
+        .iter()
+        .map(|d| (d.max(1.).log10() - 2.).clamp(0., 2.) * 0.35)
+        .collect();
+    let valley = blur(size, &blur(size, &valley, 2), 2);
+
     for i in 0..n {
         let (x, z) = (i % size, i / size);
         let p = Vec2::new(x as f32, z as f32);
         let h = heights[i];
         let wobble = jitter.fbm(p / 25., 3) * 0.12;
 
-        // Valley floors along big drainage are wet.
-        let valley = (drainage[i].max(1.).log10() - 2.).clamp(0., 2.) * 0.35;
-        moisture[i] = rain[i] * (1. + wobble) + valley;
+        moisture[i] = rain[i] * (1. + wobble) + valley[i] * 1.5;
         temperature[i] = (1. - h / settings.snow_line + wobble * 0.6).clamp(0., 1.);
 
         let slope = neighbours(size, i)

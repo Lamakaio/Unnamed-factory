@@ -5878,6 +5878,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "foldhash 0.2.0",
+ "half",
  "kdtree-collisions",
  "rand",
  "rhai",

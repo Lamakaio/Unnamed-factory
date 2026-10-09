@@ -7,7 +7,7 @@
 
 use std::{fs::File, io::BufWriter, path::Path};
 
-use worldgen::{Continent, WorldgenSettings, generate};
+use worldgen::{Continent, Landform, WorldgenSettings, generate};
 
 /// Output pixels per cell.
 const SCALE: usize = 2;
@@ -38,6 +38,7 @@ fn main() {
             println!("  {stage}: {time:.2?}");
         }
         let size = continent.size();
+        print_landform_stats(&continent);
         let maps: [(&str, Box<dyn Fn(usize) -> [f32; 3]>); 3] = [
             ("biomes", Box::new(|i| continent.biome[i].color())),
             ("landforms", Box::new(|i| continent.landform[i].color())),
@@ -54,6 +55,50 @@ fn main() {
         let (side, image) = render_detail(&continent);
         save(&path, side, &image);
         println!("  -> {}", out_dir.display());
+    }
+}
+
+/// Share of land, median and 95th percentile height and slope of each landform.
+fn print_landform_stats(continent: &Continent) {
+    let size = continent.size();
+    let land = continent.heights.iter().filter(|&&h| h > 0.).count().max(1);
+    for landform in [
+        Landform::Plains,
+        Landform::Hills,
+        Landform::Plateau,
+        Landform::Mountains,
+    ] {
+        let cells: Vec<usize> = (0..size * size)
+            .filter(|&i| continent.landform[i] == landform && continent.heights[i] > 0.)
+            .collect();
+        if cells.is_empty() {
+            continue;
+        }
+        let mut heights: Vec<f32> = cells.iter().map(|&i| continent.heights[i]).collect();
+        let mut slopes: Vec<f32> = cells
+            .iter()
+            .map(|&i| {
+                let (x, z) = ((i % size) as i64, (i / size) as i64);
+                let at = |x: i64, z: i64| {
+                    continent.heights
+                        [z.clamp(0, size as i64 - 1) as usize * size + x.clamp(0, size as i64 - 1) as usize]
+                };
+                let dx = (at(x + 1, z) - at(x - 1, z)) / 2.;
+                let dz = (at(x, z + 1) - at(x, z - 1)) / 2.;
+                (dx * dx + dz * dz).sqrt() / continent.settings.cell_size
+            })
+            .collect();
+        heights.sort_by(f32::total_cmp);
+        slopes.sort_by(f32::total_cmp);
+        let at = |values: &[f32], q: usize| values[(values.len() - 1) * q / 100];
+        println!(
+            "  {landform:?}: {:.0}% of land, height {:.1} / {:.1}, slope {:.2} / {:.2} (median / p95)",
+            100. * cells.len() as f32 / land as f32,
+            at(&heights, 50),
+            at(&heights, 95),
+            at(&slopes, 50),
+            at(&slopes, 95),
+        );
     }
 }
 
@@ -133,10 +178,15 @@ fn render_detail(continent: &Continent) -> (usize, Vec<[u8; 3]>) {
     for z in 0..side {
         for x in 0..side {
             let (gx, gz) = (x0 + x, z0 + z);
-            let dx = at(gx + 1, gz) - at(gx.saturating_sub(1), gz);
-            let dz = at(gx, gz + 1) - at(gx, gz.saturating_sub(1));
-            let shade = (0.8 + (-dx - dz) * 0.6 / surface.cell).clamp(0.1, 1.5);
-            image[z * side + x] = [(200. * shade).min(255.) as u8; 3];
+            let dx = (at(gx + 1, gz) - at(gx.saturating_sub(1), gz)) / (2. * surface.cell);
+            let dz = (at(gx, gz + 1) - at(gx, gz.saturating_sub(1))) / (2. * surface.cell);
+            // Lambert shading, light from the north west.
+            let normal = [-dx, 1., -dz];
+            let light = [-0.35, 0.87, -0.35];
+            let dot = (0..3).map(|k| normal[k] * light[k]).sum::<f32>()
+                / (dx * dx + 1. + dz * dz).sqrt()
+                / (0.35f32 * 0.35 * 2. + 0.87 * 0.87).sqrt();
+            image[z * side + x] = [(40. + 200. * dot.max(0.)).min(255.) as u8; 3];
         }
     }
     (side, image)

@@ -15,7 +15,6 @@ use bevy::{
     camera_controller::pan_orbit_camera::{
         DefaultPanOrbitCameraPlugins, SyncCameraPosition, prelude::component::PanOrbitCamera,
     },
-    color::palettes,
     core_pipeline::prepass::DepthPrepass,
     input::mouse::{MouseScrollUnit, MouseWheel},
     math::{DVec2, DVec3},
@@ -98,8 +97,9 @@ fn spawn_camera(mut commands: Commands) {
         Bloom::NATURAL,
         Exposure::SUNLIGHT,
         AmbientLight {
-            color: palettes::css::MIDNIGHT_BLUE.lighter(0.1).into(),
-            brightness: 30000.,
+            // Sky light: soft blue, weak enough for the sun to shape the relief.
+            color: Color::srgb(0.62, 0.72, 0.95),
+            brightness: 9000.,
             ..default()
         },
         DepthPrepass,
@@ -112,7 +112,7 @@ fn spawn_camera(mut commands: Commands) {
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
             directional_light_exponent: 50.0,
             falloff: FogFalloff::from_visibility_colors(
-                300.0, // distance in world units up to which objects retain visibility (>= 5% contrast)
+                700.0, // distance in world units up to which objects retain visibility (>= 5% contrast)
                 Color::srgb(0.796, 0.914, 0.929), // atmospheric extinction color (after light is lost due to absorption by atmospheric particles)
                 Color::srgb(0.8, 0.844, 1.0), // atmospheric inscattering color (light gained due to scattering from the sun)
             ),
@@ -121,11 +121,24 @@ fn spawn_camera(mut commands: Commands) {
 }
 
 /// Once the world is generated, look at the suggested starting point.
+///
+/// For automated screenshots, `UF_CAMERA=x,z` overrides the target (world position) and
+/// `UF_CAMERA=x,z,dx,dy,dz` the offset too.
 fn look_at_start(mut camera: Single<&mut Transform, With<PanOrbitCamera>>, map: Res<Map>) {
-    let start = map.continent.start_point();
+    let mut start = map.continent.start_point();
+    let mut offset = INITIAL_OFFSET;
+    if let Ok(view) = std::env::var("UF_CAMERA") {
+        let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if let [x, z, ..] = values[..] {
+            start = Vec2::new(x, z);
+        }
+        if let [_, _, dx, dy, dz] = values[..] {
+            offset = Vec3::new(dx, dy, dz);
+        }
+    }
     let target = Vec3::new(start.x, 0., start.y);
     let target = target.with_y(map.get_height(target));
-    **camera = Transform::from_translation(target + INITIAL_OFFSET).looking_at(target, Vec3::Y);
+    **camera = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
 }
 
 /// Pan the camera horizontally with the arrow keys, faster when the camera is higher up.

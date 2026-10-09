@@ -128,7 +128,6 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
             .collect();
         distances.sort_by(|a, b| a.0.total_cmp(&b.0));
         let (d1, a) = distances[0];
-        let (_, b) = distances[1];
         let mut weights = [0f32; 3];
         let mut total = 0.;
         let mut cap = 0.;
@@ -142,34 +141,52 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
         shape.provinces[i] = provinces;
         shape.plateau_cap[i] = cap / total;
 
-        // Boundary between the two nearest plates: distance to their bisector.
-        let (pa, pb) = (&plates[a], &plates[b]);
-        let axis = pb.center - pa.center;
-        let boundary = (w.distance_squared(pb.center) - d1 * d1) / (2. * axis.length());
-        let convergence = (pa.velocity - pb.velocity).dot(axis.normalize());
-        // Ranges along converging boundaries, with peaks and saddles along them.
-        let width = settings.range_width * (0.7 + 0.6 * peaks.layer(1).fbm(w / 90., 2).abs());
-        let collision = smoothstep(0.15, 0.9, convergence);
-        let ridge = (-(boundary / width).powi(2)).exp();
-        let summits = 0.45 + 0.55 * peaks.ridged(w / 45., 4);
-        let range = collision * ridge * summits;
-        let foothills = collision * (-(boundary / (width * 3.)).powi(2)).exp() * 0.25;
-        // Rift basins along diverging boundaries.
-        let rift = smoothstep(-0.2, -0.8, convergence) * (-(boundary / width).powi(2)).exp();
-        shape.range[i] = (range + foothills).min(1.);
+        // Boundaries of the nearest plate with its neighbours. `(d_k - d1) / 2` is about the
+        // distance to the boundary with plate k, and stays continuous where the nearest plate
+        // changes.
+        let width = settings.range_width * (0.8 + 0.45 * peaks.layer(1).fbm(w / 120., 2));
+        let (mut belt, mut foothills, mut rift, mut across) = (0f32, 0f32, 0f32, 0f32);
+        for &(dk, k) in &distances[1..4] {
+            let x = (dk - d1) / 2.;
+            let axis = (plates[k].center - plates[a].center).normalize_or_zero();
+            let convergence = (plates[a].velocity - plates[k].velocity).dot(axis);
+            let collision = smoothstep(0.45, 1.1, convergence);
+            // Ranges: a broad belt of uplift along converging boundaries...
+            let here = collision * smoothstep(1., 0.15, x / width);
+            if here > belt {
+                (belt, across) = (here, x);
+            }
+            foothills = foothills.max(collision * smoothstep(2.2, 0.6, x / width));
+            // ...and rift basins along diverging ones.
+            rift = rift.max(
+                smoothstep(-0.2, -0.8, convergence) * (-(x / (width * 0.6)).powi(2)).exp(),
+            );
+        }
+        // ...made of several parallel ridges (crests every `ridge_spacing` cells across the
+        // belt, wavy), broken into peaks and passes along them.
+        let phase = (across + 0.25 * settings.ridge_spacing * peaks.layer(2).fbm(w / 50., 3))
+            / settings.ridge_spacing;
+        let parallel = (0.5 + 0.5 * (phase * std::f32::consts::TAU).cos()).powf(1.5);
+        let summits = peaks.ridged(w / 32., 4);
+        let range = belt * (0.3 + 0.7 * (0.5 * parallel + 0.5 * summits));
+        let foothills = foothills * (0.5 + 0.5 * hills_noise.layer(5).fbm(w / 30., 3).abs());
+        shape.range[i] = (belt + foothills * 0.4).min(1.);
 
         // Province uplift, rock hardness and hillslope diffusion.
         let [plains, hills, plateau] = provinces;
         let rolling = 0.6 + 0.4 * hills_noise.fbm(w / 55., 4);
         let undulation = 0.5 + 0.5 * hills_noise.layer(3).fbm(w / 35., 3);
-        let interior = plains * 0.15 * undulation + hills * 0.32 * rolling + plateau * 1.0;
-        let uplift = (interior * (1. - 0.85 * rift) + range * 1.1 + foothills) * land.powf(1.5);
+        let interior = plains * 0.2 * undulation + hills * 0.9 * rolling + plateau * 1.0;
+        let uplift = (interior * (1. - 0.85 * rift) * (1. - belt * 0.5)
+            + range * 1.1
+            + foothills * 0.22)
+            * land.powf(1.5);
         shape.uplift[i] = uplift;
         shape.erodibility[i] = plains * 1.2 + hills * 1.3 + plateau * 0.12;
-        shape.erodibility[i] = shape.erodibility[i] * (1. - range) + 0.75 * range;
+        shape.erodibility[i] = shape.erodibility[i] * (1. - belt) + 0.75 * belt;
         shape.diffusion[i] = settings.diffusion
             * (plains * 0.6 + hills * 2.5 + plateau * 0.15)
-            * (1. - range * 0.6);
+            * (1. - belt * 0.4);
 
         shape.heights[i] = if shape.base_level[i] {
             0.
@@ -249,7 +266,10 @@ pub fn rain_from(settings: &WorldgenSettings, elevation: &[f32], sea: &[bool], s
         }
         let p = Vec2::new((i % size) as f32, (i / size) as f32);
         let upwind = p - wind;
-        let incoming = sample(&humidity, upwind);
+        // Air mixes sideways as it goes, so rain shadows don't leave sharp streaks.
+        let side = wind.perp() * 1.5;
+        let incoming = 0.5 * sample(&humidity, upwind)
+            + 0.25 * (sample(&humidity, upwind + side) + sample(&humidity, upwind - side));
         let rise = (elevation[i] - sample(elevation, upwind)).max(0.) * scale;
         let fallen = incoming * (settings.base_rain + settings.orographic_rain * rise).min(1.);
         rain[i] = fallen;
@@ -349,6 +369,120 @@ pub fn cap_plateaus(shape: &Shape, heights: &mut [f32]) {
         let capped = cap + (*h - cap) * 0.08;
         *h += (capped - *h) * smoothstep(0.2, 0.7, weight);
     }
+}
+
+/// Shores: land rises gradually from the water line (gentle on plains, steeper by ranges) and
+/// the sea floor slopes down from it as a shelf, so the coast never drops straight from the
+/// eroded land to the sea floor. The whole land also rises gently inland, so lowlands away
+/// from the coast stand a few units above the sea.
+pub fn shape_coast(settings: &WorldgenSettings, shape: &Shape, noise: Noise, heights: &mut [f32]) {
+    let size = settings.size;
+    let to_sea = distance_field(size, &shape.base_level);
+    let land: Vec<bool> = shape.base_level.iter().map(|sea| !sea).collect();
+    let to_land = distance_field(size, &land);
+    let variation = noise.layer(30);
+    for (i, h) in heights.iter_mut().enumerate() {
+        let p = Vec2::new((i % size) as f32, (i / size) as f32);
+        if shape.base_level[i] {
+            let shelf = -0.3 - 0.35 * (to_land[i] - 1.).max(0.);
+            *h = h.max(shelf);
+        } else {
+            let slope = (0.25 + 0.3 * (0.5 + 0.5 * variation.fbm(p / 60., 3)) + 0.5 * shape.range[i])
+                * settings.cell_size;
+            let ramp = 0.15 + slope * (to_sea[i] - 0.5);
+            let inland = settings.inland_rise * smoothstep(0., 100., to_sea[i]);
+            *h = smooth_min(*h + inland, ramp, 1.).max(0.1);
+        }
+    }
+}
+
+/// Collapse slopes steeper than the rock can hold (thermal erosion): material slides from
+/// higher cells to their lower neighbours. Ranges hold steeper slopes, plateau escarpments the
+/// steepest.
+pub fn limit_slopes(settings: &WorldgenSettings, shape: &Shape, heights: &mut [f32]) {
+    let size = settings.size;
+    let talus: Vec<f32> = (0..size * size)
+        .map(|i| {
+            let plateau = shape.provinces[i][2] * (1. - shape.range[i]);
+            (0.45 + 0.25 * shape.range[i] + 0.8 * plateau) * settings.cell_size
+        })
+        .collect();
+    for _ in 0..200 {
+        let mut delta = vec![0f32; heights.len()];
+        for i in 0..heights.len() {
+            if shape.base_level[i] {
+                continue;
+            }
+            for (j, distance) in neighbours(size, i) {
+                let excess = heights[i] - heights[j] - talus[i] * distance;
+                if excess > 0. {
+                    // A small fraction per step and neighbour keeps it stable.
+                    let moved = excess * 0.04;
+                    delta[i] -= moved;
+                    if !shape.base_level[j] {
+                        delta[j] += moved;
+                    }
+                }
+            }
+        }
+        for (h, d) in heights.iter_mut().zip(delta) {
+            *h += d;
+        }
+    }
+}
+
+/// Remove cell-sized noise left by erosion (flow routing on near-flat ground leaves a checker
+/// pattern): blend land toward a 3×3 binomial blur.
+pub fn smooth_cells(settings: &WorldgenSettings, shape: &Shape, heights: &mut [f32]) {
+    let size = settings.size;
+    let source = heights.to_vec();
+    let at = |x: usize, z: usize| source[z * size + x];
+    for z in 1..size - 1 {
+        for x in 1..size - 1 {
+            let i = z * size + x;
+            if shape.base_level[i] {
+                continue;
+            }
+            let row = |z: usize| at(x - 1, z) + 2. * at(x, z) + at(x + 1, z);
+            let blurred = (row(z - 1) + 2. * row(z) + row(z + 1)) / 16.;
+            heights[i] = 0.3 * source[i] + 0.7 * blurred;
+        }
+    }
+}
+
+/// Distance (cells) from each cell to the nearest cell of `mask` (chamfer approximation).
+pub fn distance_field(size: usize, mask: &[bool]) -> Vec<f32> {
+    let mut distance: Vec<f32> = mask.iter().map(|&m| if m { 0. } else { f32::MAX }).collect();
+    let diagonal = std::f32::consts::SQRT_2;
+    let forward = [(-1, 0, 1.), (0, -1, 1.), (-1, -1, diagonal), (1, -1, diagonal)];
+    let backward = [(1, 0, 1.), (0, 1, 1.), (1, 1, diagonal), (-1, 1, diagonal)];
+    let mut relax = |x: usize, z: usize, offsets: &[(i64, i64, f32)]| {
+        let i = z * size + x;
+        for &(dx, dz, cost) in offsets {
+            let (nx, nz) = (x as i64 + dx, z as i64 + dz);
+            if nx >= 0 && nz >= 0 && (nx as usize) < size && (nz as usize) < size {
+                let candidate = distance[nz as usize * size + nx as usize] + cost;
+                distance[i] = distance[i].min(candidate);
+            }
+        }
+    };
+    for z in 0..size {
+        for x in 0..size {
+            relax(x, z, &forward);
+        }
+    }
+    for z in (0..size).rev() {
+        for x in (0..size).rev() {
+            relax(x, z, &backward);
+        }
+    }
+    distance
+}
+
+/// Polynomial smooth minimum: blends `a` and `b` over a band of `k` world units.
+fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    let h = (k - (a - b).abs()).max(0.) / k;
+    a.min(b) - h * h * k / 4.
 }
 
 /// Separable box blur of radius `radius` (cells).

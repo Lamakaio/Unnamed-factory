@@ -15,6 +15,7 @@ kdtree-collisions = { git = "https://github.com/Lamakaio/kdtree-collisions.git" 
 rand = "0.10"
 rhai = { version = "1.26", features = ["sync", "metadata", "no_closure", "no_custom_syntax", "no_time", "only_i64"] }
 foldhash = "0.2"
+half = "2.7"
 worldgen = { path = "crates/worldgen" }
 
 

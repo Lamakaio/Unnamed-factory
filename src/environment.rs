@@ -1,10 +1,11 @@
 //! Sun and atmosphere.
 
-use std::f32::consts::PI;
-
 use bevy::{
     input::common_conditions::input_pressed,
-    light::{Atmosphere, atmosphere::ScatteringMedium, light_consts::lux},
+    light::{
+        Atmosphere, CascadeShadowConfigBuilder, DirectionalLightShadowMap,
+        atmosphere::ScatteringMedium, light_consts::lux,
+    },
     prelude::*,
 };
 
@@ -12,7 +13,8 @@ pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_environment)
+        app.insert_resource(DirectionalLightShadowMap { size: 4096 })
+            .add_systems(Startup, spawn_environment)
             .add_systems(Update, rotate_sun.run_if(input_pressed(KeyCode::KeyF)));
     }
 }
@@ -37,7 +39,16 @@ fn spawn_environment(
             shadow_depth_bias: 0.05,
             ..default()
         },
-        Transform::from_xyz(0.0, 10.0, 0.0).with_rotation(Quat::from_rotation_x(-PI / 4.)),
+        // Most shadow map resolution goes to the ground near the camera.
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            first_cascade_far_bound: 25.,
+            maximum_distance: 600.,
+            ..default()
+        }
+        .build(),
+        // Low afternoon sun from the side of the starting view, so relief casts shadows.
+        Transform::from_xyz(0.0, 10.0, 0.0).looking_to(Vec3::new(0.75, -0.55, -0.35), Vec3::Y),
     ));
 
     // The atmosphere is its own entity; the camera only carries `AtmosphereSettings`.
