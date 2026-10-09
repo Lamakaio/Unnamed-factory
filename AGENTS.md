@@ -572,9 +572,9 @@ of the migration work.
 - The look is toon / cel-shaded (see §3.4): keep new materials stylized (flat colours, crisp
   bands, rim lights), not PBR-realistic.
 - Credit every borrowed technique in `CREDITS.md` and in the code comment where it is used.
-- Custom terrain data should go in **custom vertex attributes** (`MeshVertexAttribute`) or a
-  data texture, not in UV0 (the terrain mesher still writes height/wetness into UV0 for the
-  existing shader).
+- Prefer data textures or **custom vertex attributes** (`MeshVertexAttribute`) for new
+  terrain data. The terrain mesh currently reuses UV0 (feature gradient) and vertex colour
+  red (wetness) as data, which works because the terrain has no real UVs or colours.
 - Group material uniforms into one `#[uniform(100)]` struct (`ShaderType`) instead of five
   bindings. Mirror the struct in WESL.
 - Keep shader asset paths as `const` next to the material type.
