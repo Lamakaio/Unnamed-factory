@@ -28,12 +28,6 @@ const ERROR_PER_DISTANCE: f32 = 0.0015;
 const FEATURE_CELL_PER_DISTANCE: f32 = 0.003;
 /// Base terrain detail stops at this fraction of the heightmap resolution.
 const MIN_BASE_CELL_RATIO: f32 = 0.5;
-/// Ground color (sRGB) of wet river beds.
-const WET_BED: [f32; 3] = [0.28, 0.26, 0.20];
-/// Ground under water is darkened at once by this factor (so shallows don't read as dry
-/// sand), then further over [`SEA_FLOOR_DARKENING`] world units of depth.
-const UNDERWATER_DARKENING: f32 = 0.6;
-const SEA_FLOOR_DARKENING: f32 = 25.;
 /// Skirt depth, in cells.
 const SKIRT_CELLS: f32 = 2.;
 
@@ -50,7 +44,6 @@ pub fn build_chunk_mesh(heights: &TerrainHeights, chunk: I64Vec2, camera: Vec3) 
         normals: Vec::new(),
         uvs: Vec::new(),
         colors: Vec::new(),
-        wet_bed: linear(WET_BED),
         indices: Vec::new(),
     };
     builder.visit(origin, CHUNK_SIZE);
@@ -74,8 +67,8 @@ struct MeshBuilder<'a> {
     normals: Vec<[f32; 3]>,
     /// Slope added by rivers and edits.
     uvs: Vec<[f32; 2]>,
+    /// Red: river and lake wetness, for the terrain shader.
     colors: Vec<[f32; 4]>,
-    wet_bed: Vec3,
     indices: Vec<u32>,
 }
 
@@ -143,14 +136,7 @@ impl MeshBuilder<'_> {
                 self.positions.push([local.x, sample.height, local.y]);
                 self.normals.push(self.heights.normal(p).to_array());
                 self.uvs.push(self.heights.feature_gradient(p).to_array());
-                // Biome color, dark beds under water (the shader adds rock on steep slopes).
-                let mut color = sample.color.lerp(self.wet_bed, sample.wetness * 0.8);
-                if sample.height < 0. {
-                    let shallow = (-sample.height / 0.3).min(1.);
-                    color *= (1. - (1. - UNDERWATER_DARKENING) * shallow)
-                        * (1. + sample.height / SEA_FLOOR_DARKENING).max(0.35);
-                }
-                self.colors.push(color.extend(1.).to_array());
+                self.colors.push([sample.wetness, 0., 0., 1.]);
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;
@@ -223,9 +209,4 @@ impl MeshBuilder<'_> {
             }
         }
     }
-}
-
-/// sRGB color to linear.
-fn linear([r, g, b]: [f32; 3]) -> Vec3 {
-    Vec3::from_array(Color::srgb(r, g, b).to_linear().to_f32_array_no_alpha())
 }

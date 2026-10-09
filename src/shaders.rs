@@ -19,8 +19,9 @@ impl Plugin for ShadersPlugin {
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 
-/// Terrain material extension. Ground colors come from the mesh vertex colors (biomes);
-/// `tint` multiplies them. Normals come from `gradient` (see `TerrainHeights::gradient_texture`).
+/// Terrain material extension. The shader draws the ground procedurally from the `ground`
+/// material weights (see `map::ground`); `tint` multiplies it. Normals come from `gradient`
+/// (see `TerrainHeights::gradient_texture`). Mesh vertex color red is the river/lake wetness.
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct TerrainShader {
@@ -33,6 +34,14 @@ pub struct TerrainShader {
     /// Mapping from world xz to `gradient` coordinates: `uv = xz * zw + xy`.
     #[uniform(103)]
     pub gradient_map: Vec4,
+    /// Ground material weights per continent cell (two textures, see `map::ground`).
+    #[texture(104)]
+    pub ground_a: Option<Handle<Image>>,
+    #[texture(105)]
+    pub ground_b: Option<Handle<Image>>,
+    /// Mapping from world xz to `ground_*` coordinates: `uv = xz * zw + xy`.
+    #[uniform(106)]
+    pub ground_map: Vec4,
 }
 
 impl MaterialExtension for TerrainShader {
@@ -149,6 +158,9 @@ impl AssetLoader for MapMaterialLoader {
             tint: mat_params.tint,
             gradient: None,
             gradient_map: Vec4::ZERO,
+            ground_a: None,
+            ground_b: None,
+            ground_map: Vec4::ZERO,
         };
         Ok(MapMaterial {base, extension})
     }

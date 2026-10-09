@@ -69,7 +69,7 @@ src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
-src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs
+src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs, ground.rs (ground material textures)
 crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
 src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
 src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
@@ -79,7 +79,7 @@ src/ui.rs               UiPlugin: build menu (BSN), `label()` text scene, Pointe
 assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
-assets/shaders/map_material.wesl   terrain fragment shader (WESL): per-pixel normals from a gradient texture, rock on steep slopes
+assets/shaders/map_material.wesl   terrain fragment shader (WESL): per-pixel normals, procedural ground materials
 ```
 
 ### Controls
@@ -235,8 +235,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   Patches don't share vertices across levels. Edge vertices next to a coarser leaf (found by
   re-running the split test from the chunk root, `leaf_at`) are snapped onto the coarser
   edge, so there are no T-junction cracks; skirts (2 cells deep) still hide cracks against
-  chunks meshed for another camera position. Vertex colours = biome colour, darkened in
-  river beds and under the sea. **UV0 is data**: the feature gradient (slope added by rivers
+  chunks meshed for another camera position. Vertex colour red = river/lake wetness (the
+  shader draws the ground). **UV0 is data**: the feature gradient (slope added by rivers
   and edits), which the shader adds to the gradient texture.
 - **Chunks** (`map/mod.rs`): entities with `IsGround(coords)` + `TerrainChunk` LOD state,
   spawned within 6 chunks of the camera (never despawned). `schedule_chunk_meshes` starts
@@ -284,12 +284,27 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
 ### 3.4 Rendering (`shaders.rs`, `assets/shaders`)
 `MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>`, loaded from `.mapmat` RON
 (`StandardMaterialParams` + a `tint`, hex colours through `deser_color`). `TerrainShader`
-binds `tint` (100), the base surface gradient texture + sampler (101, 102) and its world →
-uv mapping (103). `map::bind_gradient_texture` sets the texture once the material is loaded
-(and again after a hot reload). The shader is WESL (`map_material.wesl`): base colour = vertex
-colour × tint; normal per pixel = texture gradient + UV feature gradient, so lighting keeps
-the full surface detail at any mesh LOD (vertex normals alone alias into a regular pattern on
-coarse patches); bare rock blends in on steep slopes (1 − N.y from 0.3 to 0.55).
+binds `tint` (100), the base surface gradient texture + a shared sampler (101, 102) and its
+world → uv mapping (103), and two ground textures (104, 105) with their mapping (106).
+`map::bind_terrain_textures` sets the textures once the material is loaded (and again after a
+hot reload). The shader is WESL (`map_material.wesl`):
+- **Normals** per pixel = gradient texture + UV feature gradient (rivers, edits) + small
+  material bumps, so lighting keeps the full surface detail at any mesh LOD (vertex normals
+  alone alias into a regular pattern on coarse patches).
+- **Ground** is drawn procedurally from world-space value noise (fBm with octaves fading out
+  below a pixel, from the pixel footprint): grass (lush → dry, colour drift, tufts, fine
+  grain, dirt patches), alpine grass, forest floors (undergrowth/litter, moss/needles), marsh
+  (reeds, mud, shiny puddles), sand (grain, ripples), rock (triplanar mottling, strata,
+  cracks), snow, wet river/lake beds, sea floor (sand → mud, darker with depth). Each sets
+  albedo, roughness and bump amplitude.
+- **Weights** come from `map::ground` textures (one texel per continent cell, RGBA8):
+  `ground_a` = sand, rock, snow, marsh (from biomes, snow from temperature); `ground_b` =
+  dryness (from moisture), deciduous, conifer, alpine (from temperature). They are sampled
+  at a noise-warped position and sharpened with noise (`edge`), so borders are irregular.
+  Rock on steep slopes (1 − N.y from ~0.28 to 0.45) and snow sliding off them are per pixel.
+  Mesh vertex colour red is the river/lake wetness (the only per-vertex ground data).
+- Tune colours in the shader (they are sRGB constants through `srgb()`); `tint` multiplies
+  everything.
 
 ### 3.5 Simulation (`sim.rs`, `assets/scripts`)
 - `RhaiScript` asset + loader. The `Sim` resource (`FromWorld` loads the scripts) holds the

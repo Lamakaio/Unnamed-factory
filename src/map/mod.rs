@@ -9,6 +9,7 @@
 //!   ([`mesh`]), and re-meshed when the camera moves enough or an edit touches them.
 
 mod edits;
+mod ground;
 mod heights;
 mod mesh;
 mod rivers;
@@ -70,7 +71,7 @@ impl Plugin for MapPlugin {
                     (spawn_chunks, schedule_chunk_meshes, finish_chunk_meshes)
                         .chain()
                         .run_if(in_state(AppState::InGame)),
-                    bind_gradient_texture.run_if(in_state(AppState::InGame)),
+                    bind_terrain_textures.run_if(in_state(AppState::InGame)),
                 ),
             );
     }
@@ -80,8 +81,8 @@ impl Plugin for MapPlugin {
 #[derive(Resource)]
 pub struct Map {
     material: Handle<MapMaterial>,
-    /// Base surface gradient texture of the terrain shader, and its world mapping.
-    gradient: (Handle<Image>, Vec4),
+    /// Textures of the terrain shader.
+    textures: TerrainTextures,
     heights: TerrainHeights,
     /// Loaded chunk entities.
     chunks: HashMap<I64Vec2, Entity>,
@@ -163,10 +164,25 @@ pub enum PatchOp {
     Smooth,
 }
 
-/// The continent, its height function and gradient texture, being generated on the
-/// [`AsyncComputeTaskPool`].
+/// Textures of the terrain shader, with their mappings from world xz (`uv = xz * zw + xy`).
+struct TerrainTextures {
+    gradient: Handle<Image>,
+    gradient_map: Vec4,
+    ground: [Handle<Image>; 2],
+    ground_map: Vec4,
+}
+
+/// Generated world data, before it becomes a [`Map`].
+struct GeneratedWorld {
+    continent: Continent,
+    heights: TerrainHeights,
+    gradient: (Image, Vec4),
+    ground: ([Image; 2], Vec4),
+}
+
+/// The world being generated on the [`AsyncComputeTaskPool`].
 #[derive(Resource)]
-struct Generation(Task<(Continent, TerrainHeights, (Image, Vec4))>);
+struct Generation(Task<GeneratedWorld>);
 
 /// Generate the world in the background, so the window stays responsive.
 fn start_generation(mut commands: Commands, seed: u32) {
@@ -178,6 +194,7 @@ fn start_generation(mut commands: Commands, seed: u32) {
         });
         let heights = TerrainHeights::new(&continent);
         let gradient = heights.gradient_texture();
+        let ground = ground::ground_textures(&continent);
         info!(
             "World generated in {:.1?} ({} rivers, {} lakes): {:?}",
             start.elapsed(),
@@ -185,7 +202,12 @@ fn start_generation(mut commands: Commands, seed: u32) {
             continent.lakes.len(),
             continent.timings
         );
-        (continent, heights, gradient)
+        GeneratedWorld {
+            continent,
+            heights,
+            gradient,
+            ground,
+        }
     });
     commands.insert_resource(Generation(task));
 }
@@ -198,32 +220,40 @@ fn finish_generation(
     mut images: ResMut<Assets<Image>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some((continent, heights, (gradient, gradient_map))) = check_ready(&mut generation.0)
-    else {
+    let Some(world) = check_ready(&mut generation.0) else {
         return;
     };
     commands.remove_resource::<Generation>();
     commands.insert_resource(Map {
         material: asset_server.load(MAP_MATERIAL),
-        gradient: (images.add(gradient), gradient_map),
-        heights,
+        textures: TerrainTextures {
+            gradient: images.add(world.gradient.0),
+            gradient_map: world.gradient.1,
+            ground: world.ground.0.map(|image| images.add(image)),
+            ground_map: world.ground.1,
+        },
+        heights: world.heights,
         chunks: default(),
         chunk_edits: default(),
         entities: KdTree::default(),
-        continent,
+        continent: world.continent,
     });
     next_state.set(AppState::InGame);
 }
 
-/// Give the terrain material its gradient texture, once loaded (and again after a hot reload).
-fn bind_gradient_texture(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial>>) {
-    let (texture, mapping) = &map.gradient;
-    let bound = materials
-        .get(&map.material)
-        .is_none_or(|material| material.extension.gradient.as_ref() == Some(texture));
+/// Give the terrain material its textures, once loaded (and again after a hot reload).
+fn bind_terrain_textures(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial>>) {
+    let textures = &map.textures;
+    let bound = materials.get(&map.material).is_none_or(|material| {
+        material.extension.gradient.as_ref() == Some(&textures.gradient)
+    });
     if !bound && let Some(mut material) = materials.get_mut(&map.material) {
-        material.extension.gradient = Some(texture.clone());
-        material.extension.gradient_map = *mapping;
+        let extension = &mut material.extension;
+        extension.gradient = Some(textures.gradient.clone());
+        extension.gradient_map = textures.gradient_map;
+        extension.ground_a = Some(textures.ground[0].clone());
+        extension.ground_b = Some(textures.ground[1].clone());
+        extension.ground_map = textures.ground_map;
     }
 }
 

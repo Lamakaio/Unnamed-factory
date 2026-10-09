@@ -1,5 +1,4 @@
-//! The continuous terrain height function: base surface (bicubic) + rivers + edits, and the
-//! ground color (biomes).
+//! The continuous terrain height function: base surface (bicubic) + rivers + edits.
 //!
 //! [`TerrainHeights`] is cheap to clone (layers are behind `Arc`s), so mesh building tasks get
 //! a snapshot of it.
@@ -13,29 +12,24 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use half::f16;
-use worldgen::{Continent, Heightmap, noise::Noise};
+use worldgen::{Continent, Heightmap};
 
 use super::{
     edits::{EditLayer, TerrainEdit},
     rivers::RiverLayer,
 };
 
-/// Ground colors are sampled at positions warped by up to this distance (world units), so
-/// borders between biomes don't follow the cell grid.
-const COLOR_WARP: f32 = 0.4;
 
 /// Distance used to compute normals by finite differences. It is the same at every LOD level,
 /// so lighting matches across LOD seams.
 const NORMAL_EPSILON: f32 = 1. / 16.;
 
-/// Height, wetness and ground color of a terrain point.
+/// Height and wetness of a terrain point.
 pub struct TerrainSample {
     /// World height.
     pub height: f32,
     /// How much the point is covered by a river or lake, from 0 to 1.
     pub wetness: f32,
-    /// Biome ground color (linear RGB).
-    pub color: Vec3,
 }
 
 #[derive(Clone)]
@@ -64,7 +58,6 @@ impl TerrainHeights {
         TerrainSample {
             height,
             wetness,
-            color: self.base.color(p),
         }
     }
 
@@ -155,7 +148,7 @@ fn gradient(p: Vec2, height: impl Fn(Vec2) -> f32) -> Vec2 {
     ) / (2. * NORMAL_EPSILON)
 }
 
-/// The continent's fine surface, lake mask and ground colors, with a max-curvature pyramid used
+/// The continent's fine surface and lake mask, with a max-curvature pyramid used
 /// to decide the mesh resolution needed to approximate the surface.
 ///
 /// Outside the continent, values extend the border (open sea).
@@ -163,8 +156,6 @@ struct BaseGrid {
     surface: Heightmap,
     /// 1 on lake cells, 0 elsewhere (per continent cell).
     lakes: Heightmap,
-    /// Biome ground color channels (linear RGB, per continent cell).
-    colors: [Heightmap; 3],
     /// `curvature[level]` has `size >> level` texels per side; each texel is the maximum
     /// absolute second difference (world units) over the surface samples it covers.
     curvature: Vec<Vec<f32>>,
@@ -180,15 +171,6 @@ impl BaseGrid {
                 .map(|lake| if lake.is_some() { 1. } else { 0. })
                 .collect(),
         );
-        let linear: Vec<[f32; 3]> = continent
-            .biome
-            .iter()
-            .map(|biome| {
-                let [r, g, b] = biome.color();
-                Color::srgb(r, g, b).to_linear().to_f32_array_no_alpha()
-            })
-            .collect();
-        let colors = [0, 1, 2].map(|k| continent.cell_map(linear.iter().map(|c| c[k]).collect()));
 
         let size = surface.size;
         let at = |x: usize, z: usize| surface.values[z * size + x];
@@ -221,18 +203,8 @@ impl BaseGrid {
         Self {
             surface,
             lakes,
-            colors,
             curvature,
         }
-    }
-
-    fn color(&self, p: Vec2) -> Vec3 {
-        let p = p + Noise::new(0xC010).warp(p / 6., 2, COLOR_WARP);
-        Vec3::new(
-            self.colors[0].bilinear(p),
-            self.colors[1].bilinear(p),
-            self.colors[2].bilinear(p),
-        )
     }
 
     fn max_curvature(&self, min: Vec2, max: Vec2) -> f32 {
