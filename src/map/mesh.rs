@@ -30,7 +30,9 @@ const FEATURE_CELL_PER_DISTANCE: f32 = 0.003;
 const MIN_BASE_CELL_RATIO: f32 = 0.5;
 /// Ground color (sRGB) of wet river beds.
 const WET_BED: [f32; 3] = [0.28, 0.26, 0.20];
-/// Depth (world units) over which the sea floor darkens.
+/// Ground under water is darkened at once by this factor (so shallows don't read as dry
+/// sand), then further over [`SEA_FLOOR_DARKENING`] world units of depth.
+const UNDERWATER_DARKENING: f32 = 0.6;
 const SEA_FLOOR_DARKENING: f32 = 25.;
 /// Skirt depth, in cells.
 const SKIRT_CELLS: f32 = 2.;
@@ -144,7 +146,9 @@ impl MeshBuilder<'_> {
                 // Biome color, dark beds under water (the shader adds rock on steep slopes).
                 let mut color = sample.color.lerp(self.wet_bed, sample.wetness * 0.8);
                 if sample.height < 0. {
-                    color *= (1. + sample.height / SEA_FLOOR_DARKENING).max(0.35);
+                    let shallow = (-sample.height / 0.3).min(1.);
+                    color *= (1. - (1. - UNDERWATER_DARKENING) * shallow)
+                        * (1. + sample.height / SEA_FLOOR_DARKENING).max(0.35);
                 }
                 self.colors.push(color.extend(1.).to_array());
             }

@@ -153,12 +153,13 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
 fn rivers_mesh(continent: &Continent) -> Mesh {
     let mut builder = SurfaceBuilder::default();
     for river in &continent.rivers {
-        // Stop where the river reaches the water it flows into: overlapping translucent
-        // surfaces would show as a darker patch.
-        let end_level = match river.end {
-            RiverEnd::Sea => 0.,
-            RiverEnd::Lake(lake) => continent.lakes[lake].level,
-            RiverEnd::Junction(_) => f32::MIN,
+        // Stop where the river reaches the water it flows into (its water line, or the ground
+        // under it, at that level): overlapping translucent surfaces show as a darker patch.
+        // Close to the sea level, the infinite sea surface already covers the carved channel.
+        let (end_level, margin) = match river.end {
+            RiverEnd::Sea => (0., 0.12),
+            RiverEnd::Lake(lake) => (continent.lakes[lake].level, 1e-3),
+            RiverEnd::Junction(_) => (f32::MIN, 0.),
         };
         let points = &river.points;
         let edges: Vec<(Vec3, Vec3)> = (0..points.len())
@@ -173,7 +174,8 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             })
             .collect();
         for (pair, ends) in edges.windows(2).zip(points.windows(2)) {
-            if ends[1].position.y <= end_level + 1e-3 {
+            let ground = continent.surface.bilinear(ends[1].position.xz());
+            if ends[1].position.y <= end_level + margin || ground <= end_level {
                 break;
             }
             let ((a_left, a_right), (b_left, b_right)) = (pair[0], pair[1]);

@@ -7,7 +7,7 @@
 
 use std::{fs::File, io::BufWriter, path::Path};
 
-use worldgen::{Continent, Landform, WorldgenSettings, generate};
+use worldgen::{Continent, Landform, Mouth, WorldgenSettings, generate};
 
 /// Output pixels per cell.
 const SCALE: usize = 2;
@@ -39,6 +39,21 @@ fn main() {
         }
         let size = continent.size();
         print_landform_stats(&continent);
+        let count = |kind| continent.mouths.iter().filter(|(_, m)| *m == kind).count();
+        println!(
+            "  mouths: {} plain, {} estuaries, {} deltas",
+            count(Mouth::Plain),
+            count(Mouth::Estuary),
+            count(Mouth::Delta)
+        );
+        for (river, _) in continent.mouths.iter().filter(|(_, m)| *m == Mouth::Delta) {
+            if let Some(apex) = continent.rivers[*river].points.last() {
+                println!(
+                    "    delta at {:.0}, {:.0}",
+                    apex.position.x, apex.position.z
+                );
+            }
+        }
         let maps: [(&str, Box<dyn Fn(usize) -> [f32; 3]>); 3] = [
             ("biomes", Box::new(|i| continent.biome[i].color())),
             ("landforms", Box::new(|i| continent.landform[i].color())),

@@ -10,6 +10,7 @@
 //! 3. **Lakes**: valley sites dammed at a level, found back with Priority-Flood.
 //! 4. **Rivers** (C): cells draining a large area, traced into smoothed, meandering polylines
 //!    with a width and depth from their discharge; floodplains are flattened along them.
+//!    Some mouths on the sea become deltas or estuaries.
 //! 5. **Climate and biomes** (E): moisture from orographic rain and wet valleys, temperature
 //!    from altitude, biome per cell.
 //! 6. **Detail** (D): the eroded grid upsampled to a finer surface with gullies on slopes.
@@ -22,6 +23,7 @@ mod detail;
 mod flow;
 mod heightmap;
 mod lakes;
+mod mouths;
 pub mod noise;
 mod rivers;
 mod terrain;
@@ -32,6 +34,7 @@ use bevy_math::{UVec2, Vec2, Vec3};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 pub use heightmap::Heightmap;
+pub use mouths::Mouth;
 
 /// Generation parameters. The defaults give a 512×512 unit continent.
 #[derive(Clone, Debug)]
@@ -92,6 +95,8 @@ pub struct WorldgenSettings {
     pub river_width: f32,
     /// Depth of a river where it starts, in world units.
     pub river_depth: f32,
+    /// River width (world units) from which mouths can build deltas.
+    pub delta_min_width: f32,
     /// Meander amplitude, in channel widths.
     pub meander_amplitude: f32,
     /// Valley slope above which rivers don't meander.
@@ -138,6 +143,7 @@ impl Default for WorldgenSettings {
             river_min_area: 400.,
             river_width: 0.5,
             river_depth: 0.4,
+            delta_min_width: 2.,
             meander_amplitude: 2.5,
             meander_max_slope: 0.06,
             detail_resolution: 4,
@@ -219,6 +225,9 @@ pub struct Continent {
     pub lake_of: Vec<Option<u16>>,
     pub lakes: Vec<Lake>,
     pub rivers: Vec<River>,
+    /// Mouth of each river ending in the sea (river index, kind). Delta distributaries are
+    /// extra rivers, after the original ones.
+    pub mouths: Vec<(usize, Mouth)>,
     pub landform: Vec<Landform>,
     /// 0 (smooth) .. 1 (rugged ranges).
     pub ruggedness: Vec<f32>,
@@ -362,8 +371,11 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_levels,
     );
     flatten_floodplains(size, &mut heights, &lake_of, &valley);
-    let deltas = river_deltas(settings, &rivers);
-    deposit_sediment(&mut heights, &shape.base_level, &lake_of, &shore, &deltas);
+    let (mouths, sediment, wetland) =
+        mouths::shape_mouths(settings, noise, &shore, &mut heights, &mut rivers);
+    // Deltas moved the shore.
+    let sea: Vec<bool> = heights.iter().map(|&h| h <= 0.).collect();
+    let shore = terrain::shore_distance(size, &sea);
     let drainage = flow::FlowGraph::new(size, &routing, &shape.base_level).accumulate(|_| 1.);
     lap("rivers", &mut timings);
 
@@ -373,7 +385,8 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &heights,
         &shape.base_level,
         &shore,
-        &deltas,
+        &sediment,
+        &wetland,
         &lake_of,
         &drainage,
     );
@@ -404,6 +417,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         lake_of,
         lakes,
         rivers,
+        mouths,
         landform,
         ruggedness,
         moisture: climate.moisture,
@@ -467,54 +481,6 @@ fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
             point.position.y = point.position.y.min(terrain).min(previous);
             previous = point.position.y;
         }
-    }
-}
-
-/// Sediment around the mouth of each river reaching the sea (0..1 per cell): larger rivers
-/// spread a wider fan.
-fn river_deltas(settings: &WorldgenSettings, rivers: &[River]) -> Vec<f32> {
-    let size = settings.size;
-    let half = (size / 2) as f32;
-    let mut deltas = vec![0f32; size * size];
-    for river in rivers.iter().filter(|river| river.end == RiverEnd::Sea) {
-        let Some(mouth) = river.points.last() else {
-            continue;
-        };
-        let center = mouth.position.truncate().with_y(mouth.position.z) / settings.cell_size + half;
-        let radius = 6. + 5. * mouth.width / settings.cell_size;
-        let (min, max) = ((center - radius).floor(), (center + radius).ceil());
-        for z in (min.y.max(0.) as usize)..=(max.y.min(size as f32 - 1.) as usize) {
-            for x in (min.x.max(0.) as usize)..=(max.x.min(size as f32 - 1.) as usize) {
-                let d = center.distance(Vec2::new(x as f32, z as f32));
-                let value = noise::smoothstep(radius, radius * 0.3, d);
-                deltas[z * size + x] = deltas[z * size + x].max(value);
-            }
-        }
-    }
-    deltas
-}
-
-/// River mouths: the land around them is a low, flat deposit plain, and the sea in front of
-/// them a shallow sediment fan.
-fn deposit_sediment(
-    heights: &mut [f32],
-    base_level: &[bool],
-    lake_of: &[Option<u16>],
-    shore: &[f32],
-    deltas: &[f32],
-) {
-    for i in 0..heights.len() {
-        let delta = deltas[i];
-        if delta <= 0. || lake_of[i].is_some() {
-            continue;
-        }
-        let h = heights[i];
-        let deposit = if base_level[i] {
-            h.max(-0.3 + 0.06 * shore[i]).min(-0.05)
-        } else {
-            h.min(0.25 + 0.06 * shore[i].max(0.))
-        };
-        heights[i] = h + (deposit - h) * delta;
     }
 }
 
@@ -587,7 +553,10 @@ mod tests {
     fn every_landform_appears() {
         let continent = small();
         for landform in [Landform::Plains, Landform::Hills, Landform::Plateau] {
-            assert!(continent.landform.contains(&landform), "{landform:?} missing");
+            assert!(
+                continent.landform.contains(&landform),
+                "{landform:?} missing"
+            );
         }
     }
 

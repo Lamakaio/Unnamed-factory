@@ -396,10 +396,7 @@ pub fn shape_coast(
 ) -> Vec<f32> {
     let size = settings.size;
     let to_sea = distance_field(size, &shape.base_level);
-    let land: Vec<bool> = shape.base_level.iter().map(|sea| !sea).collect();
-    let to_land = distance_field(size, &land);
-    let signed: Vec<f32> = to_sea.iter().zip(&to_land).map(|(s, l)| s - l).collect();
-    let shore = blur(size, &blur(size, &signed, 2), 2);
+    let shore = shore_distance(size, &shape.base_level);
     let variation = noise.layer(30);
     for (i, h) in heights.iter_mut().enumerate() {
         let p = Vec2::new((i % size) as f32, (i / size) as f32);
@@ -417,6 +414,16 @@ pub fn shape_coast(
         }
     }
     shore
+}
+
+/// Distance to the shore (cells, positive on land, negative at sea), blurred so it doesn't
+/// follow the cell staircase of the `sea` mask.
+pub fn shore_distance(size: usize, sea: &[bool]) -> Vec<f32> {
+    let to_sea = distance_field(size, sea);
+    let land: Vec<bool> = sea.iter().map(|sea| !sea).collect();
+    let to_land = distance_field(size, &land);
+    let signed: Vec<f32> = to_sea.iter().zip(&to_land).map(|(s, l)| s - l).collect();
+    blur(size, &blur(size, &signed, 2), 2)
 }
 
 /// Collapse slopes steeper than the rock can hold (thermal erosion): material slides from

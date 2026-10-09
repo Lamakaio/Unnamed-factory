@@ -23,7 +23,8 @@ pub fn climate(
     heights: &[f32],
     base_level: &[bool],
     shore: &[f32],
-    deltas: &[f32],
+    sediment: &[f32],
+    wetland: &[f32],
     lake_of: &[Option<u16>],
     drainage: &[f32],
 ) -> Climate {
@@ -50,18 +51,22 @@ pub fn climate(
         let h = heights[i];
         let wobble = jitter.fbm(p / 25., 3) * 0.12;
 
-        moisture[i] = rain[i] * (1. + wobble) + valley[i] * 1.5;
+        // Deltas are wetlands.
+        moisture[i] = rain[i] * (1. + wobble) + valley[i] * 1.5 + wetland[i] * 1.5;
         temperature[i] = (1. - h / settings.snow_line + wobble * 0.6).clamp(0., 1.);
 
         let slope = neighbours(size, i)
             .map(|(j, distance)| (heights[j] - h).abs() / distance)
             .fold(0., f32::max);
 
-        biome[i] = if base_level[i] || h <= 0. {
+        // By height: deltas turned some sea cells into land.
+        biome[i] = if h <= 0. {
             Biome::Sea
         } else if lake_of[i].is_some() {
             Biome::Lake
-        } else if shore[i] < beach_width(noise, p, deltas[i]) && h < 2. + deltas[i] && slope < 0.5
+        } else if shore[i] < beach_width(noise, p, sediment[i])
+            && h < 2. + sediment[i]
+            && slope < 0.5
         {
             Biome::Beach
         } else if temperature[i] < 0.08 {
@@ -91,8 +96,8 @@ pub fn climate(
 }
 
 /// Width of the beach (cells from the shore): varying along the coast, and wide on the
-/// sediment around river mouths.
-fn beach_width(noise: Noise, p: Vec2, delta: f32) -> f32 {
+/// sediment fans of river mouths.
+fn beach_width(noise: Noise, p: Vec2, sediment: f32) -> f32 {
     let variation = 0.5 + 0.5 * noise.layer(21).fbm(p / 45., 3);
-    1. + 3.5 * variation * variation + 9. * delta
+    1. + 3.5 * variation * variation + 9. * sediment
 }
