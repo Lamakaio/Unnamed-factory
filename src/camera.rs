@@ -23,7 +23,6 @@ use bevy::{
     pbr::AtmosphereSettings,
     picking::{
         PickingSystems,
-        hover::HoverMap,
         pointer::{
             PointerAction, PointerId, PointerInput, PointerInteraction, PointerLocation, PointerMap,
         },
@@ -35,7 +34,7 @@ use bevy::{
     window::PrimaryWindow,
 };
 
-use crate::map::Map;
+use crate::{map::Map, ui::PointerOverUi};
 
 pub struct CameraPlugin;
 
@@ -201,8 +200,7 @@ fn start_and_end_motions(
     mouse_input: Res<ButtonInput<MouseButton>>,
     cameras: Query<(Entity, &Camera, &RenderTarget, &PanOrbitCamera)>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
-    hover_map: Res<HoverMap>,
-    ui_nodes: Query<(), With<Node>>,
+    over_ui: PointerOverUi,
 ) {
     let zoom_stop = 0.0;
 
@@ -225,9 +223,7 @@ fn start_and_end_motions(
         }
     }
 
-    let over_ui = hover_map
-        .get(&PointerId::Mouse)
-        .is_some_and(|hits| hits.keys().any(|entity| ui_nodes.contains(*entity)));
+    let over_ui = over_ui.get();
 
     for (&pointer, pointer_location) in pointers
         .iter()

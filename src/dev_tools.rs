@@ -3,6 +3,7 @@
 //! - F2: building bounding boxes
 //! - F3: global wireframe
 //! - F4: river paths and lakes (on by default)
+//! - Clicking the terrain logs its generation data (height, gradient, hydrology).
 //!
 //! Setting `UF_SCREENSHOT=<path.png>` saves a screenshot after `UF_SCREENSHOT_DELAY` seconds
 //! (default 20) and exits. Agents use this to check visuals without a human.
@@ -17,7 +18,10 @@ use bevy::{
     render::view::screenshot::{Screenshot, save_to_disk},
 };
 
-use crate::{build::BuildId, map::Map};
+use crate::{
+    build::BuildId,
+    map::{IsGround, Map},
+};
 
 pub struct DevToolsPlugin;
 
@@ -31,6 +35,7 @@ impl Plugin for DevToolsPlugin {
         .init_gizmo_group::<AabbGizmos>()
         .init_gizmo_group::<RiverGizmos>()
         .add_systems(Startup, configure_gizmos)
+        .add_observer(log_terrain_on_click)
         .add_systems(
             Update,
             (
@@ -113,6 +118,26 @@ fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) -> Result {
         gizmos.sphere(Isometry3d::from_translation(pos), 10., PURPLE);
     }
     Ok(())
+}
+
+/// Log the generation data of the terrain point under a click.
+fn log_terrain_on_click(click: On<PointerClick>, chunks: Query<&IsGround>, map: Res<Map>) {
+    let Ok(IsGround(chunk_position)) = chunks.get(click.event_target()) else {
+        return;
+    };
+    let Some(index) = click
+        .hit
+        .position
+        .and_then(|pos| map.continent_index(*chunk_position, pos))
+    else {
+        return;
+    };
+    let point = &map.continent[index];
+    let hydro = map.continent.get_hydro(index.0, index.1);
+    info!(
+        "terrain {index:?}: height {} grad {} - water {} momentum {} - visit {}",
+        point.height, point.grad, hydro.amount, hydro.momentum, hydro.visit
+    );
 }
 
 /// Screenshot request from the `UF_SCREENSHOT` environment variable.

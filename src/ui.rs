@@ -1,19 +1,22 @@
 use bevy::{
     color::palettes::basic::*,
     input::mouse::{MouseScrollUnit, MouseWheel},
-    picking::hover::{HoverMap, Hovered},
+    picking::{
+        hover::{HoverMap, Hovered},
+        pointer::PointerId,
+    },
     prelude::*,
     ui::Pressed,
-    ui_widgets::{Activate, ActivateOnPress, Button},
+    ecs::system::SystemParam,
+    ui_widgets::{Activate, Button},
 };
 
-use crate::build::{BuildId, Building, setup_parts};
+use crate::build::{BuildId, Building, StartPlacement};
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        //setup ui needs the parts list first
-        app.add_systems(Startup, setup_ui.after(setup_parts));
+        app.add_systems(Startup, setup_ui);
         app.add_systems(
             Update,
             (update_scroll_position, update_button_appearance, update_building_list),
@@ -113,8 +116,6 @@ pub fn update_building_list(
                 parent
                     .spawn((
                         Button,
-                        // Start placing on press rather than on release.
-                        ActivateOnPress,
                         Hovered::default(),
                         Node {
                             min_height: Val::Px(2. * LINE_HEIGHT),
@@ -184,7 +185,22 @@ const PRESSED_BUTTON: Color = Color::srgb(0.35, 0.75, 0.35);
 /// Start placing the building of a part button when it is activated.
 fn start_placement(activate: On<Activate>, buttons: Query<&PartButton>, mut commands: Commands) {
     if let Ok(part_button) = buttons.get(activate.entity) {
-        commands.spawn((part_button.part_id.clone(), Name::new("building")));
+        commands.trigger(StartPlacement(part_button.part_id.0.clone()));
+    }
+}
+
+/// Whether the mouse pointer is currently over a UI node.
+#[derive(SystemParam)]
+pub struct PointerOverUi<'w, 's> {
+    hover_map: Res<'w, HoverMap>,
+    nodes: Query<'w, 's, (), With<Node>>,
+}
+
+impl PointerOverUi<'_, '_> {
+    pub fn get(&self) -> bool {
+        self.hover_map
+            .get(&PointerId::Mouse)
+            .is_some_and(|hits| hits.keys().any(|entity| self.nodes.contains(*entity)))
     }
 }
 

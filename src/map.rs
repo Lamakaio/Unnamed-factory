@@ -212,11 +212,17 @@ impl Chunk {
         chunk
     }
 
-    fn generate(&mut self, continent: &Continent) {
-        let world_pos = (self.chunk_position * (Self::CHUNK_SIZE as i64 - 1)
-            + Continent::CONTINENT_SIZE as i64 / 2)
+    /// Offset of a chunk's origin in continent grid coordinates.
+    ///
+    /// Positions past the continent wrap around it.
+    fn continent_offset(chunk_position: I64Vec2) -> I64Vec2 {
+        (chunk_position * (Self::CHUNK_SIZE as i64 - 1) + Continent::CONTINENT_SIZE as i64 / 2)
             .abs()
-            % ((Continent::CONTINENT_SIZE - Self::CHUNK_SIZE) as i64);
+            % ((Continent::CONTINENT_SIZE - Self::CHUNK_SIZE) as i64)
+    }
+
+    fn generate(&mut self, continent: &Continent) {
+        let world_pos = Self::continent_offset(self.chunk_position);
         self.grid.clear();
         for x in 0..Self::CHUNK_SIZE {
             for z in 0..Self::CHUNK_SIZE {
@@ -407,6 +413,17 @@ pub struct Map {
 }
 
 impl Map {
+    /// Continent grid coordinates of a world position inside a loaded chunk.
+    pub fn continent_index(&self, chunk_position: I64Vec2, pos: Vec3) -> Option<(u32, u32)> {
+        let chunk = self.chunks.get(&chunk_position)?;
+        let offset = Chunk::continent_offset(chunk_position);
+        let in_chunk = (pos - chunk.get_world_pos()) / GRID_SQUARE_SIZE;
+        Some((
+            in_chunk.x.floor() as u32 + offset.x as u32,
+            in_chunk.z.floor() as u32 + offset.y as u32,
+        ))
+    }
+
     /// Get a mutable reference to a chunk (and make/ load it if it doesnt already exists)
     pub fn get_chunk_mut<'a>(&'a mut self, pos: &I64Vec2) -> &'a mut Chunk {
         //Apparently it's the best way to insert an element if it doesnt already exists, and get a mut ref to the result.
