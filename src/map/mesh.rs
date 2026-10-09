@@ -25,11 +25,14 @@ const ERROR_PER_DISTANCE: f32 = 0.0015;
 /// Coarsest cell size allowed for rivers and edits, per world unit of camera distance.
 const FEATURE_CELL_PER_DISTANCE: f32 = 0.003;
 /// Base terrain detail stops at this fraction of the heightmap resolution.
-const MIN_BASE_CELL_RATIO: f32 = 0.25;
-/// Terrain shader color coordinate (`u`) at sea level, and per world unit above it: sand at
-/// the coast, grass, rock from ~16, snow above ~45.
-const COLOR_AT_SEA_LEVEL: f32 = 0.345;
-const COLOR_PER_HEIGHT: f32 = 0.00455;
+const MIN_BASE_CELL_RATIO: f32 = 0.5;
+/// Ground colors (sRGB) of bare rock on steep slopes and of wet river beds.
+const ROCK: [f32; 3] = [0.45, 0.42, 0.40];
+const WET_BED: [f32; 3] = [0.28, 0.26, 0.20];
+/// Slope steepness (1 - normal.y) range where ground turns to rock.
+const ROCK_STEEPNESS: (f32, f32) = (0.3, 0.55);
+/// Depth (world units) over which the sea floor darkens.
+const SEA_FLOOR_DARKENING: f32 = 25.;
 /// Skirt depth, in cells.
 const SKIRT_CELLS: f32 = 2.;
 
@@ -44,7 +47,9 @@ pub fn build_chunk_mesh(heights: &TerrainHeights, chunk: I64Vec2, camera: Vec3) 
         origin,
         positions: Vec::new(),
         normals: Vec::new(),
-        uvs: Vec::new(),
+        colors: Vec::new(),
+        rock: linear(ROCK),
+        wet_bed: linear(WET_BED),
         indices: Vec::new(),
     };
     builder.visit(origin, CHUNK_SIZE);
@@ -55,7 +60,7 @@ pub fn build_chunk_mesh(heights: &TerrainHeights, chunk: I64Vec2, camera: Vec3) 
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, builder.positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, builder.normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, builder.uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, builder.colors)
     .with_inserted_indices(Indices::U32(builder.indices))
 }
 
@@ -65,7 +70,9 @@ struct MeshBuilder<'a> {
     origin: Vec2,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
-    uvs: Vec<[f32; 2]>,
+    colors: Vec<[f32; 4]>,
+    rock: Vec3,
+    wet_bed: Vec3,
     indices: Vec<u32>,
 }
 
@@ -115,12 +122,17 @@ impl MeshBuilder<'_> {
                 let sample = self.heights.sample(p);
                 let local = p - self.origin;
                 self.positions.push([local.x, sample.height, local.y]);
-                self.normals.push(self.heights.normal(p).to_array());
-                // Read by the terrain shader: u = biome coordinate from height, v = river flag.
-                self.uvs.push([
-                    COLOR_AT_SEA_LEVEL + sample.height * COLOR_PER_HEIGHT,
-                    1. + 99. * sample.wetness,
-                ]);
+                let normal = self.heights.normal(p);
+                self.normals.push(normal.to_array());
+                // Biome color, bare rock on steep slopes, dark beds under water.
+                let (low, high) = ROCK_STEEPNESS;
+                let rock = ((1. - normal.y - low) / (high - low)).clamp(0., 1.);
+                let mut color = sample.color.lerp(self.rock, rock * rock * (3. - 2. * rock));
+                color = color.lerp(self.wet_bed, sample.wetness * 0.8);
+                if sample.height < 0. {
+                    color *= (1. + sample.height / SEA_FLOOR_DARKENING).max(0.35);
+                }
+                self.colors.push(color.extend(1.).to_array());
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;
@@ -151,7 +163,7 @@ impl MeshBuilder<'_> {
                 let [x, y, z] = self.positions[vertex as usize];
                 self.positions.push([x, y - depth, z]);
                 self.normals.push(self.normals[vertex as usize]);
-                self.uvs.push(self.uvs[vertex as usize]);
+                self.colors.push(self.colors[vertex as usize]);
             }
             for i in 0..PATCH_RES {
                 let (top_a, top_b) = (edge[i], edge[i + 1]);
@@ -161,4 +173,9 @@ impl MeshBuilder<'_> {
             }
         }
     }
+}
+
+/// sRGB color to linear.
+fn linear([r, g, b]: [f32; 3]) -> Vec3 {
+    Vec3::from_array(Color::srgb(r, g, b).to_linear().to_f32_array_no_alpha())
 }

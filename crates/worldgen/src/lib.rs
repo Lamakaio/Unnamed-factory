@@ -1,17 +1,26 @@
 //! Continent generation, independent of the game engine.
 //!
 //! Pipeline ([`generate`]):
-//! 1. **Shape** (A): warped coastline, uplift (mountain ranges / hills) and rock hardness.
-//! 2. **Erosion** (B): stream-power law with an implicit solver plus hillslope diffusion, which
-//!    carves dendritic valley networks; heights are then scaled to world units.
+//! 1. **Shape** (A): tectonic plates; province interiors (plains, hill country, plateau),
+//!    mountain ranges along converging plate boundaries, rift basins along diverging ones,
+//!    warped coastline, orographic rain from a prevailing wind.
+//! 2. **Erosion** (B): stream-power law with an implicit solver plus hillslope diffusion, with
+//!    per-province rock hardness and diffusion; heights are then scaled to world units and
+//!    plateaus capped into tablelands.
 //! 3. **Lakes**: valley sites dammed at a level, found back with Priority-Flood.
 //! 4. **Rivers** (C): cells draining a large area, traced into smoothed, meandering polylines
 //!    with a width and depth from their discharge; floodplains are flattened along them.
+//! 5. **Climate and biomes** (E): moisture from orographic rain and wet valleys, temperature
+//!    from altitude, biome per cell.
+//! 6. **Detail** (D): the eroded grid upsampled to a finer surface with gullies on slopes.
 //!
 //! Coordinates: cell `(x, z)` is at world `((x - size/2) * cell_size, (z - size/2) * cell_size)`
 //! relative to the continent center. Heights are world units, sea level is 0.
 
+mod climate;
+mod detail;
 mod flow;
+mod heightmap;
 mod lakes;
 pub mod noise;
 mod rivers;
@@ -20,7 +29,9 @@ mod terrain;
 use std::time::{Duration, Instant};
 
 use bevy_math::{UVec2, Vec2, Vec3};
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+pub use heightmap::Heightmap;
 
 /// Generation parameters. The defaults give a 512×512 unit continent.
 #[derive(Clone, Debug)]
@@ -32,8 +43,16 @@ pub struct WorldgenSettings {
     pub cell_size: f32,
     /// Radius of the land mass, as a fraction of the half size.
     pub land_radius: f32,
-    /// 0..1: how much of the land is mountain ranges.
-    pub mountainousness: f32,
+    /// Number of tectonic plates (provinces).
+    pub plate_count: usize,
+    /// Relative frequency of plate interiors: `[plains, hill country, plateau]`.
+    pub province_weights: [f32; 3],
+    /// Width (cells) of the blend between neighbouring provinces.
+    pub province_blend: f32,
+    /// Half-width (cells) of mountain ranges.
+    pub range_width: f32,
+    /// Height (world units) of plateau tops.
+    pub plateau_level: f32,
     /// Height of the highest summit, in world units.
     pub max_height: f32,
     /// Depth of the open sea, in world units.
@@ -44,10 +63,20 @@ pub struct WorldgenSettings {
     pub erodibility: f32,
     /// Stream power area exponent m (slope exponent n = 1).
     pub area_exponent: f32,
-    /// Hillslope diffusion D.
+    /// Base hillslope diffusion D (scaled per province).
     pub diffusion: f32,
     /// Random weight (0..) on slopes when routing flow during erosion, against grid artifacts.
     pub routing_jitter: f32,
+    /// Prevailing wind direction (radians); random from the seed when `None`.
+    pub wind_angle: Option<f32>,
+    /// Fraction of the air's moisture raining per cell on flat land.
+    pub base_rain: f32,
+    /// Extra rain fraction per unit of rise along the wind.
+    pub orographic_rain: f32,
+    /// Fraction of the rain over land that evaporates back into the air.
+    pub land_evaporation: f32,
+    /// Height (world units) where it gets cold enough for permanent snow.
+    pub snow_line: f32,
     pub lake_count: usize,
     /// Drainage area (cells) a lake site needs.
     pub lake_min_area: f32,
@@ -63,6 +92,13 @@ pub struct WorldgenSettings {
     pub meander_amplitude: f32,
     /// Valley slope above which rivers don't meander.
     pub meander_max_slope: f32,
+    /// Fine surface samples per cell side.
+    pub detail_resolution: usize,
+    /// Wavelength (world units) of the largest gullies.
+    pub detail_wavelength: f32,
+    pub detail_octaves: u32,
+    /// Gully depth (world units) on the most rugged slopes.
+    pub detail_amplitude: f32,
 }
 
 impl Default for WorldgenSettings {
@@ -72,7 +108,11 @@ impl Default for WorldgenSettings {
             size: 512,
             cell_size: 1.,
             land_radius: 0.8,
-            mountainousness: 0.5,
+            plate_count: 10,
+            province_weights: [0.35, 0.4, 0.25],
+            province_blend: 20.,
+            range_width: 18.,
+            plateau_level: 26.,
             max_height: 60.,
             sea_depth: 20.,
             erosion_steps: 60,
@@ -81,6 +121,11 @@ impl Default for WorldgenSettings {
             area_exponent: 0.45,
             diffusion: 0.05,
             routing_jitter: 1.,
+            wind_angle: None,
+            base_rain: 0.012,
+            orographic_rain: 0.1,
+            land_evaporation: 0.6,
+            snow_line: 52.,
             lake_count: 5,
             lake_min_area: 300.,
             lake_spacing: 60.,
@@ -89,6 +134,68 @@ impl Default for WorldgenSettings {
             river_depth: 0.4,
             meander_amplitude: 2.5,
             meander_max_slope: 0.06,
+            detail_resolution: 4,
+            detail_wavelength: 8.,
+            detail_octaves: 3,
+            detail_amplitude: 1.2,
+        }
+    }
+}
+
+/// Large-scale landform of a cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Landform {
+    Sea,
+    Plains,
+    Hills,
+    Plateau,
+    Mountains,
+}
+
+/// Biome of a cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Biome {
+    Sea,
+    Lake,
+    Beach,
+    Marsh,
+    Meadow,
+    Steppe,
+    DeciduousForest,
+    ConiferForest,
+    Alpine,
+    Rock,
+    Snow,
+}
+
+impl Biome {
+    /// Ground color (sRGB, 0..1), shared by previews and the game.
+    pub fn color(self) -> [f32; 3] {
+        match self {
+            Biome::Sea => [0.45, 0.42, 0.33],
+            Biome::Lake => [0.35, 0.33, 0.25],
+            Biome::Beach => [0.86, 0.80, 0.60],
+            Biome::Marsh => [0.36, 0.42, 0.22],
+            Biome::Meadow => [0.50, 0.68, 0.30],
+            Biome::Steppe => [0.72, 0.68, 0.40],
+            Biome::DeciduousForest => [0.26, 0.48, 0.18],
+            Biome::ConiferForest => [0.17, 0.34, 0.20],
+            Biome::Alpine => [0.55, 0.60, 0.45],
+            Biome::Rock => [0.48, 0.45, 0.42],
+            Biome::Snow => [0.94, 0.95, 0.97],
+        }
+    }
+}
+
+impl Landform {
+    /// Debug color (sRGB, 0..1).
+    pub fn color(self) -> [f32; 3] {
+        match self {
+            Landform::Sea => [0.15, 0.30, 0.55],
+            Landform::Plains => [0.55, 0.75, 0.35],
+            Landform::Hills => [0.35, 0.55, 0.25],
+            Landform::Plateau => [0.75, 0.55, 0.30],
+            Landform::Mountains => [0.55, 0.50, 0.50],
         }
     }
 }
@@ -96,14 +203,26 @@ impl Default for WorldgenSettings {
 /// A generated continent.
 pub struct Continent {
     pub settings: WorldgenSettings,
-    /// Terrain heights, row-major (`z * size + x`), world units.
+    /// Eroded terrain heights per cell, row-major (`z * size + x`), world units.
     pub heights: Vec<f32>,
+    /// Fine terrain surface (with gullies): what the game renders.
+    pub surface: Heightmap,
     /// Upstream drainage area of each cell, in cells.
     pub drainage: Vec<f32>,
     /// Lake of each cell, as an index in `lakes`.
     pub lake_of: Vec<Option<u16>>,
     pub lakes: Vec<Lake>,
     pub rivers: Vec<River>,
+    pub landform: Vec<Landform>,
+    /// 0 (smooth) .. 1 (rugged ranges).
+    pub ruggedness: Vec<f32>,
+    /// Relative moisture (mean ~1 on land).
+    pub moisture: Vec<f32>,
+    /// 0 (snow line) .. 1 (warm lowlands).
+    pub temperature: Vec<f32>,
+    pub biome: Vec<Biome>,
+    /// Prevailing wind direction (radians).
+    pub wind_angle: f32,
     /// Time spent in each stage.
     pub timings: Vec<(&'static str, Duration)>,
 }
@@ -166,6 +285,15 @@ impl Continent {
         let size = self.size() as f32;
         (g.x >= 0. && g.y >= 0. && g.x < size && g.y < size).then_some((g.x as usize, g.y as usize))
     }
+
+    /// Per-cell values as a [`Heightmap`] (for smooth sampling).
+    pub fn cell_map(&self, values: Vec<f32>) -> Heightmap {
+        Heightmap {
+            size: self.size(),
+            cell: self.settings.cell_size,
+            values,
+        }
+    }
 }
 
 /// Generate a continent.
@@ -173,6 +301,11 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     let size = settings.size;
     let noise = noise::Noise::new(settings.seed as u32);
     let mut rng = StdRng::seed_from_u64(settings.seed);
+    let mut settings = settings.clone();
+    let wind_angle = *settings
+        .wind_angle
+        .get_or_insert_with(|| rng.random_range(0.0..std::f32::consts::TAU));
+    let settings = &settings;
     let mut timings = Vec::new();
     let mut stage = Instant::now();
     let mut lap = |name: &'static str, timings: &mut Vec<(&'static str, Duration)>| {
@@ -180,34 +313,38 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         stage = Instant::now();
     };
 
-    let shape = terrain::shape(settings, noise);
+    let shape = terrain::shape(settings, noise, &mut rng);
     lap("shape", &mut timings);
 
     let mut heights = terrain::erode(settings, &shape);
-    // Erosion works in relative units: scale land to world units (drainage is preserved).
-    let highest = heights.iter().copied().fold(f32::MIN, f32::max).max(1e-6);
+    // Erosion works in relative units: scale land to world units (drainage is preserved). The
+    // mountain ranges set the scale, so each province keeps its own relief.
+    let mut summits: Vec<f32> = (0..heights.len())
+        .filter(|&i| !shape.base_level[i] && shape.range[i] > 0.5)
+        .map(|i| heights[i])
+        .collect();
+    if summits.is_empty() {
+        summits = heights.clone();
+    }
+    summits.sort_by(f32::total_cmp);
+    let reference = summits[(summits.len() - 1) * 99 / 100].max(1e-6);
     for (i, h) in heights.iter_mut().enumerate() {
         if shape.base_level[i] {
             *h = shape.sea_floor[i].min(-0.5);
         } else {
-            *h *= settings.max_height / highest;
+            *h *= settings.max_height / reference;
         }
     }
+    terrain::cap_plateaus(&shape, &mut heights);
     lap("erosion", &mut timings);
 
-    lakes::carve_lakes(
-        settings,
-        &mut heights,
-        &shape.base_level,
-        &shape.land,
-        &mut rng,
-    );
+    lakes::carve_lakes(settings, &mut heights, &shape.base_level, &shape.land, &mut rng);
     let (lakes, lake_of) = lakes::find_lakes(size, &heights, &shape.base_level, 20);
     lap("lakes", &mut timings);
 
     let routing = flow::priority_flood(size, &heights, &shape.base_level, 1e-4);
     let lake_levels: Vec<f32> = lakes.iter().map(|lake| lake.level).collect();
-    let (rivers, valley) = rivers::extract_rivers(
+    let (mut rivers, valley) = rivers::extract_rivers(
         settings,
         &heights,
         &routing,
@@ -216,40 +353,87 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_levels,
     );
     flatten_floodplains(size, &mut heights, &lake_of, &valley);
-    let mut rivers = rivers;
-    clamp_rivers_to_terrain(settings, &heights, &mut rivers);
     let drainage = flow::FlowGraph::new(size, &routing, &shape.base_level).accumulate(|_| 1.);
     lap("rivers", &mut timings);
+
+    let climate = climate::climate(settings, noise, &heights, &shape.base_level, &lake_of, &drainage);
+    let landform: Vec<Landform> = (0..size * size).map(|i| shape.landform(i)).collect();
+    let ruggedness: Vec<f32> = (0..size * size).map(|i| shape.ruggedness(i)).collect();
+    lap("climate", &mut timings);
+
+    let grid = |values: Vec<f32>| Heightmap {
+        size,
+        cell: settings.cell_size,
+        values,
+    };
+    let calm = calm_map(settings, &rivers, &lake_of);
+    let surface = detail::refine(
+        settings,
+        &grid(heights.clone()),
+        &grid(ruggedness.clone()),
+        &grid(calm),
+    );
+    clamp_rivers_to_terrain(&surface, &mut rivers);
+    lap("detail", &mut timings);
 
     Continent {
         settings: settings.clone(),
         heights,
+        surface,
         drainage,
         lake_of,
         lakes,
         rivers,
+        landform,
+        ruggedness,
+        moisture: climate.moisture,
+        temperature: climate.temperature,
+        biome: climate.biome,
+        wind_angle,
         timings,
     }
 }
 
-/// Keep every river's water line at or below the terrain under it (smoothing and meanders can
-/// move points over lower ground), and never flowing uphill.
-fn clamp_rivers_to_terrain(settings: &WorldgenSettings, heights: &[f32], rivers: &mut [River]) {
+/// 1 where fine detail must vanish (around rivers and lakes), per cell.
+fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16>]) -> Vec<f32> {
     let size = settings.size;
-    let at = |x: i64, z: i64| {
-        let max = size as i64 - 1;
-        heights[z.clamp(0, max) as usize * size + x.clamp(0, max) as usize]
-    };
+    let mut calm = vec![0f32; size * size];
+    let half = (size / 2) as f32;
+    for point in rivers.iter().flat_map(|river| &river.points) {
+        let center = point.position.truncate().with_y(point.position.z) / settings.cell_size + half;
+        let radius = (point.width * 1.1 + 2.) / settings.cell_size + 2.;
+        let (min, max) = ((center - radius).floor(), (center + radius).ceil());
+        for z in (min.y.max(0.) as usize)..=(max.y.min(size as f32 - 1.) as usize) {
+            for x in (min.x.max(0.) as usize)..=(max.x.min(size as f32 - 1.) as usize) {
+                let d = center.distance(Vec2::new(x as f32, z as f32));
+                let value = 1. - noise::smoothstep(radius - 2., radius, d);
+                calm[z * size + x] = calm[z * size + x].max(value);
+            }
+        }
+    }
+    for i in 0..size * size {
+        if lake_of[i].is_some() {
+            let (x, z) = ((i % size) as i64, (i / size) as i64);
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    let (nx, nz) = (x + dx, z + dz);
+                    if nx >= 0 && nz >= 0 && (nx as usize) < size && (nz as usize) < size {
+                        calm[nz as usize * size + nx as usize] = 1.;
+                    }
+                }
+            }
+        }
+    }
+    calm
+}
+
+/// Keep every river's water line at or below the surface under it (smoothing and meanders can
+/// move points over lower ground), and never flowing uphill.
+fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
     for river in rivers {
         let mut previous = f32::MAX;
         for point in &mut river.points {
-            let g = point.position.truncate().with_y(point.position.z) / settings.cell_size
-                + (size / 2) as f32;
-            let (cell, t) = (g.floor(), g - g.floor());
-            let (x, z) = (cell.x as i64, cell.y as i64);
-            let bottom = at(x, z) + (at(x + 1, z) - at(x, z)) * t.x;
-            let top = at(x, z + 1) + (at(x + 1, z + 1) - at(x, z + 1)) * t.x;
-            let terrain = bottom + (top - bottom) * t.y;
+            let terrain = surface.bilinear(point.position.truncate().with_y(point.position.z));
             point.position.y = point.position.y.min(terrain).min(previous);
             previous = point.position.y;
         }
@@ -297,6 +481,7 @@ mod tests {
             erosion_steps: 20,
             lake_spacing: 30.,
             river_min_area: 150.,
+            detail_resolution: 2,
             ..WorldgenSettings::default()
         })
     }
@@ -317,6 +502,14 @@ mod tests {
                 RiverEnd::Lake(lake) => assert!(lake < continent.lakes.len()),
                 RiverEnd::Sea => {}
             }
+        }
+    }
+
+    #[test]
+    fn every_landform_appears() {
+        let continent = small();
+        for landform in [Landform::Plains, Landform::Hills, Landform::Plateau] {
+            assert!(continent.landform.contains(&landform), "{landform:?} missing");
         }
     }
 

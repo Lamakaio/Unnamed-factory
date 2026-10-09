@@ -1,9 +1,17 @@
-//! Stage A (macro shape: coastline, uplift, rock hardness) and stage B (stream-power erosion).
+//! Stage A (macro shape: tectonic provinces, mountain ranges, coastline, rain) and stage B
+//! (stream-power erosion).
+//!
+//! The continent is split into tectonic plates (warped Voronoi cells). Each plate interior is a
+//! [`Landform`] province (plains, hill country or plateau). Mountain ranges rise along the
+//! boundaries where plates converge, and rift basins open where they diverge. Provinces set
+//! the erosion parameters, so the same physics produces floodplains, rounded hills, canyon-cut
+//! tablelands and sharp ranges.
 
 use bevy_math::Vec2;
+use rand::{Rng, RngExt};
 
 use crate::{
-    WorldgenSettings,
+    Landform, WorldgenSettings,
     flow::{FlowGraph, neighbours, priority_flood},
     noise::{Noise, hash, smoothstep},
 };
@@ -12,36 +20,88 @@ use crate::{
 pub struct Shape {
     /// 0 in the sea, 1 inland.
     pub land: Vec<f32>,
-    /// Tectonic uplift rate (relative, 0..1).
+    /// Tectonic uplift rate (relative).
     pub uplift: Vec<f32>,
-    /// Erodibility (relative): low values are hard rock that forms plateaus and steep ranges.
+    /// Erodibility (relative): low values are hard rock.
     pub erodibility: Vec<f32>,
+    /// Hillslope diffusion: high values round hills off.
+    pub diffusion: Vec<f32>,
+    /// Rain falling on each cell (relative, mean ~1 on land).
+    pub rain: Vec<f32>,
     /// Sea cells: fixed at sea level (0) during erosion; every river drains to them.
     pub base_level: Vec<bool>,
     /// Initial heights (a gentle land surface, 0 in the sea).
     pub heights: Vec<f32>,
     /// Sea floor depth (world units, negative), applied after erosion.
     pub sea_floor: Vec<f32>,
+    /// Weight of each province type per cell (`[plains, hills, plateau]`), and of mountain ranges.
+    pub provinces: Vec<[f32; 3]>,
+    pub range: Vec<f32>,
+    /// Cap level (world units) of the plateau the cell belongs to.
+    pub plateau_cap: Vec<f32>,
 }
 
-/// Stage A: coastline, mountain ranges and rock hardness from warped noise.
-pub fn shape(settings: &WorldgenSettings, noise: Noise) -> Shape {
+impl Shape {
+    /// Dominant landform of a cell.
+    pub fn landform(&self, i: usize) -> Landform {
+        if self.base_level[i] {
+            return Landform::Sea;
+        }
+        let [plains, hills, plateau] = self.provinces[i];
+        if self.range[i] > 0.35 {
+            Landform::Mountains
+        } else if plateau >= plains && plateau >= hills {
+            Landform::Plateau
+        } else if hills >= plains {
+            Landform::Hills
+        } else {
+            Landform::Plains
+        }
+    }
+
+    /// How rugged the surface is (0 smooth plains .. 1 sharp ranges), for fine detail.
+    pub fn ruggedness(&self, i: usize) -> f32 {
+        let [plains, hills, plateau] = self.provinces[i];
+        let interior = plains * 0.05 + hills * 0.45 + plateau * 0.3;
+        (interior + self.range[i]).clamp(0., 1.)
+    }
+}
+
+struct Plate {
+    center: Vec2,
+    velocity: Vec2,
+    /// Province type index: 0 plains, 1 hills, 2 plateau.
+    kind: usize,
+    /// Plateau cap level (world units), for plateau plates.
+    cap: f32,
+}
+
+/// Stage A: plates, provinces, ranges, coastline and rain.
+pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> Shape {
     let size = settings.size;
     let half = size as f32 / 2.;
     let n = size * size;
+    let plates = make_plates(settings, half, rng);
+
+    let coast = noise.layer(1);
+    let warp = noise.layer(2);
+    let peaks = noise.layer(3);
+    let hills_noise = noise.layer(4);
+    let surface = noise.layer(5);
+
     let mut shape = Shape {
         land: vec![0.; n],
         uplift: vec![0.; n],
         erodibility: vec![1.; n],
+        diffusion: vec![0.; n],
+        rain: vec![1.; n],
         base_level: vec![false; n],
         heights: vec![0.; n],
         sea_floor: vec![0.; n],
+        provinces: vec![[0.; 3]; n],
+        range: vec![0.; n],
+        plateau_cap: vec![0.; n],
     };
-    let coast = noise.layer(1);
-    let ranges = noise.layer(2);
-    let regions = noise.layer(3);
-    let rock = noise.layer(4);
-    let surface = noise.layer(5);
 
     for i in 0..n {
         let (x, z) = (i % size, i / size);
@@ -56,45 +116,174 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise) -> Shape {
         let land = smoothstep(0., 0.3, land) * smoothstep(4., 24., border);
         shape.land[i] = land;
         shape.base_level[i] = land < 0.02;
-
-        // Mountain ranges where the region noise says so; hills elsewhere.
-        let w = p + ranges.warp(p / 200., 3, 60.);
-        let mountainous = smoothstep(
-            -0.35,
-            0.35,
-            regions.fbm(w / 260., 3) + settings.mountainousness - 0.5,
-        );
-        let ridges = ranges.ridged(w / 170., 5);
-        let hills = 0.5 + 0.5 * ranges.layer(9).fbm(w / 90., 4);
-        // Plains: low, flat regions where rivers meander.
-        let plains = smoothstep(
-            0.1,
-            0.5,
-            regions.layer(7).fbm(w / 230., 3) - settings.mountainousness * 0.3,
-        );
-        let uplift = (0.12 + 0.25 * hills) * (1. - 0.8 * plains) + mountainous * ridges * 0.9;
-        shape.uplift[i] = land.powf(1.5) * uplift;
-
-        // Harder rock in patches.
-        shape.erodibility[i] = (1. + 0.6 * rock.fbm(w / 80., 4)).clamp(0.35, 1.6);
-
         // Deeper away from the coast (`radial` keeps decreasing offshore).
         shape.sea_floor[i] = -settings.sea_depth * smoothstep(0., -0.25, radial.min(land));
+
+        // Plates: warped Voronoi, blended softly between neighbouring provinces.
+        let w = p + warp.warp(p / 160., 3, 70.) + warp.layer(1).warp(p / 50., 2, 15.);
+        let mut distances: Vec<(f32, usize)> = plates
+            .iter()
+            .enumerate()
+            .map(|(k, plate)| (plate.center.distance(w), k))
+            .collect();
+        distances.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (d1, a) = distances[0];
+        let (_, b) = distances[1];
+        let mut weights = [0f32; 3];
+        let mut total = 0.;
+        let mut cap = 0.;
+        for &(d, k) in distances.iter().take(4) {
+            let weight = (-(d - d1) / settings.province_blend).exp();
+            weights[plates[k].kind] += weight;
+            cap += plates[k].cap * weight;
+            total += weight;
+        }
+        let provinces = weights.map(|weight| weight / total);
+        shape.provinces[i] = provinces;
+        shape.plateau_cap[i] = cap / total;
+
+        // Boundary between the two nearest plates: distance to their bisector.
+        let (pa, pb) = (&plates[a], &plates[b]);
+        let axis = pb.center - pa.center;
+        let boundary = (w.distance_squared(pb.center) - d1 * d1) / (2. * axis.length());
+        let convergence = (pa.velocity - pb.velocity).dot(axis.normalize());
+        // Ranges along converging boundaries, with peaks and saddles along them.
+        let width = settings.range_width * (0.7 + 0.6 * peaks.layer(1).fbm(w / 90., 2).abs());
+        let collision = smoothstep(0.15, 0.9, convergence);
+        let ridge = (-(boundary / width).powi(2)).exp();
+        let summits = 0.45 + 0.55 * peaks.ridged(w / 45., 4);
+        let range = collision * ridge * summits;
+        let foothills = collision * (-(boundary / (width * 3.)).powi(2)).exp() * 0.25;
+        // Rift basins along diverging boundaries.
+        let rift = smoothstep(-0.2, -0.8, convergence) * (-(boundary / width).powi(2)).exp();
+        shape.range[i] = (range + foothills).min(1.);
+
+        // Province uplift, rock hardness and hillslope diffusion.
+        let [plains, hills, plateau] = provinces;
+        let rolling = 0.6 + 0.4 * hills_noise.fbm(w / 55., 4);
+        let undulation = 0.5 + 0.5 * hills_noise.layer(3).fbm(w / 35., 3);
+        let interior = plains * 0.15 * undulation + hills * 0.32 * rolling + plateau * 1.0;
+        let uplift = (interior * (1. - 0.85 * rift) + range * 1.1 + foothills) * land.powf(1.5);
+        shape.uplift[i] = uplift;
+        shape.erodibility[i] = plains * 1.2 + hills * 1.3 + plateau * 0.12;
+        shape.erodibility[i] = shape.erodibility[i] * (1. - range) + 0.75 * range;
+        shape.diffusion[i] = settings.diffusion
+            * (plains * 0.6 + hills * 2.5 + plateau * 0.15)
+            * (1. - range * 0.6);
+
         shape.heights[i] = if shape.base_level[i] {
             0.
         } else {
             land * (0.5 + surface.fbm(p / 40., 4) * 0.3)
         };
     }
+
+    shape.rain = rainfall(settings, &shape, noise);
     shape
+}
+
+fn make_plates(settings: &WorldgenSettings, half: f32, rng: &mut impl Rng) -> Vec<Plate> {
+    let count = settings.plate_count.max(3);
+    // Province types: every type at least once, the rest by weight.
+    let weights = settings.province_weights;
+    let mut kinds: Vec<usize> = vec![0, 1, 2];
+    while kinds.len() < count {
+        let roll = rng.random_range(0.0..weights.iter().sum::<f32>());
+        let mut acc = 0.;
+        let kind = (0..3)
+            .find(|&k| {
+                acc += weights[k];
+                roll < acc
+            })
+            .unwrap_or(1);
+        kinds.push(kind);
+    }
+    for i in (1..kinds.len()).rev() {
+        kinds.swap(i, rng.random_range(0..=i));
+    }
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let angle = rng.random_range(0.0..std::f32::consts::TAU);
+            let radius = half * settings.land_radius * rng.random_range(0.0..1.0f32).sqrt();
+            Plate {
+                center: Vec2::from_angle(angle) * radius,
+                velocity: Vec2::from_angle(rng.random_range(0.0..std::f32::consts::TAU))
+                    * rng.random_range(0.4..1.0f32),
+                kind,
+                cap: settings.plateau_level * rng.random_range(0.7..1.15f32),
+            }
+        })
+        .collect()
+}
+
+/// Orographic rain: moist air comes from the sea along the prevailing wind, and rains out as
+/// it is pushed up over high ground, leaving dry rain shadows downwind of ranges.
+///
+/// `elevation` is any height-like field (uplift before erosion, terrain after).
+pub fn rain_from(settings: &WorldgenSettings, elevation: &[f32], sea: &[bool], scale: f32) -> Vec<f32> {
+    let size = settings.size;
+    let wind = Vec2::from_angle(settings.wind_angle.unwrap_or(0.));
+    let mut order: Vec<usize> = (0..size * size).collect();
+    let projection =
+        |i: usize| wind.dot(Vec2::new((i % size) as f32, (i / size) as f32));
+    order.sort_by(|&a, &b| projection(a).total_cmp(&projection(b)));
+
+    // Rain responds to the large-scale relief, not to every small bump.
+    let elevation = &blur(size, elevation, 4);
+    let mut humidity = vec![1f32; size * size];
+    let mut rain = vec![0f32; size * size];
+    let sample = |field: &[f32], p: Vec2| {
+        let max = size as i64 - 1;
+        let at = |x: i64, z: i64| field[z.clamp(0, max) as usize * size + x.clamp(0, max) as usize];
+        let (c, t) = (p.floor(), p - p.floor());
+        let (x, z) = (c.x as i64, c.y as i64);
+        let bottom = at(x, z) + (at(x + 1, z) - at(x, z)) * t.x;
+        let top = at(x, z + 1) + (at(x + 1, z + 1) - at(x, z + 1)) * t.x;
+        bottom + (top - bottom) * t.y
+    };
+    for i in order {
+        if sea[i] {
+            humidity[i] = 1.;
+            continue;
+        }
+        let p = Vec2::new((i % size) as f32, (i / size) as f32);
+        let upwind = p - wind;
+        let incoming = sample(&humidity, upwind);
+        let rise = (elevation[i] - sample(elevation, upwind)).max(0.) * scale;
+        let fallen = incoming * (settings.base_rain + settings.orographic_rain * rise).min(1.);
+        rain[i] = fallen;
+        // Some of the rain evaporates back (vegetation, rivers), keeping the interior wetter.
+        humidity[i] = incoming - fallen * (1. - settings.land_evaporation);
+    }
+    // Normalize to a mean of 1 on land.
+    let rain = blur(size, &rain, 3);
+    let land: Vec<f32> = rain.iter().zip(sea).filter(|(_, s)| !**s).map(|(r, _)| *r).collect();
+    let mean = (land.iter().sum::<f32>() / land.len().max(1) as f32).max(1e-6);
+    rain.iter().map(|r| (r / mean).clamp(0.05, 4.)).collect()
+}
+
+fn rainfall(settings: &WorldgenSettings, shape: &Shape, noise: Noise) -> Vec<f32> {
+    // Before erosion, uplift stands in for elevation.
+    let rain = rain_from(settings, &shape.uplift, &shape.base_level, 40.);
+    // A little noise so rain bands aren't perfectly straight.
+    let size = settings.size;
+    rain.iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let p = Vec2::new((i % size) as f32, (i / size) as f32);
+            r * (1. + 0.25 * noise.layer(6).fbm(p / 70., 3))
+        })
+        .collect()
 }
 
 /// Stage B: stream-power-law erosion with an implicit solver (Braun & Willett 2013) and hillslope
 /// diffusion. Returns heights in the simulation's relative units (scaled later).
 ///
-/// Every step: depressions are filled (sediment), flow is routed by steepest descent,
-/// drainage area accumulated, then `dh/dt = U - K A^m S` is solved implicitly from the outlets
-/// upstream, and `D ∇²h` smooths hillslopes.
+/// Every step: depressions are filled (sediment), flow is routed by steepest descent with
+/// random slope weights (stochastic D8), drainage accumulated from the rain, then
+/// `dh/dt = U - K A^m S` is solved implicitly from the outlets upstream, and `D ∇²h` smooths
+/// hillslopes.
 pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
     let size = settings.size;
     let mut heights = shape.heights.clone();
@@ -106,7 +295,7 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
         let graph = FlowGraph::with_weights(size, &heights, &shape.base_level, |i, j| {
             1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
         });
-        let area = graph.accumulate(|_| 1.);
+        let area = graph.accumulate(|i| shape.rain[i]);
 
         for &i in &graph.order {
             if shape.base_level[i] {
@@ -127,12 +316,12 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
         }
 
         // Hillslope diffusion (explicit; stable while diffusion * dt <= 0.25).
-        let k = (settings.diffusion * dt).min(0.24);
         let previous = heights.clone();
         for i in 0..heights.len() {
             if shape.base_level[i] {
                 continue;
             }
+            let k = (shape.diffusion[i] * dt).min(0.24);
             let mut sum = 0.;
             let mut count = 0.;
             for (j, distance) in neighbours(size, i) {
@@ -145,4 +334,51 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
         }
     }
     priority_flood(size, &heights, &shape.base_level, 1e-4)
+}
+
+/// Plateaus: cut the high ground of plateau provinces down to their cap level (a resistant
+/// caprock), keeping the canyons below it: tablelands with escarpments.
+pub fn cap_plateaus(shape: &Shape, heights: &mut [f32]) {
+    for (i, h) in heights.iter_mut().enumerate() {
+        let weight = shape.provinces[i][2] * (1. - shape.range[i]);
+        let cap = shape.plateau_cap[i];
+        if weight <= 0. || *h <= cap {
+            continue;
+        }
+        // Soft cap: keep a little of the relief above it.
+        let capped = cap + (*h - cap) * 0.08;
+        *h += (capped - *h) * smoothstep(0.2, 0.7, weight);
+    }
+}
+
+/// Separable box blur of radius `radius` (cells).
+pub fn blur(size: usize, values: &[f32], radius: usize) -> Vec<f32> {
+    let pass = |input: &[f32], horizontal: bool| -> Vec<f32> {
+        let mut output = vec![0.; input.len()];
+        for line in 0..size {
+            let at = |k: usize| {
+                if horizontal {
+                    input[line * size + k]
+                } else {
+                    input[k * size + line]
+                }
+            };
+            let mut sum: f32 = (0..=radius.min(size - 1)).map(at).sum();
+            let mut count = radius.min(size - 1) + 1;
+            for k in 0..size {
+                let index = if horizontal { line * size + k } else { k * size + line };
+                output[index] = sum / count as f32;
+                if k + radius + 1 < size {
+                    sum += at(k + radius + 1);
+                    count += 1;
+                }
+                if k >= radius {
+                    sum -= at(k - radius);
+                    count -= 1;
+                }
+            }
+        }
+        output
+    };
+    pass(&pass(values, true), false)
 }

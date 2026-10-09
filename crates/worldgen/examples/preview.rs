@@ -1,8 +1,11 @@
 //! Render generated continents to PNG, to tune world generation without the game.
 //!
 //! `cargo run -p worldgen --release --example preview -- <out_dir> [seed...]`
+//!
+//! For each seed, writes `<seed>_biomes.png`, `<seed>_landforms.png`, `<seed>_relief.png` (all
+//! hillshaded, with rivers and lakes) and `<seed>_detail.png` (a crop of the fine surface).
 
-use std::{fs::File, io::BufWriter, path::PathBuf};
+use std::{fs::File, io::BufWriter, path::Path};
 
 use worldgen::{Continent, WorldgenSettings, generate};
 
@@ -11,11 +14,10 @@ const SCALE: usize = 2;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let out_dir = PathBuf::from(args.next().unwrap_or_else(|| "worldgen-preview".into()));
-    std::fs::create_dir_all(&out_dir).unwrap();
-    let seeds: Vec<u64> = args
-        .map(|s| s.parse().expect("seeds are numbers"))
-        .collect();
+    let out_dir = args.next().unwrap_or_else(|| "worldgen-preview".into());
+    let out_dir = Path::new(&out_dir);
+    std::fs::create_dir_all(out_dir).unwrap();
+    let seeds: Vec<u64> = args.map(|s| s.parse().expect("seeds are numbers")).collect();
     let seeds = if seeds.is_empty() { vec![1082] } else { seeds };
 
     for seed in seeds {
@@ -25,43 +27,63 @@ fn main() {
         });
         let land = continent.heights.iter().filter(|&&h| h > 0.).count();
         println!(
-            "seed {seed}: {} rivers, {} lakes, {:.0}% land, highest {:.1}",
+            "seed {seed}: {} rivers, {} lakes, {:.0}% land, highest {:.1}, wind {:.0}°",
             continent.rivers.len(),
             continent.lakes.len(),
             100. * land as f32 / continent.heights.len() as f32,
             continent.heights.iter().copied().fold(f32::MIN, f32::max),
+            continent.wind_angle.to_degrees(),
         );
         for (stage, time) in &continent.timings {
             println!("  {stage}: {time:.2?}");
         }
-        let path = out_dir.join(format!("continent_{seed}.png"));
-        save(&path, &render(&continent));
-        println!("  -> {}", path.display());
+        let size = continent.size();
+        let maps: [(&str, Box<dyn Fn(usize) -> [f32; 3]>); 3] = [
+            ("biomes", Box::new(|i| continent.biome[i].color())),
+            ("landforms", Box::new(|i| continent.landform[i].color())),
+            (
+                "relief",
+                Box::new(|i| hypsometric(continent.heights[i] / continent.settings.max_height)),
+            ),
+        ];
+        for (name, color) in maps {
+            let path = out_dir.join(format!("{seed}_{name}.png"));
+            save(&path, size * SCALE, &render(&continent, &*color));
+        }
+        let path = out_dir.join(format!("{seed}_detail.png"));
+        let (side, image) = render_detail(&continent);
+        save(&path, side, &image);
+        println!("  -> {}", out_dir.display());
     }
 }
 
-fn render(continent: &Continent) -> Vec<[u8; 3]> {
+/// Hillshaded map colored per cell, with lakes and rivers.
+fn render(continent: &Continent, color: &dyn Fn(usize) -> [f32; 3]) -> Vec<[u8; 3]> {
     let size = continent.size();
     let side = size * SCALE;
     let height = |x: usize, z: usize| continent.heights[z.min(size - 1) * size + x.min(size - 1)];
     let mut image = vec![[0u8; 3]; side * side];
     for z in 0..size {
         for x in 0..size {
+            let i = z * size + x;
             let h = height(x, z);
             // Hillshade, light from the north west.
             let dx = height(x + 1, z) - height(x.saturating_sub(1), z);
             let dz = height(x, z + 1) - height(x, z.saturating_sub(1));
-            let shade = (1. + (-dx - dz) * 0.15).clamp(0.4, 1.4);
-            let color = match continent.lake_of[z * size + x] {
-                Some(_) => [70., 120., 200.],
+            let shade = if h <= 0. {
+                1.
+            } else {
+                (1. + (-dx - dz) * 0.15).clamp(0.4, 1.4)
+            };
+            let base = match continent.lake_of[i] {
+                Some(_) => [0.27, 0.47, 0.78],
                 None if h <= 0. => {
                     let t = (-h / continent.settings.sea_depth).clamp(0., 1.);
-                    [40. - 20. * t, 90. - 40. * t, 160. - 40. * t]
+                    [0.16 - 0.08 * t, 0.35 - 0.15 * t, 0.63 - 0.15 * t]
                 }
-                None => hypsometric(h / continent.settings.max_height),
+                None => color(i),
             };
-            let shade = if h <= 0. { 1. } else { shade };
-            let pixel = color.map(|c| (c * shade).clamp(0., 255.) as u8);
+            let pixel = base.map(|c| (c * shade * 255.).clamp(0., 255.) as u8);
             for py in 0..SCALE {
                 for px in 0..SCALE {
                     image[(z * SCALE + py) * side + x * SCALE + px] = pixel;
@@ -96,15 +118,39 @@ fn render(continent: &Continent) -> Vec<[u8; 3]> {
     image
 }
 
+/// Hillshade of a 512×512 crop of the fine surface, around the highest point.
+fn render_detail(continent: &Continent) -> (usize, Vec<[u8; 3]>) {
+    let surface = &continent.surface;
+    let side = 512.min(surface.size);
+    let highest = (0..surface.values.len())
+        .max_by(|&a, &b| surface.values[a].total_cmp(&surface.values[b]))
+        .unwrap_or(0);
+    let (cx, cz) = (highest % surface.size, highest / surface.size);
+    let x0 = cx.saturating_sub(side / 2).min(surface.size - side);
+    let z0 = cz.saturating_sub(side / 2).min(surface.size - side);
+    let at = |x: usize, z: usize| surface.at(x as i64, z as i64);
+    let mut image = vec![[0u8; 3]; side * side];
+    for z in 0..side {
+        for x in 0..side {
+            let (gx, gz) = (x0 + x, z0 + z);
+            let dx = at(gx + 1, gz) - at(gx.saturating_sub(1), gz);
+            let dz = at(gx, gz + 1) - at(gx, gz.saturating_sub(1));
+            let shade = (0.8 + (-dx - dz) * 0.6 / surface.cell).clamp(0.1, 1.5);
+            image[z * side + x] = [(200. * shade).min(255.) as u8; 3];
+        }
+    }
+    (side, image)
+}
+
 /// Land colors from lowlands to summits (`t` = height / max height).
 fn hypsometric(t: f32) -> [f32; 3] {
     const STOPS: [(f32, [f32; 3]); 6] = [
-        (0.0, [220., 205., 150.]),
-        (0.03, [110., 160., 80.]),
-        (0.25, [70., 130., 60.]),
-        (0.5, [140., 120., 80.]),
-        (0.75, [120., 110., 105.]),
-        (0.9, [240., 240., 245.]),
+        (0.0, [0.86, 0.80, 0.59]),
+        (0.03, [0.43, 0.63, 0.31]),
+        (0.25, [0.27, 0.51, 0.24]),
+        (0.5, [0.55, 0.47, 0.31]),
+        (0.75, [0.47, 0.43, 0.41]),
+        (0.9, [0.94, 0.94, 0.96]),
     ];
     let t = t.clamp(0., 1.);
     for pair in STOPS.windows(2) {
@@ -117,10 +163,9 @@ fn hypsometric(t: f32) -> [f32; 3] {
     STOPS[STOPS.len() - 1].1
 }
 
-fn save(path: &PathBuf, image: &[[u8; 3]]) {
-    let side = (image.len() as f32).sqrt() as u32;
+fn save(path: &Path, side: usize, image: &[[u8; 3]]) {
     let file = BufWriter::new(File::create(path).unwrap());
-    let mut encoder = png::Encoder::new(file, side, side);
+    let mut encoder = png::Encoder::new(file, side as u32, side as u32);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().unwrap();

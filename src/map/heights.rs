@@ -1,4 +1,5 @@
-//! The continuous terrain height function: base heightmap (bicubic) + rivers + edits.
+//! The continuous terrain height function: base surface (bicubic) + rivers + edits, and the
+//! ground color (biomes).
 //!
 //! [`TerrainHeights`] is cheap to clone (layers are behind `Arc`s), so mesh building tasks get
 //! a snapshot of it.
@@ -6,8 +7,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-
-use worldgen::Continent;
+use worldgen::{Continent, Heightmap};
 
 use super::{
     edits::{EditLayer, TerrainEdit},
@@ -18,12 +18,14 @@ use super::{
 /// so lighting matches across LOD seams.
 const NORMAL_EPSILON: f32 = 1. / 16.;
 
-/// Height and wetness of a terrain point.
+/// Height, wetness and ground color of a terrain point.
 pub struct TerrainSample {
     /// World height.
     pub height: f32,
     /// How much the point is covered by a river or lake, from 0 to 1.
     pub wetness: f32,
+    /// Biome ground color (linear RGB).
+    pub color: Vec3,
 }
 
 #[derive(Clone)]
@@ -43,17 +45,24 @@ impl TerrainHeights {
     }
 
     pub fn sample(&self, p: Vec2) -> TerrainSample {
-        let mut height = self.base.height(p);
+        let mut height = self.base.surface.bicubic(p);
         let wetness = self
             .rivers
             .carve(p, &mut height)
-            .max(self.base.lake_wetness(p));
+            .max(self.base.lakes.bilinear(p));
         self.edits.apply(p, &mut height);
-        TerrainSample { height, wetness }
+        TerrainSample {
+            height,
+            wetness,
+            color: self.base.color(p),
+        }
     }
 
     pub fn height(&self, p: Vec2) -> f32 {
-        self.sample(p).height
+        let mut height = self.base.surface.bicubic(p);
+        self.rivers.carve(p, &mut height);
+        self.edits.apply(p, &mut height);
+        height
     }
 
     pub fn normal(&self, p: Vec2) -> Vec3 {
@@ -79,9 +88,9 @@ impl TerrainHeights {
         }
     }
 
-    /// Spacing of the base heightmap samples, in world units.
+    /// Spacing of the base surface samples, in world units.
     pub fn base_cell(&self) -> f32 {
-        self.base.cell
+        self.base.surface.cell
     }
 
     /// Maximum curvature of the base terrain over `min..max` (see [`BaseGrid`]).
@@ -90,34 +99,43 @@ impl TerrainHeights {
     }
 }
 
-/// The continent heightmap, in world units, with a max-curvature pyramid used to decide the
-/// mesh resolution needed to approximate it.
+/// The continent's fine surface, lake mask and ground colors, with a max-curvature pyramid used
+/// to decide the mesh resolution needed to approximate the surface.
 ///
-/// Outside the continent, heights extend the border values (flat ocean).
+/// Outside the continent, values extend the border (open sea).
 struct BaseGrid {
-    size: usize,
-    /// Sample spacing, in world units.
-    cell: f32,
-    /// Row-major (`z * size + x`) world heights.
-    heights: Vec<f32>,
-    /// 1 on lake cells, 0 elsewhere.
-    lakes: Vec<f32>,
+    surface: Heightmap,
+    /// 1 on lake cells, 0 elsewhere (per continent cell).
+    lakes: Heightmap,
+    /// Biome ground color channels (linear RGB, per continent cell).
+    colors: [Heightmap; 3],
     /// `curvature[level]` has `size >> level` texels per side; each texel is the maximum
-    /// absolute second difference (world units) over the grid points it covers.
+    /// absolute second difference (world units) over the surface samples it covers.
     curvature: Vec<Vec<f32>>,
 }
 
 impl BaseGrid {
     fn new(continent: &Continent) -> Self {
-        let size = continent.size();
-        let heights = continent.heights.clone();
-        let lakes = continent
-            .lake_of
+        let surface = continent.surface.clone();
+        let lakes = continent.cell_map(
+            continent
+                .lake_of
+                .iter()
+                .map(|lake| if lake.is_some() { 1. } else { 0. })
+                .collect(),
+        );
+        let linear: Vec<[f32; 3]> = continent
+            .biome
             .iter()
-            .map(|lake| if lake.is_some() { 1. } else { 0. })
+            .map(|biome| {
+                let [r, g, b] = biome.color();
+                Color::srgb(r, g, b).to_linear().to_f32_array_no_alpha()
+            })
             .collect();
+        let colors = [0, 1, 2].map(|k| continent.cell_map(linear.iter().map(|c| c[k]).collect()));
 
-        let at = |x: usize, z: usize| heights[z * size + x];
+        let size = surface.size;
+        let at = |x: usize, z: usize| surface.values[z * size + x];
         let mut level0 = vec![0.; size * size];
         for z in 1..size - 1 {
             for x in 1..size - 1 {
@@ -145,67 +163,25 @@ impl BaseGrid {
         }
 
         Self {
-            size,
-            cell: continent.settings.cell_size,
-            heights,
+            surface,
             lakes,
+            colors,
             curvature,
         }
     }
 
-    /// Continuous grid coordinates of a world position.
-    fn grid_position(&self, p: Vec2) -> Vec2 {
-        p / self.cell + (self.size / 2) as f32
-    }
-
-    fn at(&self, x: i32, z: i32) -> f32 {
-        let max = self.size as i32 - 1;
-        self.heights[z.clamp(0, max) as usize * self.size + x.clamp(0, max) as usize]
-    }
-
-    /// Bilinear interpolation of the lake mask (0 outside the grid).
-    fn lake_wetness(&self, p: Vec2) -> f32 {
-        let g = self.grid_position(p);
-        let cell = g.floor();
-        let t = g - cell;
-        let (x, z) = (cell.x as i32, cell.y as i32);
-        let max = self.size as i32 - 1;
-        let at = |x: i32, z: i32| {
-            if x < 0 || z < 0 || x > max || z > max {
-                0.
-            } else {
-                self.lakes[z as usize * self.size + x as usize]
-            }
-        };
-        let bottom = at(x, z) + (at(x + 1, z) - at(x, z)) * t.x;
-        let top = at(x, z + 1) + (at(x + 1, z + 1) - at(x, z + 1)) * t.x;
-        bottom + (top - bottom) * t.y
-    }
-
-    /// Bicubic (Catmull-Rom) interpolation of the heightmap.
-    fn height(&self, p: Vec2) -> f32 {
-        let g = self.grid_position(p);
-        let cell = g.floor();
-        let t = g - cell;
-        let (x, z) = (cell.x as i32, cell.y as i32);
-        let row = |dz: i32| {
-            catmull_rom(
-                [
-                    self.at(x - 1, z + dz),
-                    self.at(x, z + dz),
-                    self.at(x + 1, z + dz),
-                    self.at(x + 2, z + dz),
-                ],
-                t.x,
-            )
-        };
-        catmull_rom([row(-1), row(0), row(1), row(2)], t.y)
+    fn color(&self, p: Vec2) -> Vec3 {
+        Vec3::new(
+            self.colors[0].bilinear(p),
+            self.colors[1].bilinear(p),
+            self.colors[2].bilinear(p),
+        )
     }
 
     fn max_curvature(&self, min: Vec2, max: Vec2) -> f32 {
-        let size = self.size as i32;
-        let lo = self.grid_position(min).floor().as_ivec2() - 1;
-        let hi = self.grid_position(max).ceil().as_ivec2() + 1;
+        let size = self.surface.size as i32;
+        let lo = self.surface.grid_position(min).floor().as_ivec2() - 1;
+        let hi = self.surface.grid_position(max).ceil().as_ivec2() + 1;
         if hi.x < 0 || hi.y < 0 || lo.x >= size || lo.y >= size {
             return 0.;
         }
@@ -213,7 +189,7 @@ impl BaseGrid {
         // Coarsest level where the rectangle spans at most ~2 texels per side.
         let span = (hi - lo).max_element().max(1) as u32;
         let level = (span.ilog2() as usize).min(self.curvature.len() - 1);
-        let level_size = self.size >> level;
+        let level_size = self.surface.size >> level;
         let (lo, hi) = (lo >> level as i32, hi >> level as i32);
         let mut result: f32 = 0.;
         for z in lo.y..=hi.y {
@@ -223,11 +199,4 @@ impl BaseGrid {
         }
         result
     }
-}
-
-fn catmull_rom([p0, p1, p2, p3]: [f32; 4], t: f32) -> f32 {
-    0.5 * (2. * p1
-        + (p2 - p0) * t
-        + (2. * p0 - 5. * p1 + 4. * p2 - p3) * t * t
-        + (3. * (p1 - p2) + p3 - p0) * t * t * t)
 }

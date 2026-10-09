@@ -19,19 +19,13 @@ impl Plugin for ShadersPlugin {
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 
+/// Terrain material extension. Ground colors come from the mesh vertex colors (biomes);
+/// `tint` multiplies them.
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct TerrainShader {
     #[uniform(100)]
-    pub grass_color: LinearRgba,
-    #[uniform(101)]
-    pub ocean_color: LinearRgba,
-    #[uniform(102)]
-    pub mountain_color: LinearRgba,
-    #[uniform(103)]
-    pub snow_color: LinearRgba,
-    #[uniform(104)]
-    pub sand_color: LinearRgba,
+    pub tint: LinearRgba,
 }
 
 impl MaterialExtension for TerrainShader {
@@ -120,15 +114,7 @@ pub struct MapMaterialParams {
     #[serde(default)]
     pub pbr: StandardMaterialParams, 
     #[serde(deserialize_with = "deser_color")]
-    pub grass_color: LinearRgba,
-    #[serde(deserialize_with = "deser_color")]
-    pub ocean_color: LinearRgba,
-    #[serde(deserialize_with = "deser_color")]
-    pub mountain_color: LinearRgba,
-    #[serde(deserialize_with = "deser_color")]
-    pub snow_color: LinearRgba,
-    #[serde(deserialize_with = "deser_color")]
-    pub sand_color: LinearRgba,
+    pub tint: LinearRgba,
 }
 
 #[derive(Default, TypePath)]
@@ -153,11 +139,7 @@ impl AssetLoader for MapMaterialLoader {
         let mat_params = ron::de::from_bytes::<MapMaterialParams>(&bytes)?;
         let base = mat_params.pbr.to_mat(load_context);
         let extension = TerrainShader {
-            grass_color: mat_params.grass_color,
-            ocean_color: mat_params.ocean_color,
-            mountain_color: mat_params.mountain_color,
-            snow_color: mat_params.snow_color,
-            sand_color: mat_params.sand_color,
+            tint: mat_params.tint,
         };
         Ok(MapMaterial {base, extension})
     }

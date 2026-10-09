@@ -116,15 +116,16 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
     let mut level = vec![None; size * size];
     for lake in &continent.lakes {
         for c in &lake.cells {
-            for dz in -1..=1i32 {
-                for dx in -1..=1i32 {
+            for dz in -2..=2i32 {
+                for dx in -2..=2i32 {
                     let (x, z) = (c.x as i32 + dx, c.y as i32 + dz);
                     if x < 0 || z < 0 || x as usize >= size || z as usize >= size {
                         continue;
                     }
                     let i = z as usize * size + x as usize;
                     let is_lake = (dx, dz) == (0, 0);
-                    if is_lake || continent.heights[i] > lake.level {
+                    // Shore and shallow fringe, but not the outlet valley below the dam.
+                    if is_lake || continent.heights[i] > lake.level - 0.15 {
                         level[i] = Some(lake.level);
                     }
                 }

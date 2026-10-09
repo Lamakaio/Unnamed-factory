@@ -3,9 +3,5 @@ MapMaterialParams(
         perceptual_roughness: 0.9,
         double_sided: true,
     ),
-    grass_color: "92eb3f",
-    ocean_color: "5584f2",
-    mountain_color: "544a47",
-    snow_color: "f2efe4",
-    sand_color: "e0cf96",
+    tint: "ffffff",
 )

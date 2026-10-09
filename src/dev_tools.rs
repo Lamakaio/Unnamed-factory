@@ -142,12 +142,17 @@ fn log_terrain_on_click(
     };
     let i = z * continent.size() + x;
     info!(
-        "terrain ({x}, {z}): height {} wetness {} - base {} drainage {} lake {:?}",
+        "terrain ({x}, {z}): height {} wetness {} - base {} drainage {} lake {:?} - {:?} {:?} \
+         moisture {:.2} temperature {:.2}",
         sample.height,
         sample.wetness,
         continent.heights[i],
         continent.drainage[i],
-        continent.lake_of[i]
+        continent.lake_of[i],
+        continent.landform[i],
+        continent.biome[i],
+        continent.moisture[i],
+        continent.temperature[i]
     );
 }
 
