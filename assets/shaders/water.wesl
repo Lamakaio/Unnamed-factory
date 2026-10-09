@@ -27,7 +27,7 @@ const SHALLOW: vec3<f32> = vec3(0.16, 0.55, 0.62);
 const DEEP: vec3<f32> = vec3(0.03, 0.14, 0.30);
 const FOAM: vec3<f32> = vec3(0.92, 0.96, 0.98);
 const GLINT: vec3<f32> = vec3(0.85, 0.95, 1.0);
-const SHADOW: vec3<f32> = vec3(0.55, 0.6, 0.75);
+const SHADOW: vec3<f32> = vec3(0.46, 0.51, 0.68);
 // Water thickness (world units) over which the colour goes from shallow to deep.
 const DEPTH_RANGE: f32 = 2.5;
 

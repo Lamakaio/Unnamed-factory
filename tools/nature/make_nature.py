@@ -22,7 +22,7 @@ os.makedirs(out_dir, exist_ok=True)
 # name=kind=path[=leaf colour as sRGB hex, overriding the texture average]
 entries = [(a.split("=") + [""])[:4] for a in args[1:]]
 
-LOD0_BUDGET = {"tree": 12000, "bush": 4000, "rock": 3000, "ground": 600, "wood": 4000}
+LOD0_BUDGET = {"tree": 4000, "bush": 2000, "rock": 1500, "ground": 600, "wood": 2000}
 # Faces of the stand-ins: (lod1, lod2) for the foliage hull, and trunk sides.
 HULL_FACES = {"tree": (36, 18), "bush": (24, 10), "rock": (80, 14), "wood": (60, 12)}
 # Foliage clusters (separate hulls) of the stand-ins: lobed crowns, tiered pines.

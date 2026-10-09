@@ -50,7 +50,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
 const LIT: vec3<f32> = vec3(1.0, 0.97, 0.9);
-const SHADOW: vec3<f32> = vec3(0.42, 0.47, 0.64);
+const SHADOW: vec3<f32> = vec3(0.33, 0.37, 0.54);
 const HIGHLIGHT: f32 = 0.12;
 const RIM: vec3<f32> = vec3(0.25, 0.22, 0.15);
 

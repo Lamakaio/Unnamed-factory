@@ -265,13 +265,18 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   water, steep or edited ground. A chunk's vegetation is re-placed when an edit touches it
   (buildings clear it). Models come from `tools/nature` (metres × `METERS_TO_WORLD` = 0.05;
   buildings use the same 0.05 scale, one unit = 20 m), with toon materials (`ToonMaterial`,
-  `toon.wesl`). Levels of detail, per chunk by camera distance:
-  - far (> 100): one merged mesh of the LOD2 stand-ins (~25 triangles each). It never
+  `toon.wesl`). Levels of detail, drawn with few entities (entity spawning was the lag):
+  - far chunks (> 90): one merged mesh of the LOD2 stand-ins (~25 triangles each). It never
     fades, so trees never disappear in the distance;
-  - near (< 100): LOD1 instances (~120 triangles), cross-fading (`VisibilityRange` dither)
-    to LOD0 textured models within 30 of the camera;
-  - detail (< 40): also LOD0 models and ground cover (fades out at 22–30).
-  At most 2 chunks change level per frame; placement runs in 4 background tasks.
+  - near chunks (< 90): one merged mesh of the LOD1 stand-ins (~120 triangles), built in a
+    background task. Each vertex carries its object's origin (UV0 = x, z; UV1.x = y), and
+    `LodToonMaterial` (toon.wesl with `LOD_FADE`, no depth prepass) dithers every object out
+    exactly where its LOD0 model fades in, with Bevy's visibility range dither pattern;
+  - LOD0 textured models (≤ 4000 triangles) are entities only within 15 of the camera
+    (`VisibilityRange` 13–17), spawned and despawned as the camera moves (600 per frame
+    at most); ground cover likewise, fading out at 12–16.
+  Placement grids: 0.6 (large) and 0.28 (ground cover). Background tasks (placement, near
+  meshes): 4 at once.
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
 - `Building` is an `Asset` loaded from `.bconf` RON. All of them are loaded at startup

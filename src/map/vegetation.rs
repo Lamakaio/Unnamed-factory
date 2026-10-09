@@ -5,11 +5,15 @@
 //! (grass, flowers, ferns), with per-biome probabilities, forest clearings from noise, and
 //! nothing on water, too steep ground or edited ground (building foundations).
 //!
-//! Levels of detail (models built by `tools/nature`):
-//! - LOD0: the textured model, within [`LOD0_DISTANCE`] of the camera (dithered cross-fade);
-//! - LOD1: a low-poly stand-in (~120 triangles, flat colours), in chunks near the camera;
-//! - LOD2: an extremely low-poly stand-in (~25 triangles), merged into one mesh per chunk for
-//!   every other chunk. It never fades: trees don't disappear in the distance.
+//! Levels of detail (models built by `tools/nature`), drawn with few entities:
+//! - LOD2: an extremely low-poly stand-in (~25 triangles); all of a far chunk's stand-ins are
+//!   merged into one mesh. It never fades: trees don't disappear in the distance.
+//! - LOD1: a low-poly stand-in (~120 triangles); a near chunk's are merged into one mesh too
+//!   (built in the background when the chunk comes near). Each vertex carries its object's
+//!   origin, so the shader fades every object out where its LOD0 model fades in
+//!   (`LodToonMaterial`, the same dither as Bevy's visibility ranges).
+//! - LOD0: the textured model, spawned as an entity only around the camera (within
+//!   [`LOD0_DISTANCE`], a bounded number per frame), with a `VisibilityRange` cross-fade.
 //!
 //! Ground cover only has LOD0 and fades out. A chunk's vegetation is rebuilt after an edit.
 
@@ -23,6 +27,7 @@ use bevy::{
     math::I64Vec2,
     mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
     pbr::gltf::standard_material_from_gltf_material,
+    platform::collections::HashMap,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
@@ -34,30 +39,32 @@ use worldgen::{
 use super::{CHUNK_SIZE, IsGround, Map, heights::TerrainHeights};
 use crate::{
     AppState,
-    shaders::{ToonMaterial, toon},
+    shaders::{LodToonMaterial, LodToonShader, ToonMaterial, toon},
 };
 
 /// Model units (metres) to world units: one world unit is 20 m (buildings use the same scale).
 pub const METERS_TO_WORLD: f32 = 0.05;
 
-/// LOD0 (textured) models show within this distance of the camera, cross-fading over
-/// ± [`LOD_FADE`].
-const LOD0_DISTANCE: f32 = 30.;
-const LOD_FADE: f32 = 3.;
+/// LOD0 (textured) models show within this distance of the camera, cross-fading with the
+/// merged LOD1 stand-ins over ± [`LOD_FADE`].
+const LOD0_DISTANCE: f32 = 15.;
+const LOD_FADE: f32 = 2.;
 /// Ground cover fades out between these distances.
-const GROUND_FADE: (f32, f32) = (22., 30.);
-/// Chunk distance (camera to the chunk, world units) under which chunks show their own
-/// instances instead of the merged LOD2 mesh, and under which they also have LOD0 models and
-/// ground cover. Leaving takes a margin more, against flickering.
-const NEAR_DISTANCE: f32 = 100.;
-const DETAIL_DISTANCE: f32 = 40.;
+const GROUND_FADE: (f32, f32) = (12., 16.);
+/// LOD0 entities are spawned within their visible distance plus this margin, and despawned
+/// beyond it plus twice the margin.
+const SPAWN_MARGIN: f32 = 3.;
+/// Most LOD0 entities spawned per frame.
+const SPAWNS_PER_FRAME: usize = 600;
+/// Chunks closer than this (camera to the chunk, world units) show the merged LOD1 mesh
+/// instead of the LOD2 one; leaving takes a margin more, against flickering.
+const NEAR_DISTANCE: f32 = 90.;
 const LEVEL_MARGIN: f32 = 15.;
 /// Placement grid cells (world units) for large things and for ground cover.
-const LARGE_CELL: f32 = 0.9;
-const GROUND_CELL: f32 = 0.35;
-/// Chunks whose vegetation is being placed at once, and chunks changing level per frame.
+const LARGE_CELL: f32 = 0.6;
+const GROUND_CELL: f32 = 0.28;
+/// Background tasks at once (placement, near meshes).
 const MAX_TASKS: usize = 4;
-const LEVEL_CHANGES_PER_FRAME: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -213,7 +220,7 @@ impl Plugin for VegetationPlugin {
             Update,
             (
                 prepare_models.run_if(not(resource_exists::<Vegetation>)),
-                (start_placement, finish_placement, update_levels)
+                (start_placement, finish_placement, update_levels, update_details)
                     .chain()
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_exists::<Vegetation>),
@@ -242,7 +249,7 @@ fn load_models(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// A mesh with its material.
 type Part = (Handle<Mesh>, Handle<ToonMaterial>);
 
-/// Geometry of a LOD2 stand-in, merged into the chunks' far meshes.
+/// Geometry of a stand-in, merged into the chunks' meshes.
 #[derive(Default)]
 struct StandIn {
     positions: Vec<Vec3>,
@@ -255,13 +262,14 @@ struct StandIn {
 #[derive(Resource)]
 struct Vegetation {
     lod0: Vec<Vec<Part>>,
-    lod1: Vec<Vec<Part>>,
+    lod1: Arc<Vec<StandIn>>,
     lod2: Arc<Vec<StandIn>>,
     far_material: Handle<ToonMaterial>,
+    near_material: Handle<LodToonMaterial>,
 }
 
-/// Once every model is loaded, convert their materials to toon materials and extract the LOD2
-/// geometry.
+/// Once every model is loaded, convert their materials to toon materials and extract the
+/// stand-in geometry.
 fn prepare_models(
     mut commands: Commands,
     models: Option<Res<VegetationModels>>,
@@ -271,6 +279,7 @@ fn prepare_models(
     gltf_materials: Res<Assets<GltfMaterial>>,
     meshes: Res<Assets<Mesh>>,
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
+    mut lod_materials: ResMut<Assets<LodToonMaterial>>,
 ) {
     let Some(models) = models else {
         return;
@@ -283,61 +292,65 @@ fn prepare_models(
     {
         return;
     }
-    let mut parts = |handle: &Handle<Gltf>| -> Vec<Part> {
-        let Some(gltf) = gltfs.get(handle) else {
-            return Vec::new();
-        };
-        gltf.meshes
-            .iter()
+    let primitives = |handle: &Handle<Gltf>| {
+        gltfs
+            .get(handle)
+            .into_iter()
+            .flat_map(|gltf| &gltf.meshes)
             .filter_map(|mesh| gltf_meshes.get(mesh))
-            .flat_map(|mesh| &mesh.primitives)
-            .map(|primitive| {
-                let base = primitive
-                    .material
-                    .as_ref()
-                    .and_then(|material| gltf_materials.get(material))
-                    .map(standard_material_from_gltf_material)
-                    .unwrap_or_default();
-                (primitive.mesh.clone(), toon_materials.add(toon(&base)))
-            })
-            .collect()
+            .flat_map(|mesh| mesh.primitives.clone())
+            .collect::<Vec<_>>()
     };
-    let lod0 = models.0.iter().map(|levels| parts(&levels[0])).collect();
-    let lod1 = models
-        .0
-        .iter()
-        .map(|levels| levels.get(1).map(&mut parts).unwrap_or_default())
-        .collect();
-    let lod2 = models
+    let lod0 = models
         .0
         .iter()
         .map(|levels| {
-            let mut stand_in = StandIn::default();
-            let Some(gltf) = levels.get(2).and_then(|handle| gltfs.get(handle)) else {
-                return stand_in;
-            };
-            for primitive in gltf
-                .meshes
-                .iter()
-                .filter_map(|mesh| gltf_meshes.get(mesh))
-                .flat_map(|mesh| &mesh.primitives)
-            {
-                if let Some(mesh) = meshes.get(&primitive.mesh) {
-                    append_mesh(&mut stand_in, mesh);
-                }
-            }
-            stand_in
+            primitives(&levels[0])
+                .into_iter()
+                .map(|primitive| {
+                    let base = primitive
+                        .material
+                        .as_ref()
+                        .and_then(|material| gltf_materials.get(material))
+                        .map(standard_material_from_gltf_material)
+                        .unwrap_or_default();
+                    (primitive.mesh, toon_materials.add(toon(&base)))
+                })
+                .collect()
         })
         .collect();
-    let far_material = toon_materials.add(toon(&StandardMaterial {
+    let stand_ins = |level: usize| -> Vec<StandIn> {
+        models
+            .0
+            .iter()
+            .map(|levels| {
+                let mut stand_in = StandIn::default();
+                for primitive in levels.get(level).map(primitives).unwrap_or_default() {
+                    if let Some(mesh) = meshes.get(&primitive.mesh) {
+                        append_mesh(&mut stand_in, mesh);
+                    }
+                }
+                stand_in
+            })
+            .collect()
+    };
+    let flat = StandardMaterial {
         perceptual_roughness: 1.,
         ..default()
-    }));
+    };
+    let near_material = lod_materials.add(LodToonMaterial {
+        base: flat.clone(),
+        extension: LodToonShader {
+            tint: LinearRgba::WHITE,
+            lod: Vec4::new(LOD0_DISTANCE - LOD_FADE, LOD0_DISTANCE + LOD_FADE, 0., 0.),
+        },
+    });
     commands.insert_resource(Vegetation {
         lod0,
-        lod1,
-        lod2: Arc::new(lod2),
-        far_material,
+        lod1: Arc::new(stand_ins(1)),
+        lod2: Arc::new(stand_ins(2)),
+        far_material: toon_materials.add(toon(&flat)),
+        near_material,
     });
     info!("Vegetation models ready");
 }
@@ -473,9 +486,17 @@ impl Placement {
     }
 }
 
-/// The far mesh of a chunk: every LOD2 stand-in merged, relative to the chunk origin.
-fn far_mesh(stand_ins: &[StandIn], instances: &[Instance], origin: Vec3) -> Option<Mesh> {
+/// The stand-ins of `instances` merged into one mesh, relative to `origin`. With
+/// `with_origins`, each vertex also carries its instance's world origin (UV0 = x, z;
+/// UV1.x = y), for the per-object fade of [`LodToonMaterial`].
+fn merged_mesh(
+    stand_ins: &[StandIn],
+    instances: &[Instance],
+    origin: Vec3,
+    with_origins: bool,
+) -> Option<Mesh> {
     let mut merged = StandIn::default();
+    let (mut uv0, mut uv1) = (Vec::new(), Vec::new());
     for instance in instances {
         let stand_in = &stand_ins[instance.species as usize];
         if stand_in.positions.is_empty() {
@@ -496,14 +517,25 @@ fn far_mesh(stand_ins: &[StandIn], instances: &[Instance], origin: Vec3) -> Opti
         merged
             .indices
             .extend(stand_in.indices.iter().map(|i| first + i));
+        if with_origins {
+            let count = stand_in.positions.len();
+            uv0.extend(std::iter::repeat_n(instance.position.xz().to_array(), count));
+            uv1.extend(std::iter::repeat_n([instance.position.y, 0.], count));
+        }
     }
-    (!merged.positions.is_empty()).then(|| {
-        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, merged.positions)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, merged.normals)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, merged.colors)
-            .with_inserted_indices(Indices::U32(merged.indices))
-    })
+    if merged.positions.is_empty() {
+        return None;
+    }
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, merged.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, merged.normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, merged.colors)
+        .with_inserted_indices(Indices::U32(merged.indices));
+    if with_origins {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+    }
+    Some(mesh)
 }
 
 /// Placement result of a chunk.
@@ -520,6 +552,10 @@ struct PlacementTask {
     edits: u64,
 }
 
+/// A chunk's merged LOD1 mesh being built.
+#[derive(Component)]
+struct NearMeshTask(Task<Option<Mesh>>);
+
 /// A chunk's placed vegetation and what it currently shows.
 #[derive(Component)]
 struct ChunkVegetation {
@@ -527,14 +563,38 @@ struct ChunkVegetation {
     ground: Arc<Vec<Instance>>,
     /// Merged LOD2 mesh, shown while the chunk is far.
     far: Option<Entity>,
-    /// 0: far mesh only; 1: LOD1 instances; 2: also LOD0 models and ground cover.
-    level: u8,
-    /// Parents of the LOD1 instances (level 1+) and of the LOD0 / ground cover (level 2).
-    near: Option<Entity>,
-    detail: Option<Entity>,
+    /// Whether the chunk is near (shows its merged LOD1 mesh and LOD0 models).
+    near: bool,
+    /// Merged LOD1 mesh, while near.
+    near_mesh: Option<Entity>,
+    /// LOD0 entities around the camera, by instance (ground cover after the large ones).
+    spawned: HashMap<u32, Vec<Entity>>,
     /// Number of edits included.
     edits: u64,
 }
+
+impl ChunkVegetation {
+    fn despawn_all(&mut self, commands: &mut Commands) {
+        let entities = [self.far.take(), self.near_mesh.take()]
+            .into_iter()
+            .flatten()
+            .chain(self.spawned.drain().flat_map(|(_, entities)| entities));
+        for entity in entities {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    fn despawn_details(&mut self, commands: &mut Commands) {
+        for (_, entities) in self.spawned.drain() {
+            for entity in entities {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
+/// Background tasks running (placement and near meshes share [`MAX_TASKS`]).
+type Running = Or<(With<PlacementTask>, With<NearMeshTask>)>;
 
 /// Place vegetation in chunks that have none (or whose ground was edited since).
 fn start_placement(
@@ -542,7 +602,7 @@ fn start_placement(
     map: Res<Map>,
     vegetation: Res<Vegetation>,
     chunks: Query<(Entity, &IsGround, Option<&ChunkVegetation>), Without<PlacementTask>>,
-    running: Query<(), With<PlacementTask>>,
+    running: Query<(), Running>,
     mut placement: Local<Option<Placement>>,
 ) {
     let placement = placement.get_or_insert_with(|| Placement {
@@ -563,13 +623,12 @@ fn start_placement(
         if current.is_some_and(|current| current.edits >= edits) {
             continue;
         }
-        let (placement, stand_ins, chunk) =
-            (placement.clone(), vegetation.lod2.clone(), *chunk);
+        let (placement, stand_ins, chunk) = (placement.clone(), vegetation.lod2.clone(), *chunk);
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let large = placement.place(chunk, LARGE_CELL, 1, large_rules);
             let ground = placement.place(chunk, GROUND_CELL, 2, ground_rules);
             let origin = (chunk.as_vec2() * CHUNK_SIZE).extend(0.).xzy();
-            let far = far_mesh(&stand_ins, &large, origin);
+            let far = merged_mesh(&stand_ins, &large, origin, false);
             Placed { large, ground, far }
         });
         commands.entity(entity).insert(PlacementTask { task, edits });
@@ -582,16 +641,14 @@ fn finish_placement(
     mut commands: Commands,
     vegetation: Res<Vegetation>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut chunks: Query<(Entity, &IsGround, &mut PlacementTask, Option<&ChunkVegetation>)>,
+    mut chunks: Query<(Entity, &IsGround, &mut PlacementTask, Option<&mut ChunkVegetation>)>,
 ) {
     for (entity, IsGround(chunk), mut task, previous) in &mut chunks {
         let Some(placed) = check_ready(&mut task.task) else {
             continue;
         };
-        if let Some(previous) = previous {
-            for old in [previous.far, previous.near, previous.detail].into_iter().flatten() {
-                commands.entity(old).despawn();
-            }
+        if let Some(mut previous) = previous {
+            previous.despawn_all(&mut commands);
         }
         let origin = chunk.as_vec2() * CHUNK_SIZE;
         let far = placed.far.map(|mesh| {
@@ -605,122 +662,179 @@ fn finish_placement(
                 ))
                 .id()
         });
-        commands.entity(entity).remove::<PlacementTask>().insert(ChunkVegetation {
-            large: Arc::new(placed.large),
-            ground: Arc::new(placed.ground),
-            far,
-            level: 0,
-            near: None,
-            detail: None,
-            edits: task.edits,
-        });
+        commands
+            .entity(entity)
+            .remove::<(PlacementTask, NearMeshTask)>()
+            .insert(ChunkVegetation {
+                large: Arc::new(placed.large),
+                ground: Arc::new(placed.ground),
+                far,
+                near: false,
+                near_mesh: None,
+                spawned: HashMap::default(),
+                edits: task.edits,
+            });
     }
 }
 
-/// Switch chunks between far mesh, LOD1 instances, and full detail, by camera distance.
+/// Camera distance to a chunk (to its nearest point on the ground).
+fn chunk_distance(map: &Map, camera: Vec3, chunk: I64Vec2) -> f32 {
+    let min = chunk.as_vec2() * CHUNK_SIZE;
+    let nearest = camera.xz().clamp(min, min + CHUNK_SIZE);
+    let ground = Vec3::new(nearest.x, 0., nearest.y);
+    camera.distance(ground.with_y(map.get_height(ground)))
+}
+
+/// Switch chunks between their far (LOD2) and near (LOD1) merged meshes by camera distance.
+/// The far mesh stays until the near one is built.
 fn update_levels(
     mut commands: Commands,
     map: Res<Map>,
     vegetation: Res<Vegetation>,
     camera: Single<&Transform, With<Camera3d>>,
-    mut chunks: Query<(&IsGround, &mut ChunkVegetation)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut chunks: Query<(Entity, &IsGround, &mut ChunkVegetation, Option<&mut NearMeshTask>)>,
+    running: Query<(), Running>,
 ) {
     let camera = camera.translation;
-    let mut changes = 0;
+    let mut available = MAX_TASKS.saturating_sub(running.iter().len());
+    for (entity, IsGround(chunk), mut state, task) in &mut chunks {
+        let distance = chunk_distance(&map, camera, *chunk);
+        let near =
+            distance < NEAR_DISTANCE || (state.near && distance < NEAR_DISTANCE + LEVEL_MARGIN);
+        let origin = (chunk.as_vec2() * CHUNK_SIZE).extend(0.).xzy();
+        match (near, state.near, task) {
+            (true, false, None) if available > 0 => {
+                available -= 1;
+                let (stand_ins, instances) = (vegetation.lod1.clone(), state.large.clone());
+                commands.entity(entity).insert(NearMeshTask(
+                    AsyncComputeTaskPool::get()
+                        .spawn(async move { merged_mesh(&stand_ins, &instances, origin, true) }),
+                ));
+            }
+            (true, false, Some(mut task)) => {
+                let Some(mesh) = check_ready(&mut task.0) else {
+                    continue;
+                };
+                state.near_mesh = mesh.map(|mesh| {
+                    commands
+                        .spawn((
+                            Name::new("vegetation (near)"),
+                            Mesh3d(meshes.add(mesh)),
+                            MeshMaterial3d(vegetation.near_material.clone()),
+                            Transform::from_translation(origin),
+                            Pickable::IGNORE,
+                        ))
+                        .id()
+                });
+                if let Some(far) = state.far {
+                    commands.entity(far).insert(Visibility::Hidden);
+                }
+                state.near = true;
+                commands.entity(entity).remove::<NearMeshTask>();
+            }
+            (false, true, _) | (false, false, Some(_)) => {
+                commands.entity(entity).remove::<NearMeshTask>();
+                if let Some(near_mesh) = state.near_mesh.take() {
+                    commands.entity(near_mesh).despawn();
+                }
+                state.despawn_details(&mut commands);
+                if let Some(far) = state.far {
+                    commands.entity(far).insert(Visibility::Inherited);
+                }
+                state.near = false;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Spawn the LOD0 models (and ground cover) of near chunks around the camera, and despawn the
+/// ones left behind. Spawns are bounded per frame; the pass is skipped while the camera is
+/// still, no chunk came near and everything around it is spawned.
+fn update_details(
+    mut commands: Commands,
+    map: Res<Map>,
+    vegetation: Res<Vegetation>,
+    camera: Single<&Transform, With<Camera3d>>,
+    mut chunks: Query<(&IsGround, &mut ChunkVegetation)>,
+    mut last: Local<Option<(Vec3, usize)>>,
+    mut pending: Local<bool>,
+) {
+    let camera = camera.translation;
+    // Rerun when the camera moved, chunks came near, or spawns were left for later.
+    let near_chunks = chunks.iter().filter(|(_, state)| state.near).count();
+    if !*pending
+        && last.is_some_and(|(position, near)| {
+            position.distance(camera) < 0.5 && near == near_chunks
+        })
+    {
+        return;
+    }
+    *last = Some((camera, near_chunks));
+    *pending = false;
+    let mut budget = SPAWNS_PER_FRAME;
+    let reach = LOD0_DISTANCE.max(GROUND_FADE.1) + 3. * SPAWN_MARGIN;
     for (IsGround(chunk), mut state) in &mut chunks {
-        let min = chunk.as_vec2() * CHUNK_SIZE;
-        let nearest = camera.xz().clamp(min, min + CHUNK_SIZE);
-        let ground = Vec3::new(nearest.x, 0., nearest.y);
-        let distance = camera.distance(ground.with_y(map.get_height(ground)));
-        let level = |enter: f32, current: bool| {
-            distance < enter || (current && distance < enter + LEVEL_MARGIN)
-        };
-        let target = if level(DETAIL_DISTANCE, state.level >= 2) {
-            2
-        } else if level(NEAR_DISTANCE, state.level >= 1) {
-            1
-        } else {
-            0
-        };
-        if target == state.level || changes >= LEVEL_CHANGES_PER_FRAME {
+        if !state.near {
             continue;
         }
-        changes += 1;
-        // LOD1 instances.
-        if target >= 1 && state.near.is_none() {
-            let parent = commands
-                .spawn((Name::new("vegetation (near)"), Transform::default(), Visibility::default()))
-                .id();
-            for instance in state.large.iter() {
-                for (mesh, material) in &vegetation.lod1[instance.species as usize] {
-                    commands.spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        instance.transform(),
-                        VisibilityRange {
-                            start_margin: LOD0_DISTANCE - LOD_FADE..LOD0_DISTANCE + LOD_FADE,
-                            end_margin: f32::MAX..f32::MAX,
-                            use_aabb: false,
-                        },
-                        Pickable::IGNORE,
-                        ChildOf(parent),
-                    ));
-                }
-            }
-            state.near = Some(parent);
-        } else if target == 0 && let Some(near) = state.near.take() {
-            commands.entity(near).despawn();
+        if chunk_distance(&map, camera, *chunk) > reach {
+            state.despawn_details(&mut commands);
+            continue;
         }
-        // LOD0 models and ground cover.
-        if target == 2 && state.detail.is_none() {
-            let parent = commands
-                .spawn((Name::new("vegetation (detail)"), Transform::default(), Visibility::default()))
-                .id();
-            for instance in state.large.iter() {
-                for (mesh, material) in &vegetation.lod0[instance.species as usize] {
-                    commands.spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        instance.transform(),
-                        VisibilityRange {
-                            start_margin: 0.0..0.0,
-                            end_margin: LOD0_DISTANCE - LOD_FADE..LOD0_DISTANCE + LOD_FADE,
-                            use_aabb: false,
-                        },
-                        Pickable::IGNORE,
-                        ChildOf(parent),
-                    ));
+        let state = &mut *state;
+        let instances = state
+            .large
+            .iter()
+            .map(|instance| (instance, LOD0_DISTANCE + LOD_FADE, false))
+            .chain(
+                state
+                    .ground
+                    .iter()
+                    .map(|instance| (instance, GROUND_FADE.1, true)),
+            );
+        for (index, (instance, visible, ground)) in instances.enumerate() {
+            let index = index as u32;
+            let distance = instance.position.distance(camera);
+            let spawned = state.spawned.contains_key(&index);
+            if spawned && distance > visible + 2. * SPAWN_MARGIN {
+                for entity in state.spawned.remove(&index).unwrap_or_default() {
+                    commands.entity(entity).despawn();
                 }
-            }
-            for instance in state.ground.iter() {
-                for (mesh, material) in &vegetation.lod0[instance.species as usize] {
-                    commands.spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material.clone()),
-                        instance.transform(),
-                        VisibilityRange {
-                            start_margin: 0.0..0.0,
-                            end_margin: GROUND_FADE.0..GROUND_FADE.1,
-                            use_aabb: false,
-                        },
-                        NotShadowCaster,
-                        Pickable::IGNORE,
-                        ChildOf(parent),
-                    ));
+            } else if !spawned && distance < visible + SPAWN_MARGIN {
+                if budget == 0 {
+                    *pending = true;
+                    continue;
                 }
+                budget -= 1;
+                let range = if ground {
+                    GROUND_FADE.0..GROUND_FADE.1
+                } else {
+                    LOD0_DISTANCE - LOD_FADE..LOD0_DISTANCE + LOD_FADE
+                };
+                let entities = vegetation.lod0[instance.species as usize]
+                    .iter()
+                    .map(|(mesh, material)| {
+                        let mut entity = commands.spawn((
+                            Mesh3d(mesh.clone()),
+                            MeshMaterial3d(material.clone()),
+                            instance.transform(),
+                            VisibilityRange {
+                                start_margin: 0.0..0.0,
+                                end_margin: range.clone(),
+                                use_aabb: false,
+                            },
+                            Pickable::IGNORE,
+                        ));
+                        if ground {
+                            entity.insert(NotShadowCaster);
+                        }
+                        entity.id()
+                    })
+                    .collect();
+                state.spawned.insert(index, entities);
             }
-            state.detail = Some(parent);
-        } else if target < 2 && let Some(detail) = state.detail.take() {
-            commands.entity(detail).despawn();
         }
-        // The far mesh shows only while the chunk has no instances.
-        if let Some(far) = state.far {
-            commands.entity(far).insert(if target == 0 {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            });
-        }
-        state.level = target;
     }
 }

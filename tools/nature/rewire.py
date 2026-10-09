@@ -100,6 +100,19 @@ def rebuild(material, info):
     return base_file, opacity_file
 
 
+def lookup(name):
+    """The mapping of a material, or of the material it derives from (`MI_Tree2_2` ->
+    `MI_Tree2`): unmapped materials would render plain white."""
+    name = name.split(".")[0]
+    while name:
+        if name in mapping:
+            return mapping[name]
+        if "_" not in name:
+            return None
+        name = name.rsplit("_", 1)[0]
+    return None
+
+
 for model in models:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     if model.lower().endswith(".fbx"):
@@ -108,7 +121,7 @@ for model in models:
         bpy.ops.import_scene.gltf(filepath=model)
     report = []
     for material in bpy.data.materials:
-        info = mapping.get(material.name) or mapping.get(material.name.split(".")[0])
+        info = lookup(material.name)
         if info is None:
             report.append(f"{material.name}: no mapping")
             continue

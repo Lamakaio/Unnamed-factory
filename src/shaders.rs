@@ -14,6 +14,7 @@ impl Plugin for ShadersPlugin {
             MaterialPlugin::<MapMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
             MaterialPlugin::<ToonMaterial>::default(),
+            MaterialPlugin::<LodToonMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
@@ -39,6 +40,43 @@ impl MaterialExtension for ToonShader {
 }
 
 pub type ToonMaterial = ExtendedMaterial<StandardMaterial, ToonShader>;
+
+/// [`ToonShader`] for merged stand-ins of many objects (far levels of detail), each fading out
+/// where its detailed model fades in: vertices carry their object's origin (UV0 = x, z;
+/// UV1.x = y), and `lod` is the detailed models' visibility range end margin (`x..y`). Not in
+/// the depth prepass, which would hide the detailed models behind faded-out stand-ins.
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct LodToonShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+    #[uniform(101)]
+    pub lod: Vec4,
+}
+
+impl MaterialExtension for LodToonShader {
+    fn fragment_shader() -> ShaderRef {
+        TOON_SHADER_ASSET_PATH.into()
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &bevy::pbr::MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _key: bevy::pbr::MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            fragment.shader_defs.push("LOD_FADE".into());
+        }
+        Ok(())
+    }
+}
+
+pub type LodToonMaterial = ExtendedMaterial<StandardMaterial, LodToonShader>;
 
 /// The toon version of a standard material (e.g. one loaded from a glTF file).
 pub fn toon(base: &StandardMaterial) -> ToonMaterial {

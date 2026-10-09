@@ -22,15 +22,15 @@ done
 G=$EXPORT/glb
 # name=kind=source[=leaf colour override, sRGB hex]
 "$BLENDER" -b -P "$HERE/make_nature.py" -- "$OUT" \
-    broadleaf_round=tree=$G/StylizedProvencal/SM_Tree_02.glb=5f8a2c \
-    broadleaf_tall=tree=$G/Fantastic_Hills/SM_Tree_0_2.glb=4f7f28 \
-    broadleaf_wide=tree=$G/Fantastic_Hills/SM_Tree_02.glb=58822e \
-    cypress=tree=$G/StylizedProvencal/SM_Tree_Cypress.glb=3c5e27 \
-    pine=tree=$G/Fantastic_Hills/SM_PineTree05.glb=2f5530 \
+    broadleaf_round=tree=$G/StylizedProvencal/SM_Tree_02.glb=4a6c22 \
+    broadleaf_tall=tree=$G/Fantastic_Hills/SM_Tree_0_2.glb=3e631f \
+    broadleaf_wide=tree=$G/Fantastic_Hills/SM_Tree_02.glb=456524 \
+    cypress=tree=$G/StylizedProvencal/SM_Tree_Cypress.glb=2f491e \
+    pine=tree=$G/Fantastic_Hills/SM_PineTree05.glb=254225 \
     dead_pine=tree=$G/Taiga_Biome/SM_Dead_Pine_01.glb \
-    bush_round=bush=$G/StylizedProvencal/SM_Bush_01.glb=5c8530 \
-    bush_flowers=bush=$G/StylizedProvencal/SM_Bush_04.glb=6a8a3a \
-    bush_leafy=bush=$G/Fantastic_Hills/SM_Bushes.glb=4e7a2a \
+    bush_round=bush=$G/StylizedProvencal/SM_Bush_01.glb=486825 \
+    bush_flowers=bush=$G/StylizedProvencal/SM_Bush_04.glb=536c2d \
+    bush_leafy=bush=$G/Fantastic_Hills/SM_Bushes.glb=3d5f21 \
     rock_a=rock=$G/NordicVillage/SM_Rock02.glb \
     rock_b=rock=$G/NordicVillage/SM_Rock03.glb \
     rock_c=rock=$G/NordicVillage/SM_Rock04.glb \
