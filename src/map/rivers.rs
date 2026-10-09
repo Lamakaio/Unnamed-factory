@@ -9,11 +9,13 @@ use super::{
     spatial::{SpatialGrid, rects_overlap},
 };
 
-/// Height of the bank top above the water, in world units.
-const BANK_FREEBOARD: f32 = 0.15;
 /// Bank width relative to the channel width (with a minimum of [`MIN_BANK`]).
 const BANK_PER_WIDTH: f32 = 0.6;
 const MIN_BANK: f32 = 0.8;
+/// Banks widen so their mean slope stays below this, up to [`MAX_BANK`] wide: steep walls
+/// alias into a sawtooth on the mesh grid.
+const MAX_BANK_SLOPE: f32 = 0.8;
+const MAX_BANK: f32 = 3.;
 /// Cell size of the segment lookup grid, in world units.
 const LOOKUP_CELL: f32 = 4.;
 
@@ -29,9 +31,9 @@ struct RiverSegment {
 }
 
 impl RiverSegment {
-    /// Distance from the river axis where the carving ends.
+    /// Distance from the river axis where the carving can end (the widest bank).
     fn reach(width: f32) -> f32 {
-        width / 2. + (width * BANK_PER_WIDTH).max(MIN_BANK)
+        width / 2. + MAX_BANK.max(width * BANK_PER_WIDTH)
     }
 
     fn bounds(&self) -> (Vec2, Vec2) {
@@ -72,8 +74,9 @@ impl RiverLayer {
 
     /// Carve the river channels at `p` into `height`, returning how wet the point is (0 to 1).
     ///
-    /// Cross-section: a parabolic channel `depth` deep and `width` wide, then banks rising from
-    /// just above the water back to the terrain.
+    /// Cross-section: a parabolic channel `depth` deep and `width` wide, then banks rising
+    /// from the water line back to the terrain, steep at first (so the water ribbon's overlap
+    /// goes under them) and wide enough to keep a moderate slope. The profile is continuous.
     pub fn carve(&self, p: Vec2, height: &mut f32) -> f32 {
         let base = *height;
         let mut wetness: f32 = 0.;
@@ -97,9 +100,14 @@ impl RiverLayer {
                 let depth = segment.depth_a.lerp(segment.depth_b, u);
                 water - depth * (1. - (distance / half).powi(2))
             } else {
-                let bank = (width * BANK_PER_WIDTH).max(MIN_BANK);
-                let t = smoothstep((distance - half) / bank);
-                (water + BANK_FREEBOARD).lerp(base.max(water + BANK_FREEBOARD), t)
+                let rise = (base - water).max(0.);
+                let bank = (width * BANK_PER_WIDTH)
+                    .max(MIN_BANK)
+                    .max(rise / MAX_BANK_SLOPE)
+                    .min(MAX_BANK.max(width * BANK_PER_WIDTH));
+                // Ease-out: steepest at the water line, flattening into the terrain.
+                let t = ((distance - half) / bank).clamp(0., 1.);
+                water + rise * (1. - (1. - t) * (1. - t))
             };
             *height = height.min(carved);
             wetness = wetness.max(((half + 0.3 - distance) / 0.3).clamp(0., 1.));
@@ -122,7 +130,3 @@ impl RiverLayer {
     }
 }
 
-fn smoothstep(t: f32) -> f32 {
-    let t = t.clamp(0., 1.);
-    t * t * (3. - 2. * t)
-}

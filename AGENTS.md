@@ -152,7 +152,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      - `smooth_cells`: a light binomial blur (erosion leaves a 1-cell checker on flats);
      - `shape_coast`: land rises `inland_rise` (3) over 100 cells from the coast, and is
        capped by a ramp from the shore (gentle beaches; no cliffs dropping into the sea); the
-       sea floor starts as a shallow shelf;
+       sea floor starts as a shallow shelf. Both follow a blurred signed distance to the
+       shore (returned, and used for beaches), so the shore doesn't follow the cell staircase;
      - `cap_plateaus`: plateau provinces are cut at their cap level (tablelands, escarpments);
      - `limit_slopes`: thermal erosion to a talus slope (~0.45–0.7 per cell, steeper on
        plateau edges), so nothing is abruptly steep.
@@ -203,8 +204,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   base surface gradient into an `Rg16Float` texture (one texel per surface sample) for the
   terrain shader; `feature_gradient(p)` is what rivers and edits add on top.
   - **River layer** (`map/rivers.rs`): the generated river polylines, as segments in a spatial
-    grid. Cross-section: a parabolic channel (`width`, `depth` below the water line), then
-    banks from water + 0.15 back to the terrain over max(0.8, 0.6·width). It only ever lowers
+    grid. Cross-section: a parabolic channel (`width`, `depth` below the water line), then a
+    continuous ease-out bank from the water line back to the terrain, max(0.8, 0.6·width)
+    wide and widened (up to 3) to keep its slope under 0.8: steep walls alias into a
+    sawtooth on the mesh grid. It only ever lowers
     the terrain. The valleys themselves are baked by erosion. Wetness is 1 in the channel.
   - **Edit layer** (`map/edits.rs`): `TerrainEdit::Flatten` (building foundations: flat over
     the inner 60% of the radius, smootherstep blend outside) and `Raise` (tools: ±10 units,

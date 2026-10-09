@@ -385,25 +385,38 @@ pub fn cap_plateaus(shape: &Shape, heights: &mut [f32]) {
 /// the sea floor slopes down from it as a shelf, so the coast never drops straight from the
 /// eroded land to the sea floor. The whole land also rises gently inland, so lowlands away
 /// from the coast stand a few units above the sea.
-pub fn shape_coast(settings: &WorldgenSettings, shape: &Shape, noise: Noise, heights: &mut [f32]) {
+///
+/// Returns the distance to the shore (cells, negative at sea), smoothed so the shore doesn't
+/// follow the cell staircase of the land mask.
+pub fn shape_coast(
+    settings: &WorldgenSettings,
+    shape: &Shape,
+    noise: Noise,
+    heights: &mut [f32],
+) -> Vec<f32> {
     let size = settings.size;
     let to_sea = distance_field(size, &shape.base_level);
     let land: Vec<bool> = shape.base_level.iter().map(|sea| !sea).collect();
     let to_land = distance_field(size, &land);
+    let signed: Vec<f32> = to_sea.iter().zip(&to_land).map(|(s, l)| s - l).collect();
+    let shore = blur(size, &blur(size, &signed, 2), 2);
     let variation = noise.layer(30);
     for (i, h) in heights.iter_mut().enumerate() {
         let p = Vec2::new((i % size) as f32, (i / size) as f32);
+        let d = shore[i];
         if shape.base_level[i] {
-            let shelf = -0.3 - 0.35 * (to_land[i] - 1.).max(0.);
-            *h = h.max(shelf);
+            // A shallow shelf, then the open sea floor.
+            *h = h.max(0.15 + 0.35 * (d - 0.5)).min(-0.05);
         } else {
             let slope = (0.25 + 0.3 * (0.5 + 0.5 * variation.fbm(p / 60., 3)) + 0.5 * shape.range[i])
                 * settings.cell_size;
-            let ramp = 0.15 + slope * (to_sea[i] - 0.5);
+            let ramp = 0.15 + slope * (d - 0.5);
             let inland = settings.inland_rise * smoothstep(0., 100., to_sea[i]);
-            *h = smooth_min(*h + inland, ramp, 1.).max(0.1);
+            // Land cells may end up just under water: the shore follows `shore`, not the mask.
+            *h = smooth_min(*h + inland, ramp, 1.).max(-0.3);
         }
     }
+    shore
 }
 
 /// Collapse slopes steeper than the rock can hold (thermal erosion): material slides from

@@ -22,7 +22,7 @@ use super::{
 
 /// Ground colors are sampled at positions warped by up to this distance (world units), so
 /// borders between biomes don't follow the cell grid.
-const COLOR_WARP: f32 = 0.8;
+const COLOR_WARP: f32 = 0.4;
 
 /// Distance used to compute normals by finite differences. It is the same at every LOD level,
 /// so lighting matches across LOD seams.
@@ -227,7 +227,7 @@ impl BaseGrid {
     }
 
     fn color(&self, p: Vec2) -> Vec3 {
-        let p = p + Noise::new(0xC010).warp(p / 3., 2, COLOR_WARP);
+        let p = p + Noise::new(0xC010).warp(p / 6., 2, COLOR_WARP);
         Vec3::new(
             self.colors[0].bilinear(p),
             self.colors[1].bilinear(p),

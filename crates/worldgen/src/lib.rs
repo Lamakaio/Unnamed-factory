@@ -342,7 +342,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         }
     }
     terrain::smooth_cells(settings, &shape, &mut heights);
-    terrain::shape_coast(settings, &shape, noise, &mut heights);
+    let shore = terrain::shape_coast(settings, &shape, noise, &mut heights);
     terrain::cap_plateaus(&shape, &mut heights);
     terrain::limit_slopes(settings, &shape, &mut heights);
     lap("erosion", &mut timings);
@@ -365,7 +365,15 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     let drainage = flow::FlowGraph::new(size, &routing, &shape.base_level).accumulate(|_| 1.);
     lap("rivers", &mut timings);
 
-    let climate = climate::climate(settings, noise, &heights, &shape.base_level, &lake_of, &drainage);
+    let climate = climate::climate(
+        settings,
+        noise,
+        &heights,
+        &shape.base_level,
+        &shore,
+        &lake_of,
+        &drainage,
+    );
     let landform: Vec<Landform> = (0..size * size).map(|i| shape.landform(i)).collect();
     let ruggedness: Vec<f32> = (0..size * size).map(|i| shape.ruggedness(i)).collect();
     lap("climate", &mut timings);

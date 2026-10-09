@@ -22,6 +22,7 @@ pub fn climate(
     noise: Noise,
     heights: &[f32],
     base_level: &[bool],
+    shore: &[f32],
     lake_of: &[Option<u16>],
     drainage: &[f32],
 ) -> Climate {
@@ -33,25 +34,6 @@ pub fn climate(
     let mut moisture = vec![0.; n];
     let mut temperature = vec![0.; n];
     let mut biome = vec![Biome::Sea; n];
-
-    // Distance to the sea, in cells, up to a few cells (for beaches).
-    let mut near_sea = vec![u8::MAX; n];
-    let mut frontier: Vec<usize> = (0..n).filter(|&i| base_level[i]).collect();
-    for &i in &frontier {
-        near_sea[i] = 0;
-    }
-    for distance in 1..4u8 {
-        let mut next = Vec::new();
-        for &i in &frontier {
-            for (j, _) in neighbours(size, i) {
-                if near_sea[j] == u8::MAX {
-                    near_sea[j] = distance;
-                    next.push(j);
-                }
-            }
-        }
-        frontier = next;
-    }
 
     // Valley floors along big drainage are wet. Spread over a few cells: single-cell drainage
     // lines run straight across flat ground and would show as lines of vegetation.
@@ -78,7 +60,7 @@ pub fn climate(
             Biome::Sea
         } else if lake_of[i].is_some() {
             Biome::Lake
-        } else if near_sea[i] <= 3 && h < 1.5 && slope < 0.5 {
+        } else if shore[i] < 3.5 + wobble * 8. && h < 2. && slope < 0.5 {
             Biome::Beach
         } else if temperature[i] < 0.08 {
             Biome::Snow
