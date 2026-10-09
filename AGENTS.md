@@ -56,15 +56,17 @@ Design source: [`notes.md`](notes.md) (preliminary, in English with some typos).
 ## 2. Repo map (as of the `bevy-upgrade` branch, 2026-10-09)
 
 ```
-Cargo.toml              bevy 0.20 (+ bevy_remote, trace_tracy, file_watcher, pan_orbit_camera,
+Cargo.toml              bevy 0.20 (+ bevy_remote, file_watcher, pan_orbit_camera,
                         bevy_dev_tools, render_dev_tools), ron 0.12, serde, anyhow,
                         kdtree-collisions (user's own git crate, no bevy dep), noiz 0.5 (noise,
                         [patch]ed to a local Bevy 0.20 port — see §4.1), rand 0.10, rand_distr 0.6,
                         rhai 1.26, foldhash 0.2, fast_hilbert 2.1. All versions pinned.
+                        Feature `tracy`: `cargo run --features tracy` for Tracy profiling.
+Cargo.lock              tracked
 rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers nightly.
 .cargo/config.toml      (git-ignored, local) rust-lld linker + `jobs = -4` to keep the PC usable while compiling
 notes.md                game design notes (see §1)
-src/main.rs             only assembles plugins (DefaultPlugins, MeshPickingPlugin, feature plugins)
+src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
@@ -79,7 +81,6 @@ assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale
 assets/materials/map.mapmat terrain material params (pbr + biome colors as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
 assets/shaders/map_material.wesl   terrain fragment shader (WESL) (biome colouring from UV; based on bevy_wind_waker_shader)
-assets/shaders/build_material.wgsl  unused (BuildMaterial is commented out)
 ```
 
 ### Controls
@@ -98,14 +99,18 @@ Debug: F rotate sun · F2 AABBs · F3 wireframe · F4 rivers/lakes · click terr
 
 ### 3.1 App (`main.rs`, `camera.rs`, `environment.rs`, `dev_tools.rs`)
 `main.rs` adds `DefaultPlugins` (nearest-neighbour images, includes TAA and UI widgets),
-`MeshPickingPlugin`, and one plugin per module.
+`MeshPickingPlugin`, and one plugin per module. `AppState` starts in `Loading` (world
+generation, "Generating world..." text) and moves to `InGame` once the `Map` exists. Systems
+that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observers take
+`Option<Res<Map>>`.
 - **Camera** (`camera.rs`): HDR, Bloom, TAA, `AtmosphereSettings`, `DistanceFog` and an
   `AmbientLight` override on the camera. It uses Bevy 0.20's `PanOrbitCamera`, which ships
   without input bindings. The input mapping is adapted from Bevy's
   `pan_orbit_camera_custom_input_plugin` example and runs in `PreUpdate`, before
   `SyncCameraPosition`. The camera controller applies deltas to `Transform`, so
   `keyboard_pan` (Update) and `keep_above_terrain` (PostUpdate) edit the transform directly.
-  The camera spawns looking at the terrain at the origin.
+  The camera spawns at startup (it renders the loading screen) and `look_at_origin` places it
+  over the terrain at the origin on entering `InGame`.
 - **Environment**: sun `DirectionalLight` (`lux::RAW_SUNLIGHT`) and an `Atmosphere` entity
   (`ScatteringMedium::default()`).
 - **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`, gizmo
@@ -114,8 +119,9 @@ Debug: F rotate sun · F2 AABBs · F3 wireframe · F4 rivers/lakes · click terr
   screenshot and exits. See §6.
 
 ### 3.2 Terrain (`mapgen.rs`, `map.rs`)
-- **`Continent`** is generated **synchronously inside `MapPlugin::build`**, which blocks
-  startup. It holds 2048×2048 `TerrainPoint`s (height, gradient) indexed by **Hilbert
+- **`Continent`** is generated on the `AsyncComputeTaskPool` at startup (~1.8 s).
+  `finish_generation` polls the task with `check_ready`, inserts `Map` (and loads the
+  terrain material), and enters `AppState::InGame`. It holds 2048×2048 `TerrainPoint`s (height, gradient) indexed by **Hilbert
   curve** (`fast_hilbert::xy2h/h2xy`).
   - The height comes from a big composed `noiz` noise type (`NoiseT`), multiplied by an
     edge falloff.
@@ -205,17 +211,10 @@ nodes is still manual (`update_scroll_position`), as in Bevy's own example.
 ### 3.7 Known issues / smells (fix opportunistically)
 - `cargo check` passes with only dead-code warnings: unused data fields, `TestCurve`
   experiments, `ChunkMarker`.
-- `trace_tracy` is always on: it logs that memory grows until a Tracy client connects, plus a
-  harmless `SymInitialize FAILED` line. Consider moving it behind an opt-in cargo feature.
 - `bevy_dev_tools` is enabled for the in-game build grid. Bevy says not to ship dev tools;
   revisit (e.g. draw the grid in the terrain shader) before any release.
-- `assets/shaders/build_material.wgsl` is unused (BuildMaterial is commented out) and was never
-  ported to WESL. Port it or delete it if BuildMaterial comes back.
 - `mapgen.rs` prints `dbg!(h_grad)` during generation (user WIP).
-- Continent generation blocks app startup. Move it to `AsyncComputeTaskPool` behind a
-  loading state.
 - No tests. `mapgen` and the sim math are pure and easy to unit-test.
-- `Cargo.lock` is git-ignored. For a binary crate it **should be committed**.
 
 ---
 
@@ -231,7 +230,7 @@ errors. For future upgrades, keep the same approach: **one minor version at a ti
 commit each step.
 
 Gotchas hit during the upgrade:
-- The git-ignored local `Cargo.lock` held stale versions that broke builds (`tracy-client-sys`,
+- The then git-ignored local `Cargo.lock` held stale versions that broke builds (`tracy-client-sys`,
   `gpu-allocator`). Fix them with a targeted `cargo update -p <crate>`. Since then all
   dependencies are pinned and bumped (rand 0.10, rhai 1.26, ...).
 - 0.17: `TemporalAntiAliasPlugin` is in `DefaultPlugins`, so adding it again panics.
@@ -257,8 +256,8 @@ Gotchas hit during the upgrade:
 - Latest versions (2026-10-09): `rhai 1.26`, `ron 0.12` (Bevy no longer re-exports ron),
   `rand 0.10` (`Rng`→`RngExt`, `RngCore`→`Rng`), `rand_distr 0.6`, `foldhash 0.2`,
   `fast_hilbert 2.1`, `thiserror 2` (Bevy examples use it for loader errors).
-- Make `trace_tracy` an opt-in cargo feature, and put `file_watcher` and `bevy_remote` in a
-  `dev` feature. Consider `bevy/dynamic_linking` for dev builds only.
+- `trace_tracy` is now the opt-in `tracy` feature. Still possible: put `file_watcher` and
+  `bevy_remote` in a `dev` feature, and use `bevy/dynamic_linking` for dev builds only.
 
 ### 4.2 Changes that hit this codebase (cumulative, 0.16 → 0.20)
 
