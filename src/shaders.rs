@@ -12,12 +12,32 @@ impl Plugin for ShadersPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             MaterialPlugin::<MapMaterial>::default(),
+            MaterialPlugin::<WaterMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
 }
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
+const WATER_SHADER_ASSET_PATH: &str = "shaders/water.wesl";
+
+/// Water material extension (sea, lakes, rivers): toon water drawn by the shader, coloured by
+/// the depth of water behind each pixel (from the depth prepass), with shore foam and
+/// animated glints. `tint` multiplies it.
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct WaterShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+}
+
+impl MaterialExtension for WaterShader {
+    fn fragment_shader() -> ShaderRef {
+        WATER_SHADER_ASSET_PATH.into()
+    }
+}
+
+pub type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterShader>;
 
 /// Terrain material extension. The shader draws the ground procedurally from the `ground`
 /// material weights (see `map::ground`); `tint` multiplies it. Normals come from `gradient`

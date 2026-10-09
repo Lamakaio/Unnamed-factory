@@ -1,16 +1,19 @@
-// Terrain material: standard PBR lighting on a procedurally drawn ground.
+// Terrain material, toon style: flat painted ground colours and cel lighting.
 //
 // - Normals are per pixel: the base surface gradient comes from a texture covering the
-//   continent, plus the gradient added by rivers and edits (mesh UVs), plus small bumps per
-//   material. Lighting keeps the full surface detail at any mesh LOD.
+//   continent, plus the gradient added by rivers and edits (mesh UVs), so the relief keeps its
+//   detail at any mesh LOD.
 // - Ground materials (grass, dirt, forest floors, alpine grass, marsh, sand, rock, snow, river
-//   beds, sea floor) are drawn from world-space noise. Their weights come from two textures
-//   baked per continent cell (`map::ground`), warped and sharpened with noise so borders are
-//   irregular; rock on steep slopes and snow sliding off them are decided per pixel. Mesh
-//   vertex color red is the river/lake wetness.
-// - Noise octaves finer than about a pixel fade out, so distant ground doesn't shimmer.
+//   beds, sea floor) are flat colours with a few painted patches from world-space noise. Their
+//   weights come from two textures baked per continent cell (`map::ground`), warped and
+//   sharpened with noise so borders are crisp and irregular; rock on steep slopes and snow
+//   sliding off them are decided per pixel. Mesh vertex color red is the river/lake wetness.
+// - Lighting: the sun is a hard-edged two-tone (lit / cool shadow, from the slope and the
+//   shadow maps) with a small highlight band and a rim light. No specular.
 //
-// Everything is multiplied by `tint`.
+// Everything is multiplied by `tint`. The cel lighting with a rim light follows
+// https://github.com/janhohenheim/bevy_wind_waker_shader (MIT / Apache 2.0), itself after
+// Wind Waker and Breath of the Wild (see CREDITS.md).
 
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -25,7 +28,10 @@ import bevy_pbr::{
 @else
 import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
-    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_functions::main_pass_post_lighting_processing,
+    mesh_view_bindings::{view, lights},
+    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
+    shadows::fetch_directional_shadow,
 };
 
 @if(VISIBILITY_RANGE_DITHER)
@@ -40,6 +46,13 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var ground_a: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(105) var ground_b: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(106) var<uniform> ground_map: vec4<f32>;
+
+// Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
+// light on faces turned to the sun, rim light.
+const LIT: vec3<f32> = vec3(1.0, 0.97, 0.9);
+const SHADOW: vec3<f32> = vec3(0.42, 0.47, 0.64);
+const HIGHLIGHT: f32 = 0.12;
+const RIM: vec3<f32> = vec3(0.25, 0.22, 0.15);
 
 // ---------------------------------------------------------------------------------------------
 // Noise
@@ -81,39 +94,36 @@ fn fbm(p: vec2<f32>, octaves: i32, footprint: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Materials
+// Ground
 
 fn srgb(r: f32, g: f32, b: f32) -> vec3<f32> {
     return pow(vec3(r, g, b), vec3(2.2));
 }
 
-// A cell weight (bilinear, smooth over a cell) made into an irregular, fairly crisp border.
-fn edge(weight: f32, noise: f32) -> f32 {
-    return smoothstep(0.4, 0.6, weight + 0.35 * noise);
+// A crisp step, antialiased over about a pixel (`width` = the value's change per pixel).
+fn crisp(edge: f32, value: f32, width: f32) -> f32 {
+    let w = max(width, 1e-4);
+    return smoothstep(edge - w, edge + w, value);
 }
 
-// Rock, projected from the three axes (cliffs are as detailed as flat rock): mottled stone,
-// strata on cliffs, dark cracks.
+// A cell weight (bilinear, smooth over a cell) made into an irregular, crisp border.
+fn border(weight: f32, noise: f32) -> f32 {
+    let value = weight + 0.3 * noise;
+    return crisp(0.5, value, fwidth(value));
+}
+
+// Patches of a second colour: where the noise passes `threshold`, with crisp edges.
+fn patches(noise: f32, threshold: f32) -> f32 {
+    return crisp(threshold, noise, fwidth(noise));
+}
+
+// Rock: two tones in bands (strata on cliffs) and patches on flat rock.
 fn rock_color(p: vec3<f32>, n: vec3<f32>, footprint: f32) -> vec3<f32> {
-    var w = pow(abs(n), vec3(4.0));
-    w /= w.x + w.y + w.z;
-    let f = footprint * 0.8;
-    let mottle = fbm(p.zy * 0.8, 4, f) * w.x + fbm(p.xz * 0.8, 4, f) * w.y
-        + fbm(p.xy * 0.8, 4, f) * w.z;
-    let strata = sin(p.y * 2.7 + mottle * 3.0) * 0.5 + 0.5;
-    var color = mix(srgb(0.36, 0.34, 0.32), srgb(0.56, 0.53, 0.49), saturate(0.5 + mottle * 0.7));
-    color *= 0.9 + 0.15 * strata * (1.0 - w.y);
-    let cracks = 1.0 - abs(fbm(p.xz * 1.7 + vec2(p.y * 0.9, 0.0), 3, footprint * 1.7));
-    color *= 1.0 - 0.45 * smoothstep(0.88, 0.97, cracks);
-    return color;
-}
-
-struct Ground {
-    albedo: vec3<f32>,
-    roughness: f32,
-    // Amplitudes of the fine and coarse bumps (world units).
-    bump_fine: f32,
-    bump_coarse: f32,
+    let wobble = fbm(p.xz * 0.35 + vec2(p.y * 0.2, 0.0), 3, footprint * 0.35);
+    let strata = sin(p.y * 2.2 + wobble * 2.5);
+    let flat_patches = fbm(p.xz * 0.6, 3, footprint * 0.6);
+    let pattern = mix(strata, flat_patches, smoothstep(0.6, 0.85, n.y));
+    return mix(srgb(0.52, 0.49, 0.47), srgb(0.62, 0.59, 0.55), patches(pattern, 0.1));
 }
 
 fn ground(
@@ -123,99 +133,61 @@ fn ground(
     b: vec4<f32>,
     wet: f32,
     footprint: f32,
-) -> Ground {
+) -> vec3<f32> {
     let xz = p.xz;
     let steep = 1.0 - n.y;
-    // Medium and large scale noise shared by the borders and colour drifts.
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
     let large = fbm(xz * 0.07 + vec2(7.1, 3.3), 3, footprint * 0.07);
+    let blotches = fbm(xz * 0.18 + vec2(2.0, 8.0), 3, footprint * 0.18);
 
-    // Grass, lush to dry, drifting in colour over large areas, with lighter tufts.
-    let dry = saturate(b.r + 0.25 * large);
-    var grass = mix(srgb(0.25, 0.40, 0.12), srgb(0.62, 0.56, 0.30), dry);
-    grass *= 0.85 + 0.2 * fbm(xz * 0.9, 3, footprint * 0.9);
-    let tufts = fbm(xz * 6.0, 2, footprint * 6.0);
-    grass = mix(grass, grass * vec3(1.15, 1.12, 0.85), saturate(tufts * 1.5));
-    // Fine grain, only visible up close.
-    grass *= 0.92 + 0.16 * fbm(xz * 16.0, 2, footprint * 16.0);
+    // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches.
+    let dry = saturate(b.r + 0.2 * large);
+    let dry_step = floor(dry * 3.0 + 0.5) / 3.0;
+    var grass = mix(srgb(0.40, 0.66, 0.24), srgb(0.80, 0.72, 0.38), dry_step);
+    grass = mix(grass, grass * vec3(1.1, 1.1, 0.9), patches(blotches, 0.25));
     var color = grass;
-    var roughness = 0.9;
-    var bump_fine = 0.02;
-    var bump_coarse = 0.0;
+    let dirt = patches(fbm(xz * 0.5 + vec2(3.3, 1.1), 3, footprint * 0.5), 0.72 - 0.1 * dry);
+    color = mix(color, srgb(0.66, 0.52, 0.34), dirt);
 
-    // Bare dirt patches, more in dry grass.
-    let dirt_color = srgb(0.50, 0.41, 0.28) * (0.85 + 0.3 * fbm(xz * 2.3, 3, footprint * 2.3));
-    let dirt = smoothstep(0.72, 0.85, fbm(xz * 0.6 + vec2(3.3, 1.1), 3, footprint * 0.6) * 0.5
-        + 0.5 + 0.08 * dry);
-    color = mix(color, dirt_color, dirt * 0.7);
+    // Alpine grass.
+    let alpine = mix(srgb(0.60, 0.68, 0.42), srgb(0.66, 0.66, 0.50), patches(blotches, 0.1));
+    color = mix(color, alpine, border(b.a, medium));
 
-    // Alpine grass: short and pale, stony.
-    let alpine = srgb(0.45, 0.48, 0.30) * (0.85 + 0.3 * fbm(xz * 1.7, 3, footprint * 1.7));
-    color = mix(color, alpine, edge(b.a, medium));
+    // Forest floors.
+    let deciduous = mix(srgb(0.27, 0.48, 0.18), srgb(0.33, 0.44, 0.17), patches(blotches, 0.0));
+    color = mix(color, deciduous, border(b.g, medium));
+    let conifer = mix(srgb(0.21, 0.38, 0.22), srgb(0.30, 0.34, 0.20), patches(blotches, 0.1));
+    color = mix(color, conifer, border(b.b, medium));
 
-    // Forest floors: dark undergrowth with patches of leaf litter, or moss with patches of
-    // needles.
-    let undergrowth = srgb(0.17, 0.29, 0.09) * (0.85 + 0.25 * fbm(xz * 2.0, 3, footprint * 2.0));
-    let litter = mix(undergrowth, srgb(0.34, 0.27, 0.15),
-        smoothstep(0.35, 0.7, fbm(xz * 1.3 + vec2(11.0, 2.0), 3, footprint * 1.3)));
-    color = mix(color, litter, edge(b.g, medium));
-    let moss = srgb(0.16, 0.26, 0.10) * (0.85 + 0.25 * fbm(xz * 2.4, 3, footprint * 2.4));
-    let needles = mix(moss, srgb(0.27, 0.22, 0.13),
-        smoothstep(0.2, 0.6, fbm(xz * 0.9 + vec2(23.0, 5.0), 3, footprint * 0.9)));
-    color = mix(color, needles, edge(b.b, medium));
+    // Marsh: reeds and dark pools.
+    let pools = patches(fbm(xz * 0.6 + vec2(5.0, 9.0), 3, footprint * 0.6), 0.2);
+    let marsh = mix(srgb(0.36, 0.50, 0.25), srgb(0.24, 0.34, 0.33), pools);
+    color = mix(color, marsh, border(a.a, medium));
 
-    // Marsh: reeds, mud and shiny puddles.
-    let marsh = edge(a.a, medium);
-    let mud = srgb(0.25, 0.22, 0.16);
-    let puddle = smoothstep(0.15, 0.3, fbm(xz * 0.6 + vec2(5.0, 9.0), 3, footprint * 0.6));
-    let reeds = srgb(0.27, 0.34, 0.14) * (0.85 + 0.3 * fbm(xz * 3.0, 2, footprint * 3.0));
-    color = mix(color, mix(reeds, mud * 0.6, puddle), marsh);
-    roughness = mix(roughness, mix(0.85, 0.15, puddle), marsh);
-
-    // Sand: fine grain and faint wind ripples.
-    let sand_weight = edge(a.r, medium);
-    let ripples = sin(dot(xz, vec2(0.8, 0.6)) * 6.0 + fbm(xz * 0.5, 2, footprint * 0.5) * 4.0)
-        * (1.0 - smoothstep(0.05, 0.15, footprint));
-    let sand = srgb(0.84, 0.75, 0.54)
-        * (0.92 + 0.08 * fbm(xz * 5.0, 2, footprint * 5.0) + 0.03 * ripples);
-    color = mix(color, sand, sand_weight);
-    roughness = mix(roughness, 0.95, sand_weight);
-    bump_fine = mix(bump_fine, 0.008, sand_weight);
+    // Sand.
+    let sand = mix(srgb(0.94, 0.85, 0.62), srgb(0.89, 0.79, 0.56), patches(blotches, 0.2));
+    color = mix(color, sand, border(a.r, medium));
 
     // Rock: rocky ground, and every steep slope.
-    let rock = max(edge(a.g, medium), smoothstep(0.28, 0.45, steep + 0.08 * medium));
+    let steep_value = steep + 0.06 * medium;
+    let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
     color = mix(color, rock_color(p, n, footprint), rock);
-    roughness = mix(roughness, 0.75, rock);
-    bump_coarse = rock * 0.12;
 
     // Snow, which slides off steep slopes.
-    let snow = edge(a.b, medium) * (1.0 - smoothstep(0.4, 0.65, steep));
-    color = mix(color, srgb(0.92, 0.94, 0.97), snow);
-    roughness = mix(roughness, 0.55, snow);
-    bump_coarse *= 1.0 - snow;
+    let snow_value = a.b + 0.3 * medium - smoothstep(0.4, 0.65, steep);
+    color = mix(color, srgb(0.96, 0.97, 1.0), crisp(0.5, snow_value, fwidth(snow_value)));
 
-    // River and lake beds: gravel and mud, dark and shiny.
-    let bed_weight = smoothstep(0.2, 0.8, wet);
-    let bed = mix(srgb(0.30, 0.27, 0.21), srgb(0.42, 0.40, 0.35),
-        smoothstep(0.0, 0.4, fbm(xz * 3.0, 2, footprint * 3.0))) * 0.8;
-    color = mix(color, bed, bed_weight);
-    roughness = mix(roughness, 0.5, bed_weight);
+    // River and lake beds.
+    color = mix(color, srgb(0.52, 0.46, 0.36), crisp(0.5, wet, fwidth(wet)));
 
-    // Sea floor: sand near the shore, mud deeper, darker with depth (so shallows don't read
-    // as dry sand through the water).
+    // Sea floor: sand near the shore, teal further out, darker with depth.
     if p.y < 0.0 {
         let depth = -p.y;
-        let sea_floor = mix(sand, mud, smoothstep(0.5, 6.0, depth));
-        color = mix(color, sea_floor, smoothstep(0.0, 0.3, depth));
-        color *= (1.0 - 0.4 * min(depth / 0.3, 1.0)) * max(1.0 - depth / 25.0, 0.35);
+        let floor_color = mix(sand, srgb(0.30, 0.46, 0.48), smoothstep(0.3, 3.0, depth));
+        color = mix(color, floor_color, smoothstep(0.0, 0.2, depth));
+        color *= max(1.0 - depth / 20.0, 0.4);
     }
-
-    return Ground(color, roughness, bump_fine, bump_coarse);
-}
-
-fn bump_height(xz: vec2<f32>, ground: Ground, footprint: f32) -> f32 {
-    return fbm(xz * 4.0, 2, footprint * 4.0) * ground.bump_fine
-        + fbm(xz * 1.2, 3, footprint * 1.2) * ground.bump_coarse;
+    return color;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -271,25 +243,36 @@ fn fragment(
 @if(VERTEX_COLORS)
     wet = in.color.r;
 
-    let surface = ground(p, n, a, b, wet, footprint);
-    pbr_input.material.base_color = vec4(surface.albedo * tint.rgb, 1.0);
-    pbr_input.material.perceptual_roughness = surface.roughness;
+    let albedo = ground(p, n, a, b, wet, footprint) * tint.rgb;
 
-    // Material bumps, as a surface gradient.
-    let e = 0.05;
-    let h = bump_height(p.xz, surface, footprint);
-    let slope = vec3(
-        bump_height(p.xz + vec2(e, 0.0), surface, footprint) - h,
-        0.0,
-        bump_height(p.xz + vec2(0.0, e), surface, footprint) - h
-    ) / e;
-    let tangential = slope - n * dot(n, slope);
+    // Cel lighting from the sun (the first directional light).
+    let sun = lights.directional_lights[0];
+    let sun_level = dot(sun.color.rgb * view.exposure, vec3(0.2126, 0.7152, 0.0722))
+        / 3.14159265;
+    let facing = dot(n, sun.direction_to_light);
+    var shadow = 1.0;
+    if (sun.flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+        let view_z = dot(vec4(
+            view.view_from_world[0].z,
+            view.view_from_world[1].z,
+            view.view_from_world[2].z,
+            view.view_from_world[3].z
+        ), in.world_position);
+        shadow = fetch_directional_shadow(0u, in.world_position, n, view_z, in.position.xy);
+    }
+    let lit = crisp(0.03, facing, fwidth(facing)) * crisp(0.5, shadow, fwidth(shadow));
+    let highlight = crisp(0.55, facing, fwidth(facing)) * lit * HIGHLIGHT;
+    let eye = normalize(view.world_position.xyz - p);
+    let rim_value = 1.0 - saturate(dot(eye, n));
+    let rim = crisp(0.75, rim_value, fwidth(rim_value)) * lit;
+    let light = mix(SHADOW, LIT, lit) + highlight + RIM * rim;
+    let color = albedo * light * sun_level;
+
+    pbr_input.material.base_color = vec4(albedo, 1.0);
+    pbr_input.N = n;
     pbr_input.world_normal = n;
-    pbr_input.N = normalize(n - tangential);
-
-    out.color = apply_pbr_lighting(pbr_input);
     // In-shader post processing (fog, alpha-premultiply, tonemapping if the camera is not HDR).
-    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    out.color = main_pass_post_lighting_processing(pbr_input, vec4(color, 1.0));
 }
 
     return out;

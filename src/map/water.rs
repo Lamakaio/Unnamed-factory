@@ -11,7 +11,10 @@ use bevy::{
 use worldgen::{Continent, RiverEnd};
 
 use super::Map;
-use crate::AppState;
+use crate::{
+    AppState,
+    shaders::{WaterMaterial, WaterShader},
+};
 
 /// Size of the sea plane, in world units.
 const SEA_SIZE: f32 = 8000.;
@@ -33,24 +36,26 @@ impl Plugin for WaterPlugin {
 
 /// Shared material of all water surfaces.
 #[derive(Resource)]
-struct WaterMaterial(Handle<StandardMaterial>);
+struct Water(Handle<WaterMaterial>);
 
 fn spawn_sea(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.12, 0.32, 0.55, 0.85),
-        alpha_mode: AlphaMode::Blend,
-        perceptual_roughness: 0.08,
-        reflectance: 0.6,
-        // River ribbons wind either way depending on the flow direction.
-        double_sided: true,
-        cull_mode: None,
-        ..default()
+    let material = materials.add(WaterMaterial {
+        base: StandardMaterial {
+            alpha_mode: AlphaMode::Blend,
+            // River ribbons wind either way depending on the flow direction.
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        },
+        extension: WaterShader {
+            tint: LinearRgba::WHITE,
+        },
     });
-    commands.insert_resource(WaterMaterial(material.clone()));
+    commands.insert_resource(Water(material.clone()));
     commands.spawn((
         Name::new("Sea"),
         Mesh3d(meshes.add(Plane3d::default().mesh().size(SEA_SIZE, SEA_SIZE))),
@@ -64,7 +69,7 @@ fn spawn_sea(
 fn spawn_lakes_and_rivers(
     mut commands: Commands,
     map: Res<Map>,
-    material: Res<WaterMaterial>,
+    material: Res<Water>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let continent = &map.continent;

@@ -79,7 +79,9 @@ src/ui.rs               UiPlugin: build menu (BSN), `label()` text scene, Pointe
 assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
-assets/shaders/map_material.wesl   terrain fragment shader (WESL): per-pixel normals, procedural ground materials
+assets/shaders/map_material.wesl   terrain fragment shader (WESL): toon ground colours + cel lighting, per-pixel normals
+assets/shaders/water.wesl          water fragment shader (WESL): toon water (depth colour, shore foam, glints)
+CREDITS.md              sources of every borrowed technique (papers, articles, shaders); keep it up to date
 ```
 
 ### Controls
@@ -245,7 +247,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   mesh was built. `finish_chunk_meshes` swaps the mesh asset in place. Mesh build times and
   vertex counts are logged at `debug` (`RUST_LOG=info,unnamed_factory=debug`): up to ~0.1 s /
   170k vertices per chunk on the eroded terrain.
-- **Water** (`map/water.rs`): one translucent, double-sided `StandardMaterial` for a sea plane
+- **Water** (`map/water.rs`): one translucent, double-sided `WaterMaterial`
+  (`ExtendedMaterial<StandardMaterial, WaterShader>`, `water.wesl`: colour from the water
+  thickness behind each pixel via the depth prepass, shore foam, animated glints, cel
+  lighting) for a sea plane
   at 0, lake surfaces (lake cells plus shore cells above the water), and river ribbons at the
   water line (width + 0.25 per side). Ribbons stop where the water reaches the sea (within 0.12: the
   sea plane covers the carved channel) or the lake the river flows into (overlapping
@@ -288,15 +293,17 @@ binds `tint` (100), the base surface gradient texture + a shared sampler (101, 1
 world → uv mapping (103), and two ground textures (104, 105) with their mapping (106).
 `map::bind_terrain_textures` sets the textures once the material is loaded (and again after a
 hot reload). The shader is WESL (`map_material.wesl`):
-- **Normals** per pixel = gradient texture + UV feature gradient (rivers, edits) + small
-  material bumps, so lighting keeps the full surface detail at any mesh LOD (vertex normals
+- **Normals** per pixel = gradient texture + UV feature gradient (rivers, edits), so lighting keeps the full surface detail at any mesh LOD (vertex normals
   alone alias into a regular pattern on coarse patches).
-- **Ground** is drawn procedurally from world-space value noise (fBm with octaves fading out
-  below a pixel, from the pixel footprint): grass (lush → dry, colour drift, tufts, fine
-  grain, dirt patches), alpine grass, forest floors (undergrowth/litter, moss/needles), marsh
-  (reeds, mud, shiny puddles), sand (grain, ripples), rock (triplanar mottling, strata,
-  cracks), snow, wet river/lake beds, sea floor (sand → mud, darker with depth). Each sets
-  albedo, roughness and bump amplitude.
+- **Art direction: toon / cel-shaded, not realistic.** Ground materials are flat painted
+  colours with crisp patches from world-space value noise (fBm with octaves fading below a
+  pixel): grass (lush → dry in steps, lighter patches, dirt spots), alpine grass, forest
+  floors, marsh (dark pools), sand, rock (two-tone strata on cliffs), snow, river/lake beds,
+  sea floor (sand → teal, darker with depth). Edges are antialiased with `fwidth` (`crisp`).
+- **Lighting** is custom (no PBR/specular): the sun (`lights.directional_lights[0]`, its
+  brightness × `view.exposure`) gives a hard two-tone lit / cool-shadow step from the slope
+  and `fetch_directional_shadow`, plus a highlight band and a rim light; fog etc. via
+  `main_pass_post_lighting_processing`.
 - **Weights** come from `map::ground` textures (one texel per continent cell, RGBA8):
   `ground_a` = sand, rock, snow, marsh (from biomes, snow from temperature); `ground_b` =
   dryness (from moisture), deciduous, conifer, alpine (from temperature). They are sampled
@@ -562,6 +569,9 @@ of the migration work.
 - Don't poll `Interaction` (deprecated).
 
 ### 5.9 Rendering & materials
+- The look is toon / cel-shaded (see §3.4): keep new materials stylized (flat colours, crisp
+  bands, rim lights), not PBR-realistic.
+- Credit every borrowed technique in `CREDITS.md` and in the code comment where it is used.
 - Custom terrain data should go in **custom vertex attributes** (`MeshVertexAttribute`) or a
   data texture, not in UV0 (the terrain mesher still writes height/wetness into UV0 for the
   existing shader).
