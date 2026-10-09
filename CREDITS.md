@@ -61,4 +61,8 @@ someone else's work, add it here (and mention it in the code comment where it is
 - [Bevy](https://bevy.org) and its examples: the camera input mapping is adapted from
   `pan_orbit_camera_custom_input_plugin`; the material extension follows
   `shader/extended_material`.
-- Purchased asset packs (models in `assets/models`, not redistributed).
+- Purchased asset packs (models in `assets/models`, not redistributed). Nature models
+  (`assets/models/nature`) are converted from the Unreal Marketplace / Fab packs Stylized
+  Provencal, Fantastic Hills, Nordic Village and Taiga Biome.
+- Level-of-detail stand-ins built from convex hulls of foliage clusters (`tools/nature`), and
+  the dithered LOD cross-fade of Bevy's `VisibilityRange`.

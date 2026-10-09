@@ -114,6 +114,11 @@ impl TerrainHeights {
         (image, Vec4::new(offset, offset, scale, scale))
     }
 
+    /// Whether an edit (a building foundation or a tool) changed the ground at `p`.
+    pub fn edited(&self, p: Vec2) -> bool {
+        self.edits.covers(p)
+    }
+
     pub fn add_edit(&mut self, edit: TerrainEdit) {
         Arc::make_mut(&mut self.edits).push(edit);
     }

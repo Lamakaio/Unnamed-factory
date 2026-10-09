@@ -130,6 +130,14 @@ impl EditLayer {
         }
     }
 
+    /// Whether an edit covers `p` (vegetation does not grow on edited ground).
+    pub fn covers(&self, p: Vec2) -> bool {
+        self.lookup.query_point(p).iter().any(|&id| {
+            let (center, radius) = self.edits[id as usize].center_radius();
+            p.distance(center) < radius
+        })
+    }
+
     /// Mesh cell size wanted by the edits overlapping `min..max`, if any.
     pub fn detail_cell(&self, min: Vec2, max: Vec2) -> Option<f32> {
         self.lookup

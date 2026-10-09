@@ -163,18 +163,30 @@ struct AutoScreenshot {
     delay: f32,
 }
 
+/// Seconds over which the frame rate is measured before an automatic screenshot.
+const FPS_WINDOW: f32 = 3.;
+
 /// Take the requested screenshot once the delay has passed, then exit a second later.
 fn auto_screenshot(
     mut commands: Commands,
     request: Res<AutoScreenshot>,
     time: Res<Time>,
     mut taken: Local<bool>,
+    mut frames: Local<u32>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let elapsed = time.elapsed_secs();
+    // Frame rate over the last seconds before the screenshot.
+    if elapsed >= request.delay - FPS_WINDOW && !*taken {
+        *frames += 1;
+    }
     if !*taken && elapsed >= request.delay {
         *taken = true;
-        info!("Saving screenshot to {}", request.path);
+        info!(
+            "Saving screenshot to {} ({:.0} fps over the last {FPS_WINDOW} s)",
+            request.path,
+            *frames as f32 / FPS_WINDOW
+        );
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(request.path.clone()));

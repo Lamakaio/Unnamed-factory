@@ -69,7 +69,9 @@ src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
-src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs, ground.rs (ground material textures)
+src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs, ground.rs (ground material textures), vegetation.rs (trees, rocks, LODs)
+tools/nature/           asset pipeline for the nature models (Unreal headless export + Blender LOD builder, see its README)
+assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
 crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
 src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
 src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
@@ -257,6 +259,19 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   translucent surfaces look darker). Ground under water is darkened at once (×0.6), so
   shallows don't read as dry sand. Water has `Pickable::IGNORE` and `NotShadowCaster`.
 - River center-line debug gizmos live in `dev_tools.rs` (F4, off by default).
+- **Vegetation** (`map/vegetation.rs`): trees, bushes, rocks, dead wood and ground cover,
+  placed deterministically per chunk on jittered grids (0.9 / 0.35 units) with per-biome
+  probabilities (`large_rules`, `ground_rules`), forest clearings from noise, and nothing on
+  water, steep or edited ground. A chunk's vegetation is re-placed when an edit touches it
+  (buildings clear it). Models come from `tools/nature` (metres × `METERS_TO_WORLD` = 0.05;
+  buildings use the same 0.05 scale, one unit = 20 m), with toon materials (`ToonMaterial`,
+  `toon.wesl`). Levels of detail, per chunk by camera distance:
+  - far (> 100): one merged mesh of the LOD2 stand-ins (~25 triangles each). It never
+    fades, so trees never disappear in the distance;
+  - near (< 100): LOD1 instances (~120 triangles), cross-fading (`VisibilityRange` dither)
+    to LOD0 textured models within 30 of the camera;
+  - detail (< 40): also LOD0 models and ground cover (fades out at 22–30).
+  At most 2 chunks change level per frame; placement runs in 4 background tasks.
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
 - `Building` is an `Asset` loaded from `.bconf` RON. All of them are loaded at startup
@@ -572,6 +587,8 @@ of the migration work.
 - The look is toon / cel-shaded (see §3.4): keep new materials stylized (flat colours, crisp
   bands, rim lights), not PBR-realistic.
 - Credit every borrowed technique in `CREDITS.md` and in the code comment where it is used.
+- Objects use `ToonMaterial` (`shaders::toon` converts a `StandardMaterial`, e.g. from
+  glTF via `standard_material_from_gltf_material`), so they share the terrain's cel lighting.
 - Prefer data textures or **custom vertex attributes** (`MeshVertexAttribute`) for new
   terrain data. The terrain mesh currently reuses UV0 (feature gradient) and vertex colour
   red (wetness) as data, which works because the terrain has no real UVs or colours.

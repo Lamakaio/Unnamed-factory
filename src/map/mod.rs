@@ -14,6 +14,7 @@ mod heights;
 mod mesh;
 mod rivers;
 mod spatial;
+mod vegetation;
 mod water;
 
 use std::time::Instant;
@@ -60,7 +61,7 @@ pub struct MapPlugin {
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         let seed = self.seed as u32;
-        app.add_plugins(water::WaterPlugin)
+        app.add_plugins((water::WaterPlugin, vegetation::VegetationPlugin))
             .add_systems(Startup, move |commands: Commands| {
                 start_generation(commands, seed)
             })

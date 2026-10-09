@@ -77,7 +77,8 @@ impl Noise {
     }
 }
 
-pub(crate) fn hash(seed: u32, x: u32, y: u32) -> u32 {
+/// Integer hash of a seed and two coordinates (MurmurHash3 finalizer constants).
+pub fn hash(seed: u32, x: u32, y: u32) -> u32 {
     let mut h = seed ^ x.wrapping_mul(0x27d4_eb2d) ^ y.wrapping_mul(0x1656_67b1);
     h ^= h >> 15;
     h = h.wrapping_mul(0x85eb_ca6b);

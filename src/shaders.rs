@@ -13,6 +13,7 @@ impl Plugin for ShadersPlugin {
         app.add_plugins((
             MaterialPlugin::<MapMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
+            MaterialPlugin::<ToonMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
@@ -20,6 +21,34 @@ impl Plugin for ShadersPlugin {
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water.wesl";
+const TOON_SHADER_ASSET_PATH: &str = "shaders/toon.wesl";
+
+/// Toon material for objects (vegetation, rocks): the standard material's colours with the
+/// terrain's cel lighting. `tint` multiplies them.
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct ToonShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+}
+
+impl MaterialExtension for ToonShader {
+    fn fragment_shader() -> ShaderRef {
+        TOON_SHADER_ASSET_PATH.into()
+    }
+}
+
+pub type ToonMaterial = ExtendedMaterial<StandardMaterial, ToonShader>;
+
+/// The toon version of a standard material (e.g. one loaded from a glTF file).
+pub fn toon(base: &StandardMaterial) -> ToonMaterial {
+    ToonMaterial {
+        base: base.clone(),
+        extension: ToonShader {
+            tint: LinearRgba::WHITE,
+        },
+    }
+}
 
 /// Water material extension (sea, lakes, rivers): toon water drawn by the shader, coloured by
 /// the depth of water behind each pixel (from the depth prepass), with shore foam and
