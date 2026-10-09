@@ -24,7 +24,6 @@ use noiz::{
 use serde::Deserialize;
 
 use crate::{
-    CameraTarget,
     build::{Building, BuildingType},
     mapgen::Continent,
     shaders::{MapMaterial, TerrainShader},
@@ -40,7 +39,7 @@ impl Plugin for MapPlugin {
             entities: KdTree::default(),
             continent: Continent::new_and_generate(self.seed as u32),
         });
-        app.add_systems(Update, (spawn_chunk, display_rivers));
+        app.add_systems(Update, spawn_chunk);
         app.add_systems(Startup, setup_map);
     }
 }
@@ -441,19 +440,6 @@ impl Map {
     }
 }
 
-pub fn display_rivers(map: ResMut<Map>, mut gizmos: Gizmos) {
-    for c in &map.continent.river_paths {
-        let c = c.position.to_curve().unwrap();
-        let len = c.segments().len();
-        gizmos.curve_3d(c, (0..=200).map(|i| i as f32 / 200. * len as f32), bevy::color::palettes::css::RED);
-    }
-
-    for l in &map.continent.lakes {
-        let pos = map.continent.to_world(*l);
-        gizmos.sphere(Isometry3d::from_translation(pos), 10., bevy::color::palettes::css::PURPLE);
-    }
-}
-
 pub fn setup_map(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -483,18 +469,15 @@ pub fn setup_map(
 #[derive(Component)]
 pub struct IsGround(pub I64Vec2);
 
-/// Handles the spawning of chunks when the camera is close enough. (Currently only spawns the chunk the camera is on)
+/// Spawns the chunks around the camera when it moves.
 pub fn spawn_chunk(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut map: ResMut<Map>,
-    camera: Query<&CameraTarget, (With<Camera>, Changed<CameraTarget>)>,
+    // `Single` skips the system on frames where the camera did not move.
+    camera: Single<&Transform, (With<Camera3d>, Changed<Transform>)>,
 ) -> Result {
-    // Nothing to do on frames where the camera target did not move.
-    let Ok(camera_transform) = camera.single() else {
-        return Ok(());
-    };
-    let camera_chunk_pos = camera_transform.pos / Chunk::WORLD_CHUNK_SIZE;
+    let camera_chunk_pos = camera.translation / Chunk::WORLD_CHUNK_SIZE;
     let mat = map.material.clone();
     for (x, z) in [-2., -1., 0., 1.]
         .into_iter()
