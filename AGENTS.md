@@ -2,8 +2,9 @@
 
 > Audience: AI agents (and humans) about to work on this repo. Read this first.
 > Written 2026-10-09. Bevy facts were checked against the official migration guides,
-> release notes and the `v0.20.0` examples on that date. **The code in the repo still
-> targets Bevy 0.16** — see §4 for the upgrade plan. When an API detail here disagrees
+> release notes and the `v0.20.0` examples on that date. **The code is on Bevy 0.20**
+> (upgraded version by version on 2026-10-09; see §4). §3 describes the architecture, which
+> the upgrade left largely unchanged. When an API detail here disagrees
 > with the compiler or docs.rs, the compiler wins; fix this file.
 
 ---
@@ -55,10 +56,12 @@ Design source: [`notes.md`](notes.md) (preliminary, in English with some typos).
 ## 2. Repo map (as of commit `25565f6` + uncommitted river work)
 
 ```
-Cargo.toml              bevy 0.16 (+ bevy_remote, trace_tracy, file_watcher), ron, serde, anyhow,
-                        kdtree-collisions (user's own git crate, no bevy dep), noiz 0.2 (noise),
+Cargo.toml              bevy 0.20 (+ bevy_remote, trace_tracy, file_watcher), ron, serde, anyhow,
+                        kdtree-collisions (user's own git crate, no bevy dep), noiz 0.5 (noise,
+                        [patch]ed to a local Bevy 0.20 port — see §4.1),
                         rand/rand_distr, rhai 1.21, foldhash, fast_hilbert
-rust-toolchain.toml     nightly (pinned implicitly; nothing in the code needs nightly as far as seen)
+rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers nightly.
+.cargo/config.toml      (git-ignored, local) rust-lld linker + `jobs = -4` to keep the PC usable while compiling
 .cargo/config.toml      rust-lld linker on windows-msvc
 notes.md                game design notes (see §1)
 src/main.rs        290  App setup, CameraSettings, orbit camera, sun, debug toggles (F2 AABB, F3 wireframe, F rotate sun)
@@ -72,7 +75,7 @@ src/ui.rs          205  UiPlugin: building list (scrollable), buttons that start
 assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
 assets/materials/map.mapmat terrain material params (pbr + biome colors as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
-assets/shaders/map_material.wgsl    terrain fragment shader (biome colouring from UV; based on bevy_wind_waker_shader)
+assets/shaders/map_material.wesl   terrain fragment shader (WESL) (biome colouring from UV; based on bevy_wind_waker_shader)
 assets/shaders/build_material.wgsl  unused (BuildMaterial is commented out)
 ```
 
@@ -120,7 +123,7 @@ holds the focus point and distance, and the target is clamped to terrain height 
     patching.
 - **`Map` resource**: material handle, `HashMap<I64Vec2, Chunk>`, a `KdTree<BuildingInstance>`
   of placed buildings, and the `Continent`. `get_chunk_mut` lazily creates chunks using
-  hashbrown's `raw_entry_mut`. That compiles on 0.16, but the API is deprecated or removed
+  hashbrown's `raw_entry_mut`. That still compiles, but the API is deprecated or removed
   in newer hashbrown; switch to `entry` (borrow `&self.continent` separately). `get_height` does bilinear sampling and returns `SCALE_Y` when the chunk is
   not loaded.
 - `spawn_chunk` spawns a 4×4 block of chunks around the camera target when `CameraTarget`
@@ -135,7 +138,7 @@ holds the focus point and distance, and the target is clamped to terrain height 
 - **Placement flow is an implicit state machine keyed on component presence:**
   1. The UI button spawns `(BuildId(handle), Name)`.
   2. `spawn_build_from_part_id` picks up `BuildId` entities `Without<Transform>` and inserts
-     the visuals (`SceneRoot`, a wireframe cuboid for zones, or a `ForwardDecal` for tools)
+     the visuals (`WorldAssetRoot`, a wireframe cuboid for zones, or a `ForwardDecal` for tools)
      plus `SelectedBuild`.
   3. `compute_aabb` merges the child AABBs into the root once the scene has spawned.
   4. `build_follow_cursor` raycasts (`MeshRayCast`, filtered to `IsGround` chunks), snaps,
@@ -167,12 +170,17 @@ naga_oil `#import` / `#ifdef` and `@group(2)`, so it **must be ported to WESL fo
 
 ### 3.6 UI (`ui.rs`)
 A left-side scrolling list of buildings, populated on `AssetEvent::LoadedWithDependencies`.
-Button styling uses the old `Interaction` polling pattern (deprecated in 0.19). The font is
+Buttons are `ui_widgets::Button` with an `Activate` observer (`start_placement`) and a
+`Hovered`/`Pressed` styling system (ported from `Interaction` in the 0.20 upgrade). The font is
 stored in a `FontHandle` resource.
 
 ### 3.7 Known issues / smells (fix opportunistically)
-- Baseline (2026-10-09): `cargo check` passes on Bevy 0.16 with 17 warnings, mostly
-  unused imports, plus a dead `TestCurve` and unread `ToolInstance` fields.
+- On 0.20, `cargo check` passes with only unused-import / dead-code warnings (dead
+  `TestCurve`, unread `ToolInstance` fields).
+- `trace_tracy` is always on: it logs that memory grows until a Tracy client connects, plus a
+  harmless `SymInitialize FAILED` line. Consider moving it behind an opt-in cargo feature.
+- `assets/shaders/build_material.wgsl` is unused (BuildMaterial is commented out) and was never
+  ported to WESL. Port it or delete it if BuildMaterial comes back.
 - Many unused imports, commented-out code blocks and `pub mod` in a binary crate. Prefer
   private `mod` and `pub(crate)`.
 - `unwrap()` / `FIXME` in systems (e.g. `buildings.get(&p.0).unwrap()`). Return `Result`
@@ -189,23 +197,36 @@ stored in a `FontHandle` resource.
 
 ---
 
-## 4. Upgrade plan: Bevy 0.16 → 0.20
+## 4. Bevy upgrades (0.16 → 0.20 done on 2026-10-09)
 
 Bevy releases: 0.17 (2025-09-30), 0.18 (2026-01-13), 0.19 (2026-06-19), **0.20 (2026-10-08,
 latest)**. Migration guides: `https://bevy.org/learn/migration-guides/0-16-to-0-17/`, then
 `0-17-to-0-18`, `0-18-to-0-19` and `0-19-to-0-20`.
 
-**Approach:** migrate **one minor version at a time** (0.17 → 0.18 → 0.19 → 0.20). Get it
-compiling and running at each step, and commit each step. The guides are per-version, so a
-big-bang jump makes errors much harder to map back to a guide entry.
+**Status:** done on branch `bevy-upgrade`, with one commit per version (0.17, 0.18, 0.19, 0.20).
+Each step was checked by compiling and running the game for ~60 s with the logs scanned for
+errors. For future upgrades, keep the same approach: **one minor version at a time**, and
+commit each step.
+
+Gotchas hit during the upgrade:
+- The git-ignored local `Cargo.lock` held stale versions that broke builds (`tracy-client-sys`,
+  `gpu-allocator`). Fix them with a targeted `cargo update -p <crate>`. Avoid a blind
+  `cargo update`, since `rand = "*"` would jump to 0.10.
+- 0.17: `TemporalAntiAliasPlugin` is in `DefaultPlugins`, so adding it again panics.
+- 0.18: the WGSL `apply_decal_base_color` was removed (clustered decals now use `apply_decals`).
+- 0.20: system errors panic through the fallback handler, so `query.single()?` on a
+  possibly-empty query (e.g. a `Changed<..>` filter) crashes. Use `let Ok(..) = .. else`.
 
 ### 4.1 Toolchain & dependencies (all deps may be changed)
-- Bevy 0.20 needs **rustc ≥ 1.97.1**. The current nightly (cargo 1.89, May 2025) is too old.
-  Prefer `channel = "stable"` unless a nightly-only feature is actually needed. Nightly is
-  optional for `-Zshare-generics` / the cranelift backend.
-- `noiz`: 0.2 → bevy 0.16, 0.3 → 0.17, 0.4 → 0.18, **0.5 → 0.19**. No 0.20 release yet
-  (as of 2026-10-09). Options for 0.20: wait for one, or use a git fork / `[patch]`.
-  noiz only depends on `bevy_math`/`bevy_reflect`, so the bump is probably mechanical.
+- Bevy 0.20 needs **rustc ≥ 1.97.1**. The toolchain is pinned to `nightly-2026-10-08` (the
+  user prefers nightly). Bump the date deliberately. A recent-nightly lint required
+  `#![recursion_limit = "256"]` in `main.rs` for the `AsBindGroup` derive.
+- `noiz`: 0.2 → bevy 0.16, 0.3 → 0.17, 0.4 → 0.18, **0.5 → 0.19**. There was no 0.20 release on
+  2026-10-09, so `Cargo.toml` uses `[patch.crates-io] noiz = { path = "../noiz-bevy-0.20" }`.
+  That is a local clone (branch `bevy-0.20`, one commit) where `Curve`/`Interval`/`derivatives`
+  imports moved from `bevy_math` to the new `bevy_curve` crate. **Once upstream publishes a
+  Bevy 0.20 release, bump `noiz` and delete the patch.** (`C:/Users/timot/Documents/noiz` is a
+  different, older clone of the user's with local edits. Don't touch it.)
   The noise type in `mapgen.rs` is a deep generic composition and may need adjusting
   across noiz versions.
 - `kdtree-collisions`: the user's own crate (github.com/Lamakaio/kdtree-collisions), 2018
@@ -260,15 +281,16 @@ big-bang jump makes errors much harder to map back to a guide entry.
   (`try_attribute_mut`, ...) because RENDER_WORLD-only meshes stay in `Assets<Mesh>`.
   `Assets::get_mut` returns `AssetMut<A>` (0.19). AABBs recompute automatically on mesh
   change (0.18).
-- `SceneRoot` / `Scene` → **`WorldAssetRoot` / `WorldAsset`** (0.20, `bevy::world_serialization`).
+- `SceneRoot` / `Scene` → **`WorldAssetRoot` / `WorldAsset`** (0.19, `bevy::world_serialization`).
   glTF scenes: `WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path)))`.
 - Material bind group: `@group(2)` → `@group(#{MATERIAL_BIND_GROUP})` (0.17) →
   `@group(constants::MATERIAL_BIND_GROUP)` (WESL, 0.20).
 - **0.20: custom shaders must be WESL** (`.wesl`). `#import a::b` → `import a::b;`,
   `#ifdef X` → `@if(X)`, and `#define_import_path` was removed. Module paths moved, e.g.
   `bevy_pbr::render::pbr_fragment`, `bevy_pbr::prepass::io`, `bevy_pbr::deferred::functions`.
-  `alpha_discard(material.flags, material.alpha_cutoff, color)`. Model the port of
-  `map_material.wgsl` on `assets/shaders/extended_material.wesl` in the bevy 0.20 repo.
+  `alpha_discard(material.flags, material.alpha_cutoff, color)`. Use `@if(X) { .. } @else { .. }`
+  for conditional blocks. `map_material.wesl` and Bevy's `crates/bevy_pbr/src/render/pbr.wesl`
+  are good references.
 - `MaterialPlugin { prepass_enabled, shadows_enabled }` → `MaterialExtension::enable_prepass()`
   / `enable_shadows()` (0.18).
 
@@ -283,7 +305,7 @@ big-bang jump makes errors much harder to map back to a guide entry.
 - `TextFont.font` is a `FontSource` (a `Handle` or a family). `font_size` is `FontSize::Px(..)`,
   and the default is `FontSize::Rem(1.)` (0.19). `Val::Em`/`Rem` and helpers `px()`,
   `percent()`, `em()`, `rem()` exist.
-- **`Interaction` is deprecated (0.19)**. Use `ui_widgets::Button` + observers
+- **`Interaction` is deprecated (0.20)**. Use `ui_widgets::Button` + observers
   (`On<PointerPress>` / `Activate`), and `Hovered` / `Pressed` for styling. `UiWidgetsPlugins`
   is part of `DefaultPlugins`.
 - Picking events are flat in 0.20: `Pointer<Press>` → `PointerPress`, and
