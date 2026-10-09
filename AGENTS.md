@@ -70,7 +70,7 @@ src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
 src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo groups, terrain click log, UF_SCREENSHOT
-src/map.rs              MapPlugin, Map resource, Chunk (heightmap → mesh), terrain patch ops, chunk streaming
+src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), spatial.rs
 src/mapgen.rs           Continent: 2048² noiz heightmap (Hilbert-curve indexed), hydrology, rivers, lakes (user WIP)
 src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
 src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
@@ -118,38 +118,56 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `UF_SCREENSHOT=<png>` (and optionally `UF_SCREENSHOT_DELAY`, default 20 s) saves a
   screenshot and exits. See §6.
 
-### 3.2 Terrain (`mapgen.rs`, `map.rs`)
-- **`Continent`** is generated on the `AsyncComputeTaskPool` at startup (~1.8 s).
-  `finish_generation` polls the task with `check_ready`, inserts `Map` (and loads the
-  terrain material), and enters `AppState::InGame`. It holds 2048×2048 `TerrainPoint`s (height, gradient) indexed by **Hilbert
-  curve** (`fast_hilbert::xy2h/h2xy`).
+### 3.2 Terrain (`mapgen.rs`, `map/`)
+- **`Continent`** (`mapgen.rs`, user WIP) is generated on the `AsyncComputeTaskPool` at
+  startup, together with the `TerrainHeights` (~1.9 s). `finish_generation` polls the task
+  with `check_ready`, inserts `Map` (and loads the terrain material), and enters
+  `AppState::InGame`. The continent holds 2048×2048 `TerrainPoint`s (normalized height,
+  gradient) indexed by **Hilbert curve** (`fast_hilbert::xy2h/h2xy`). Grid cell (x, y) is at
+  world ((x − 1024)·0.25, (y − 1024)·0.25), so the continent spans ±256 world units.
   - The height comes from a big composed `noiz` noise type (`NoiseT`), multiplied by an
     edge falloff.
   - Hydrology: each cell flows along its gradient. Sources are cells nothing flows into,
     culled with a kd-tree. Paths are traced (`go_through_path`), amounts are propagated,
     estuaries are grouped and forked, and control points become `CubicHermite<Vec3>`
-    river curves (`RiverPath`). The terrain is then carved along the rivers
-    (`patch_terrain_for_rivers`).
+    river curves (`RiverPath`, with an `amount` spline). Rivers are **not** baked into the
+    heightmap; see the river layer below.
   - The `Hydrologypoint.visit` field reuses magic numbers (1, 2, 3, 12, 13) as per-pass
     markers, and `next == 0` / `tile == 0` stand for "none". This is fragile; prefer
     enums and `Option`.
-- **`Chunk`**: 256×256 heights copied from the continent. `WORLD_CHUNK_SIZE = 255 *
-  GRID_SQUARE_SIZE`, `SCALE_Y = 100`. `Chunk::continent_offset` maps chunk to continent
-  coordinates with `(chunk_pos * 255 + 1024).abs() % (2048-256)`, which tiles or mirrors the
-  world past the continent. `Map::continent_index(chunk, world_pos)` builds on it.
-  - Mesh: a `TriangleList` with `u16` indices (65,536 vertices is exactly the u16 limit).
-    UV0 is **abused as data**: `u` = height-derived biome coordinate and `v` = river flag
-    (100 or 1). The terrain shader reads these values.
-  - `Chunk::patch` edits heights in place (Up/Down/Flatten; Smooth is `todo!()`) on both
-    the grid and the mesh attributes, and returns which neighbouring chunks also need
-    patching.
-- **`Map` resource**: material handle, `HashMap<I64Vec2, Chunk>`, a `KdTree<BuildingInstance>`
-  of placed buildings, and the `Continent`. `get_chunk_mut` lazily creates chunks using
-  hashbrown's `raw_entry_mut`. That still compiles, but the API is deprecated or removed
-  in newer hashbrown; switch to `entry` (borrow `&self.continent` separately). `get_height`
-  does bilinear sampling and returns `SCALE_Y` when the chunk is not loaded.
-- `spawn_chunk` spawns a 4×4 block of chunks around the camera when its `Transform` changes.
-  Chunks are never despawned.
+- **Height function** (`map/heights.rs`, `TerrainHeights`, cheap `Arc` clones for tasks):
+  `height(p)` = base heightmap with bicubic (Catmull-Rom) interpolation → river layer → edit
+  layer. Beyond the continent the border values extend (flat ocean). `Map::get_height` /
+  `Map::sample` use it, so the camera, placement and mesh always agree. Normals use finite
+  differences at a fixed epsilon (1/16).
+  - **River layer** (`map/rivers.rs`): river curves sampled into polyline segments (45 per curve
+    segment) in a spatial grid. At a point, the nearest segments carve
+    `min(h, lerp(bed, h, (d/reach)²))`, with bed = water line − 0.2,
+    reach = r·√2 + 0.25, and r = log10(amount + 50) − log10(50). This reproduces the old
+    baked carving, at any resolution. Wetness (1 within r, fading over 0.25) feeds the shader.
+  - **Edit layer** (`map/edits.rs`): `TerrainEdit::Flatten` (building foundations: flat over
+    the inner 60% of the radius, smootherstep blend outside) and `Raise` (tools: ±10 units,
+    smootherstep bell). Edits apply in insertion order and are found through a spatial grid.
+    `Map::add_edit` records the touched chunks for re-meshing. `PatchOp::Smooth` is not
+    supported yet (logs a warning).
+- **Meshing** (`map/mesh.rs`): each 64-unit chunk is a quadtree of 16×16-quad patches. Cells
+  go from 4 units down to `MIN_CELL` = 1/16. A node splits while its cell is larger than
+  needed:
+  - for the base terrain: curvature (max-curvature pyramid in `BaseGrid`) against an error
+    tolerance of 0.0015 × camera distance, never finer than 0.125;
+  - for rivers / edits overlapping it: river radius / 4, or edit falloff width / 8, relaxed to
+    0.003 × camera distance.
+  Patches don't share vertices across levels; skirts (2 cells deep) hide cracks. Vertex UV0 is
+  still **used as data** for the existing shader: `u` = 1.3·height/100 − 0.35 (biome),
+  `v` = 1 + 99·wetness (river).
+- **Chunks** (`map/mod.rs`): entities with `IsGround(coords)` + `TerrainChunk` LOD state,
+  spawned within 6 chunks of the camera (never despawned). `schedule_chunk_meshes` starts
+  at most 4 background mesh tasks, edited chunks first and then nearest. A chunk is re-meshed
+  when an edit touched it, or when the camera moved by max(4, 25% of its distance) since its
+  mesh was built. `finish_chunk_meshes` swaps the mesh asset in place. Mesh build times and
+  vertex counts are logged at `debug` (`RUST_LOG=info,unnamed_factory=debug`): ~0.5 ms /
+  1.4k vertices for flat sea, up to ~0.4 s / 370k vertices for river-dense chunks next to the
+  camera.
 - River and lake debug gizmos live in `dev_tools.rs` (F4).
 
 ### 3.3 Buildings (`build.rs`, `build_asset.rs`)
@@ -167,8 +185,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      (`Snapping::spacing`), and records a left press made while placing and not over UI
      (`PlacementPress`). Zones resize while dragging from that press.
   4. `place_build` (chained after it) runs on release, **only if `PlacementPress` was set**.
-     That way the menu click doesn't place anything. It flattens the terrain (or applies the
-     tool, then despawns it), inserts a `BuildingInstance`, and registers it in
+     That way the menu click doesn't place anything. It adds a `TerrainEdit` (a flatten
+     foundation, radius = 2× the footprint half-diagonal; or the tool's op, then despawns
+     the tool), inserts a `BuildingInstance`, and registers it in
      `Map.entities`. With Ctrl held it triggers `StartPlacement` again.
   5. While placing, the `InfiniteGrid` build grid is shown at cursor height + 0.5 with the
      snapping spacing. It is a flat plane, so it disappears where the terrain rises above
@@ -446,7 +465,8 @@ of the migration work.
 
 ### 5.9 Rendering & materials
 - Custom terrain data should go in **custom vertex attributes** (`MeshVertexAttribute`) or a
-  data texture, not in UV0.
+  data texture, not in UV0 (the terrain mesher still writes height/wetness into UV0 for the
+  existing shader).
 - Group material uniforms into one `#[uniform(100)]` struct (`ShaderType`) instead of five
   bindings. Mirror the struct in WESL.
 - Keep shader asset paths as `const` next to the material type.
