@@ -23,7 +23,7 @@ use bevy::{
 
 use crate::{
     AppState,
-    map::{BuildingInstance, Chunk, GRID_SQUARE_SIZE, IsGround, Map, PatchOp},
+    map::{BuildingInstance, GRID_SQUARE_SIZE, IsGround, Map, PatchOp, TerrainEdit},
     sim::RhaiScript,
     ui::PointerOverUi,
 };
@@ -408,7 +408,6 @@ fn place_build(
     buildings: Res<Assets<Building>>,
     button: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut press: ResMut<PlacementPress>,
 ) {
     if !button.just_released(MouseButton::Left) || press.0.take().is_none() {
@@ -430,14 +429,9 @@ fn place_build(
             PatchOp::Flatten,
         )
     };
-    let chunk_pos_x = (transform.translation.x / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-    let chunk_pos_z = (transform.translation.z / Chunk::WORLD_CHUNK_SIZE).floor() as i64;
-    let chunk = map.get_chunk_mut(&(chunk_pos_x, chunk_pos_z).into());
-    //TODO too convoluted here. Make separate chunk intersect detection.
-    let add_patches = chunk.patch(&mut meshes, &center, radius, op);
-    for (off_x, off_z) in add_patches {
-        let chunk = map.get_chunk_mut(&(chunk_pos_x + off_x, chunk_pos_z + off_z).into());
-        chunk.patch(&mut meshes, &center, radius, op);
+    match TerrainEdit::from_op(op, center, radius) {
+        Some(edit) => map.add_edit(edit),
+        None => warn!("Terrain operation {op:?} is not supported yet"),
     }
 
     commands.entity(entity).remove::<SelectedBuild>();

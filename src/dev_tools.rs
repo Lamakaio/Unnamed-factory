@@ -22,6 +22,7 @@ use crate::{
     AppState,
     build::BuildId,
     map::{IsGround, Map},
+    mapgen::Continent,
 };
 
 pub struct DevToolsPlugin;
@@ -120,22 +121,37 @@ fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) -> Result {
 }
 
 /// Log the generation data of the terrain point under a click.
-fn log_terrain_on_click(click: On<PointerClick>, chunks: Query<&IsGround>, map: Option<Res<Map>>) {
-    let (Ok(IsGround(chunk_position)), Some(map)) = (chunks.get(click.event_target()), map) else {
+fn log_terrain_on_click(
+    click: On<PointerClick>,
+    chunks: Query<(), With<IsGround>>,
+    map: Option<Res<Map>>,
+) {
+    let (true, Some(map), Some(pos)) = (
+        chunks.contains(click.event_target()),
+        map,
+        click.hit.position,
+    ) else {
         return;
     };
-    let Some(index) = click
-        .hit
-        .position
-        .and_then(|pos| map.continent_index(*chunk_position, pos))
-    else {
+    let sample = map.sample(pos);
+    let Some(index) = Continent::grid_coords(pos.xz()) else {
+        info!(
+            "terrain {pos}: height {} (off the continent)",
+            sample.height
+        );
         return;
     };
     let point = &map.continent[index];
     let hydro = map.continent.get_hydro(index.0, index.1);
     info!(
-        "terrain {index:?}: height {} grad {} - water {} momentum {} - visit {}",
-        point.height, point.grad, hydro.amount, hydro.momentum, hydro.visit
+        "terrain {index:?}: height {} wetness {} - base {} grad {} - water {} momentum {} - visit {}",
+        sample.height,
+        sample.wetness,
+        point.height,
+        point.grad,
+        hydro.amount,
+        hydro.momentum,
+        hydro.visit
     );
 }
 

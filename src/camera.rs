@@ -18,7 +18,7 @@ use bevy::{
     color::palettes,
     core_pipeline::prepass::DepthPrepass,
     input::mouse::{MouseScrollUnit, MouseWheel},
-    math::{DVec2, DVec3, I64Vec2},
+    math::{DVec2, DVec3},
     pbr::AtmosphereSettings,
     picking::{
         PickingSystems,
@@ -35,7 +35,7 @@ use bevy::{
 
 use crate::{
     AppState,
-    map::{Chunk, Map},
+    map::{Map, SCALE_Y},
     ui::PointerOverUi,
 };
 
@@ -83,7 +83,7 @@ const INITIAL_OFFSET: Vec3 = Vec3::splat(6.0);
 /// Spawn the camera at startup (it also renders the loading screen).
 fn spawn_camera(mut commands: Commands) {
     // Provisional position until the terrain exists, see `look_at_origin`.
-    let target = Vec3::new(0.0, Chunk::SCALE_Y / 2., 0.0);
+    let target = Vec3::new(0.0, SCALE_Y / 2., 0.0);
 
     commands.spawn((
         Name::new("3d camera"),
@@ -125,9 +125,7 @@ fn spawn_camera(mut commands: Commands) {
 }
 
 /// Once the world is generated, look at the terrain at the origin.
-fn look_at_origin(mut camera: Single<&mut Transform, With<PanOrbitCamera>>, mut map: ResMut<Map>) {
-    // Make sure the origin chunk exists so the target sits on the terrain.
-    map.get_chunk_mut(&I64Vec2::ZERO);
+fn look_at_origin(mut camera: Single<&mut Transform, With<PanOrbitCamera>>, map: Res<Map>) {
     let target = Vec3::new(0.0, map.get_height(Vec3::ZERO), 0.0);
     **camera = Transform::from_translation(target + INITIAL_OFFSET).looking_at(target, Vec3::Y);
 }

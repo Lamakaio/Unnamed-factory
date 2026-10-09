@@ -1,7 +1,7 @@
 use bevy::{
     curve::{
-        Curve, CurveExt, Interval,
-        cubic_splines::{CubicGenerator, CubicHermite, LinearSpline},
+        Curve, Interval,
+        cubic_splines::{CubicHermite, LinearSpline},
     },
     math::{NormedVectorSpace, Vec2, Vec3},
 };
@@ -27,7 +27,7 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use crate::map::{Chunk, GRID_SQUARE_SIZE};
+use crate::map::{GRID_SQUARE_SIZE, SCALE_Y};
 
 #[derive(Default, Clone)]
 struct TestCurve;
@@ -104,7 +104,6 @@ pub struct Hydrologypoint {
     ctrlpoint: bool,
     next: usize,
     prev: usize,
-    pub river: bool
 }
 
 pub struct RiverPath {
@@ -227,60 +226,6 @@ impl Continent {
             })
         }
         self.make_hydrology_map();
-        self.patch_terrain_for_rivers();
-    }
-
-    const SAMPLE_PER_POINT: u32 = Self::TILES_PER_POINT * 3;
-    fn patch_terrain_for_rivers(&mut self) {
-        for curve in &self.river_paths {
-            let c_pos = curve.position.to_curve().unwrap();
-            let c_amount = curve.amount.to_curve().unwrap();
-            let samples = c_pos.segments().len() * Self::SAMPLE_PER_POINT as usize;
-            for v in c_pos
-                .sample_iter((0..=samples).map(|s| s as f32 / Self::SAMPLE_PER_POINT as f32))
-                .zip(c_amount.sample_iter(
-                    (0..=samples).map(|s| s as f32 / Self::SAMPLE_PER_POINT as f32 / 2.), //cubic b-spline has 4 points per segment (I think)
-                ))
-            {
-                if let (Some(pos), Some(amount)) = v {
-                    
-                    let radius = (amount + 50.).log10() - 50f32.log10();
-                    //dbg!(radius, amount);
-                    let i = self.from_world(pos);
-                    let (xcenter, ycenter) = Self::h2xy(i);
-
-                    let min = self.from_world(pos - radius);
-                    let max = self.from_world(pos + radius);
-                    let (xmin, ymin) = Self::h2xy(min);
-                    let (xmax, ymax) = Self::h2xy(max);
-
-                    
-                    fn mix(x: f32, y: f32, d: f32) -> f32 {
-                        let d = d.clamp(0., 1.);
-                        x * (1. - d) + y * d 
-                    }
-                    
-                    fn d(a: (u32, u32), b: (u32, u32)) -> f32 {
-                        Vec2::new(a.0 as f32, a.1 as f32).distance(Vec2::new(b.0 as f32, b.1 as f32))
-                    }
-                    let coord_radius = d((xmin, ymin), (xmax, ymax)) / 2.;
-
-                    for x in xmin..=xmax {
-                        for y in ymin..=ymax {
-                            let p = Self::xy2h(x, y);
-                            if self.hydrology[p].visit != 12 {
-                                let old = self.points[p].height;
-                                let new = pos.y / Chunk::SCALE_Y - 0.002;
-                                let new = mix(new, old, (d((x, y), (xcenter, ycenter))/(coord_radius + 1.)).powi(2));
-                                self.points[p].height = old.min(new);
-                                self.hydrology[p].river = true;
-                            }
-                            self.hydrology[p].visit = 12;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     fn make_hydrology_map(&mut self) {
@@ -471,17 +416,15 @@ impl Continent {
             y as i32 - Self::CONTINENT_SIZE as i32 / 2,
         );
         let (x, y) = (x as f32 * GRID_SQUARE_SIZE, y as f32 * GRID_SQUARE_SIZE);
-        let h = self.points[p].height * Chunk::SCALE_Y;
+        let h = self.points[p].height * SCALE_Y;
         Vec3::new(x, h, y)
     }
 
-    fn from_world(&self, v: Vec3) -> usize {
-        let (x, y) = (v.x as f32 / GRID_SQUARE_SIZE, v.z as f32 / GRID_SQUARE_SIZE);
-        let (x, y) = (
-            x as i32 + Self::CONTINENT_SIZE as i32 / 2,
-            y as i32 + Self::CONTINENT_SIZE as i32 / 2,
-        );
-        Self::xy2h(x as u32, y as u32)
+    /// Grid coordinates of the cell under a world position, if it is on the continent.
+    pub fn grid_coords(p: Vec2) -> Option<(u32, u32)> {
+        let g = (p / GRID_SQUARE_SIZE).floor() + (Self::CONTINENT_SIZE / 2) as f32;
+        (g.cmpge(Vec2::ZERO).all() && g.cmplt(Vec2::splat(Self::CONTINENT_SIZE as f32)).all())
+            .then_some((g.x as u32, g.y as u32))
     }
 
     fn fork_estuaries(
