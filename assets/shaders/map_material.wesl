@@ -8,6 +8,8 @@
 //   weights come from two textures baked per continent cell (`map::ground`), warped and
 //   sharpened with noise so borders are crisp and irregular; rock on steep slopes and snow
 //   sliding off them are decided per pixel. Mesh vertex color red is the river/lake wetness.
+// - Grass is animated: short blade strokes along the wind close up, and gusts sweeping across
+//   meadows as lighter bands (grass bending), at every distance.
 // - Lighting: the sun is a hard-edged two-tone (lit / cool shadow, from the slope and the
 //   shadow maps) with a small highlight band and a rim light. No specular.
 //
@@ -29,7 +31,7 @@ import bevy_pbr::{
 import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::main_pass_post_lighting_processing,
-    mesh_view_bindings::{view, lights},
+    mesh_view_bindings::{view, lights, globals},
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     shadows::fetch_directional_shadow,
 };
@@ -46,6 +48,12 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var ground_a: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(105) var ground_b: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(106) var<uniform> ground_map: vec4<f32>;
+// Ground weights: (desert, -, -, -).
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var ground_c: texture_2d<f32>;
+
+// Wind direction (shared with toon_sway.wesl) and gust speed (world units per second).
+const WIND: vec2<f32> = vec2(0.8, 0.6);
+const GUST_SPEED: f32 = 3.0;
 
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
@@ -126,32 +134,51 @@ fn rock_color(p: vec3<f32>, n: vec3<f32>, footprint: f32) -> vec3<f32> {
     return mix(srgb(0.52, 0.49, 0.47), srgb(0.62, 0.59, 0.55), patches(pattern, 0.1));
 }
 
+// Grass animation: blade strokes (close up) and wind gusts. Returns the brightness factor.
+fn wind(xz: vec2<f32>, footprint: f32, time: f32) -> f32 {
+    let along = dot(xz, WIND);
+    let across = dot(xz, vec2(-WIND.y, WIND.x));
+    // Short strokes stretched along the wind, swaying a little.
+    let sway = sin(time * 1.8 + along * 0.8 + across * 0.35) * 0.25;
+    let stroke = value_noise(vec2(along * 3.0 + sway, across * 16.0));
+    let near = 1.0 - smoothstep(0.015, 0.05, footprint);
+    let strokes = (patches(stroke, 0.55) * 0.1 - patches(-stroke, 0.55) * 0.08) * near;
+    // Gusts: wide bands moving downwind; bent grass shows its lighter side.
+    let gust = fbm(vec2(along * 0.1 - time * GUST_SPEED * 0.1, across * 0.04), 2, footprint * 0.1);
+    let gusting = smoothstep(0.2, 0.45, gust);
+    return 1.0 + strokes + 0.1 * gusting;
+}
+
 fn ground(
     p: vec3<f32>,
     n: vec3<f32>,
     a: vec4<f32>,
     b: vec4<f32>,
+    c: vec4<f32>,
     wet: f32,
     footprint: f32,
+    time: f32,
 ) -> vec3<f32> {
     let xz = p.xz;
     let steep = 1.0 - n.y;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
     let large = fbm(xz * 0.07 + vec2(7.1, 3.3), 3, footprint * 0.07);
     let blotches = fbm(xz * 0.18 + vec2(2.0, 8.0), 3, footprint * 0.18);
+    let wind_shade = wind(xz, footprint, time);
 
-    // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches.
+    // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches, swept
+    // by the wind.
     let dry = saturate(b.r + 0.2 * large);
     let dry_step = floor(dry * 3.0 + 0.5) / 3.0;
     var grass = mix(srgb(0.40, 0.66, 0.24), srgb(0.80, 0.72, 0.38), dry_step);
     grass = mix(grass, grass * vec3(1.1, 1.1, 0.9), patches(blotches, 0.25));
-    var color = grass;
+    var color = grass * wind_shade;
     let dirt = patches(fbm(xz * 0.5 + vec2(3.3, 1.1), 3, footprint * 0.5), 0.72 - 0.1 * dry);
     color = mix(color, srgb(0.66, 0.52, 0.34), dirt);
 
-    // Alpine grass.
+    // Alpine grass (short, also wind-swept).
     let alpine = mix(srgb(0.60, 0.68, 0.42), srgb(0.66, 0.66, 0.50), patches(blotches, 0.1));
-    color = mix(color, alpine, border(b.a, medium));
+    color = mix(color, alpine * wind_shade, border(b.a, medium));
 
     // Forest floors.
     let deciduous = mix(srgb(0.27, 0.48, 0.18), srgb(0.33, 0.44, 0.17), patches(blotches, 0.0));
@@ -159,23 +186,50 @@ fn ground(
     let conifer = mix(srgb(0.21, 0.38, 0.22), srgb(0.30, 0.34, 0.20), patches(blotches, 0.1));
     color = mix(color, conifer, border(b.b, medium));
 
-    // Marsh: reeds and dark pools.
-    let pools = patches(fbm(xz * 0.6 + vec2(5.0, 9.0), 3, footprint * 0.6), 0.2);
-    let marsh = mix(srgb(0.36, 0.50, 0.25), srgb(0.24, 0.34, 0.33), pools);
+    // Marsh: reed beds (dark strokes) around still pools with a muddy rim.
+    let pool_noise = fbm(xz * 0.45 + vec2(5.0, 9.0), 3, footprint * 0.45);
+    let pools = patches(pool_noise, 0.15);
+    let mud = patches(pool_noise, 0.05) - pools;
+    let reed_stroke = value_noise(vec2(dot(xz, WIND) * 5.0, dot(xz, vec2(-WIND.y, WIND.x)) * 22.0));
+    let reeds = mix(srgb(0.42, 0.52, 0.26), srgb(0.30, 0.40, 0.20), patches(reed_stroke, 0.3))
+        * wind_shade;
+    let pool_water = mix(srgb(0.16, 0.30, 0.34), srgb(0.30, 0.46, 0.48),
+        patches(fbm(xz * 1.5 + vec2(time * 0.05, 0.0), 2, footprint * 1.5), 0.45) * 0.6);
+    var marsh = mix(reeds, srgb(0.36, 0.30, 0.20), mud);
+    marsh = mix(marsh, pool_water, pools);
     color = mix(color, marsh, border(a.a, medium));
 
     // Sand.
     let sand = mix(srgb(0.94, 0.85, 0.62), srgb(0.89, 0.79, 0.56), patches(blotches, 0.2));
     color = mix(color, sand, border(a.r, medium));
 
-    // Rock: rocky ground, and every steep slope.
+    // Desert: warm sand in dune ripples, cracked clay flats.
+    let along = dot(xz, WIND);
+    let ripples = sin(along * 1.4 + fbm(xz * 0.15, 3, footprint * 0.15) * 4.0);
+    var desert = mix(srgb(0.90, 0.72, 0.47), srgb(0.80, 0.60, 0.38), patches(ripples, 0.55));
+    let flats = patches(fbm(xz * 0.1 + vec2(13.0, 4.0), 3, footprint * 0.1), 0.3);
+    let cracks = patches(1.0 - abs(value_noise(xz * 2.5)), 0.93)
+        * (1.0 - smoothstep(0.03, 0.08, footprint));
+    let clay = mix(srgb(0.82, 0.63, 0.47), srgb(0.62, 0.45, 0.33), cracks);
+    desert = mix(desert, clay, flats);
+    let desertness = border(c.r, medium);
+    color = mix(color, desert, desertness);
+
+    // Rock: rocky ground, and every steep slope (redder in deserts).
     let steep_value = steep + 0.06 * medium;
     let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
-    color = mix(color, rock_color(p, n, footprint), rock);
+    let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
+    color = mix(color, rock_color(p, n, footprint) * rock_tone, rock);
 
-    // Snow, which slides off steep slopes.
-    let snow_value = a.b + 0.3 * medium - smoothstep(0.4, 0.65, steep);
-    color = mix(color, srgb(0.96, 0.97, 1.0), crisp(0.5, snow_value, fwidth(snow_value)));
+    // Snow: settles on flat ground (steep rock stays bare), with a ragged edge and wind-blown
+    // drifts.
+    let snow_noise = fbm(xz * 0.25 + vec2(3.0, 17.0), 3, footprint * 0.25);
+    let snow_value = a.b * 1.25 + 0.3 * snow_noise + 0.6 * (n.y - 0.85)
+        - smoothstep(0.35, 0.6, steep);
+    let drifts = patches(fbm(vec2(along * 0.6, dot(xz, vec2(-WIND.y, WIND.x)) * 0.2), 3,
+        footprint * 0.6), 0.25);
+    let snow_color = mix(srgb(0.97, 0.98, 1.0), srgb(0.84, 0.89, 0.97), drifts);
+    color = mix(color, snow_color, crisp(0.5, snow_value, fwidth(snow_value)));
 
     // River and lake beds.
     color = mix(color, srgb(0.52, 0.46, 0.36), crisp(0.5, wet, fwidth(wet)));
@@ -219,6 +273,7 @@ fn fragment(
     var n = pbr_input.N;
     var a = vec4(0.0);
     var b = vec4(0.3, 0.0, 0.0, 0.0);
+    var c = vec4(0.0);
     if gradient_map.z > 0.0 {
         var gradient = textureSample(
             gradient_texture,
@@ -238,12 +293,13 @@ fn fragment(
         let uv = (p.xz + warp) * ground_map.zw + ground_map.xy;
         a = textureSample(ground_a, terrain_sampler, uv);
         b = textureSample(ground_b, terrain_sampler, uv);
+        c = textureSample(ground_c, terrain_sampler, uv);
     }
     var wet = 0.0;
 @if(VERTEX_COLORS)
     wet = in.color.r;
 
-    let albedo = ground(p, n, a, b, wet, footprint) * tint.rgb;
+    let albedo = ground(p, n, a, b, c, wet, footprint, globals.time) * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).
     let sun = lights.directional_lights[0];

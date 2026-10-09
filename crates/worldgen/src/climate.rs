@@ -77,6 +77,8 @@ pub fn climate(
             Biome::Alpine
         } else if moisture[i] > 1.5 && slope < 0.08 && h < 12. {
             Biome::Marsh
+        } else if moisture[i] < 0.3 + wobble * 0.5 && temperature[i] > 0.45 {
+            Biome::Desert
         } else if moisture[i] < 0.55 + wobble {
             Biome::Steppe
         } else if moisture[i] < 0.95 + wobble {

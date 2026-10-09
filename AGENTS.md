@@ -275,6 +275,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   - LOD0 models are entities only within 20 of the camera (`VisibilityRange` 18–22),
     spawned and despawned as the camera moves (600 per frame at most); ground cover
     likewise, fading out at 14–18.
+  Tall grass grows in patches (a third grid, 0.18, gated by noise to ~30% of the ground:
+  `patch_rules`), swaying (`Species::sways`). Deserts get cacti, dry shrubs, red rocks.
   Models: Kenney low-poly trees / rocks / stumps (recoloured to the palette, LODs by
   decimation, ~50–400 triangles) for the bulk, Quaternius textured hero trees (≤ 4000
   triangles, rare), boulders, bushes and ground cover. Species and per-biome probabilities
@@ -324,13 +326,20 @@ hot reload). The shader is WESL (`map_material.wesl`):
   pixel): grass (lush → dry in steps, lighter patches, dirt spots), alpine grass, forest
   floors, marsh (dark pools), sand, rock (two-tone strata on cliffs), snow, river/lake beds,
   sea floor (sand → teal, darker with depth). Edges are antialiased with `fwidth` (`crisp`).
+  - **Grass is animated** (no geometry): short blade strokes along the wind close up, and
+    wind gusts sweeping downwind as lighter bands, at every distance (`wind()`, `WIND`,
+    `GUST_SPEED`, `globals.time`). Alpine grass and marsh reeds use it too.
+  - **Snow** settles on flat ground (steep rock stays bare), with a ragged noisy edge and
+    wind-blown drifts. **Desert** (`ground_c.r`): dune ripples, cracked clay flats, redder
+    rock. **Marsh**: reed beds (wind strokes) around still teal pools with a muddy rim.
 - **Lighting** is custom (no PBR/specular): the sun (`lights.directional_lights[0]`, its
   brightness × `view.exposure`) gives a hard two-tone lit / cool-shadow step from the slope
   and `fetch_directional_shadow`, plus a highlight band and a rim light; fog etc. via
   `main_pass_post_lighting_processing`.
 - **Weights** come from `map::ground` textures (one texel per continent cell, RGBA8):
   `ground_a` = sand, rock, snow, marsh (from biomes, snow from temperature); `ground_b` =
-  dryness (from moisture), deciduous, conifer, alpine (from temperature). They are sampled
+  dryness (from moisture), deciduous, conifer, alpine (from temperature); `ground_c` =
+  desert (binding 107). They are sampled
   at a noise-warped position and sharpened with noise (`edge`), so borders are irregular.
   Rock on steep slopes (1 − N.y from ~0.28 to 0.45) and snow sliding off them are per pixel.
   Mesh vertex colour red is the river/lake wetness (the only per-vertex ground data).
@@ -598,6 +607,9 @@ of the migration work.
 - Credit every borrowed technique in `CREDITS.md` and in the code comment where it is used.
 - Objects use `ToonMaterial` (`shaders::toon` converts a `StandardMaterial`, e.g. from
   glTF via `standard_material_from_gltf_material`), so they share the terrain's cel lighting.
+  Its `snow` uniform covers upward faces above the snow line (matching the terrain).
+  `SwayToonMaterial` adds `toon_sway.wesl`, a vertex shader bending grass-like models in the
+  wind (no depth prepass, static shadows).
 - Prefer data textures or **custom vertex attributes** (`MeshVertexAttribute`) for new
   terrain data. The terrain mesh currently reuses UV0 (feature gradient) and vertex colour
   red (wetness) as data, which works because the terrain has no real UVs or colours.

@@ -15,6 +15,7 @@ impl Plugin for ShadersPlugin {
             MaterialPlugin::<WaterMaterial>::default(),
             MaterialPlugin::<ToonMaterial>::default(),
             MaterialPlugin::<LodToonMaterial>::default(),
+            MaterialPlugin::<SwayToonMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
@@ -23,14 +24,18 @@ impl Plugin for ShadersPlugin {
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water.wesl";
 const TOON_SHADER_ASSET_PATH: &str = "shaders/toon.wesl";
+const SWAY_SHADER_ASSET_PATH: &str = "shaders/toon_sway.wesl";
 
 /// Toon material for objects (vegetation, rocks): the standard material's colours with the
-/// terrain's cel lighting. `tint` multiplies them.
+/// terrain's cel lighting. `tint` multiplies them; snow covers upward faces between the world
+/// heights `snow.x` and `snow.y` (disabled when `snow.y <= snow.x`).
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct ToonShader {
     #[uniform(100)]
     pub tint: LinearRgba,
+    #[uniform(102)]
+    pub snow: Vec4,
 }
 
 impl MaterialExtension for ToonShader {
@@ -52,6 +57,8 @@ pub struct LodToonShader {
     pub tint: LinearRgba,
     #[uniform(101)]
     pub lod: Vec4,
+    #[uniform(102)]
+    pub snow: Vec4,
 }
 
 impl MaterialExtension for LodToonShader {
@@ -78,12 +85,41 @@ impl MaterialExtension for LodToonShader {
 
 pub type LodToonMaterial = ExtendedMaterial<StandardMaterial, LodToonShader>;
 
-/// The toon version of a standard material (e.g. one loaded from a glTF file).
-pub fn toon(base: &StandardMaterial) -> ToonMaterial {
+/// [`ToonShader`] for vegetation swaying in the wind (tall grass, reeds): `toon_sway.wesl`
+/// bends the models in the vertex shader. Not in the depth prepass (it would not sway).
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct SwayToonShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+    #[uniform(102)]
+    pub snow: Vec4,
+}
+
+impl MaterialExtension for SwayToonShader {
+    fn vertex_shader() -> ShaderRef {
+        SWAY_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        TOON_SHADER_ASSET_PATH.into()
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+}
+
+pub type SwayToonMaterial = ExtendedMaterial<StandardMaterial, SwayToonShader>;
+
+/// The toon version of a standard material (e.g. one loaded from a glTF file), with snow
+/// between the world heights `snow.x` and `snow.y`.
+pub fn toon(base: &StandardMaterial, snow: Vec4) -> ToonMaterial {
     ToonMaterial {
         base: base.clone(),
         extension: ToonShader {
             tint: LinearRgba::WHITE,
+            snow,
         },
     }
 }
@@ -126,6 +162,8 @@ pub struct TerrainShader {
     pub ground_a: Option<Handle<Image>>,
     #[texture(105)]
     pub ground_b: Option<Handle<Image>>,
+    #[texture(107)]
+    pub ground_c: Option<Handle<Image>>,
     /// Mapping from world xz to `ground_*` coordinates: `uv = xz * zw + xy`.
     #[uniform(106)]
     pub ground_map: Vec4,
@@ -247,6 +285,7 @@ impl AssetLoader for MapMaterialLoader {
             gradient_map: Vec4::ZERO,
             ground_a: None,
             ground_b: None,
+            ground_c: None,
             ground_map: Vec4::ZERO,
         };
         Ok(MapMaterial {base, extension})

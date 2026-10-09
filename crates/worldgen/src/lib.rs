@@ -173,6 +173,8 @@ pub enum Biome {
     Marsh,
     Meadow,
     Steppe,
+    /// Driest warm land: sand, clay flats, cacti.
+    Desert,
     DeciduousForest,
     ConiferForest,
     Alpine,
@@ -190,6 +192,7 @@ impl Biome {
             Biome::Marsh => [0.36, 0.42, 0.22],
             Biome::Meadow => [0.50, 0.68, 0.30],
             Biome::Steppe => [0.72, 0.68, 0.40],
+            Biome::Desert => [0.90, 0.74, 0.50],
             Biome::DeciduousForest => [0.26, 0.48, 0.18],
             Biome::ConiferForest => [0.17, 0.34, 0.20],
             Biome::Alpine => [0.55, 0.60, 0.45],

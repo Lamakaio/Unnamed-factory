@@ -51,6 +51,8 @@ someone else's work, add it here (and mention it in the code comment where it is
   Apache 2.0), which this project's first terrain shader was taken from; cel shading after
   Wind Waker ([video](https://www.youtube.com/watch?v=mnxs6CR6Zrk)) and rim lights after
   Breath of the Wild ([video](https://www.youtube.com/watch?v=By7qcgaqGI4)).
+- **Wind over grass** (gust bands sweeping across meadows, swaying vegetation): the common
+  stylized technique popularized by Breath of the Wild and Ghost of Tsushima.
 - **Toon water** (colour from the depth behind the surface, shoreline foam): Roystan's
   *Toon Water Shader* tutorial (roystan.net). (`water.wesl`)
 - **Inverse-size noise fading** (octaves fade below a pixel): standard procedural

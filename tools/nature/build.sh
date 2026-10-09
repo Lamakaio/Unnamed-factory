@@ -42,6 +42,12 @@ Q=$QUATERNIUS
     "stone_a=lowrock=$K/stone_largeA.glb==3" \
     "stone_c=lowrock=$K/stone_largeC.glb==3" \
     "stone_e=lowrock=$K/stone_largeE.glb==3" \
+    "cactus_tall=lowtree=$K/cactus_tall.glb=5d7f3c=8" \
+    "cactus_short=lowtree=$K/cactus_short.glb=5d7f3c=6" \
+    "desert_shrub=lowwood=$K/plant_bushSmall.glb=8a8a4a=5" \
+    "tall_grass=lowground=$K/grass_large.glb=5f8a2c=3" \
+    "dry_tall_grass=lowground=$K/grass_large.glb=b8a35a=3" \
+    "reeds=lowground=$K/plant_flatTall.glb=4f6b30=4" \
     "stump=lowwood=$K/stump_old.glb==2.5" \
     "logs=lowwood=$K/log_stack.glb==2.5" \
     "common_tree_a=tree=$Q/CommonTree_1.gltf=4a6c22" \
@@ -64,4 +70,5 @@ Q=$QUATERNIUS
     "grass_b=ground=$Q/Grass_Wispy_Short.gltf" \
     "clover=ground=$Q/Clover_1.gltf" \
     "mushrooms=ground=$Q/Mushroom_Common.gltf" \
-    "plant=ground=$Q/Plant_1.gltf"
+    "plant=ground=$Q/Plant_1.gltf" \
+    "wispy_grass=ground=$Q/Grass_Wispy_Tall.gltf"

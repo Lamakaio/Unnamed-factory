@@ -39,7 +39,7 @@ use worldgen::{
 use super::{CHUNK_SIZE, IsGround, Map, heights::TerrainHeights};
 use crate::{
     AppState,
-    shaders::{LodToonMaterial, LodToonShader, ToonMaterial, toon},
+    shaders::{LodToonMaterial, LodToonShader, SwayToonMaterial, SwayToonShader, ToonMaterial, toon},
 };
 
 /// Model units (metres) to world units: one world unit is 20 m (buildings use the same scale).
@@ -63,6 +63,12 @@ const LEVEL_MARGIN: f32 = 15.;
 /// Placement grid cells (world units) for large things and for ground cover.
 const LARGE_CELL: f32 = 0.45;
 const GROUND_CELL: f32 = 0.28;
+/// Placement grid cell of the tall grass patches, and the share of the ground they cover.
+const PATCH_CELL: f32 = 0.18;
+const PATCH_COVER: f32 = 0.3;
+/// Snow on objects: from this far below the terrain's snow line (where the ground is fully
+/// snowy) to the line itself.
+const SNOW_FADE: f32 = 2.;
 /// Background tasks at once (placement, near meshes).
 const MAX_TASKS: usize = 4;
 
@@ -73,6 +79,16 @@ enum Kind {
     Rock,
     Wood,
     Ground,
+}
+
+impl Species {
+    /// Grass-like species bend in the wind (`SwayToonMaterial`).
+    fn sways(&self) -> bool {
+        matches!(
+            self.name,
+            "tall_grass" | "dry_tall_grass" | "reeds" | "wispy_grass" | "grass_a" | "grass_b"
+        )
+    }
 }
 
 impl Kind {
@@ -127,6 +143,12 @@ const SPECIES: &[Species] = &[
     Species { name: "stone_a", kind: Kind::Rock, scale: (0.8, 2.5) },
     Species { name: "stone_c", kind: Kind::Rock, scale: (0.8, 2.5) },
     Species { name: "stone_e", kind: Kind::Rock, scale: (0.8, 2.5) },
+    Species { name: "cactus_tall", kind: Kind::Tree, scale: (0.7, 1.2) },
+    Species { name: "cactus_short", kind: Kind::Tree, scale: (0.7, 1.2) },
+    Species { name: "desert_shrub", kind: Kind::Bush, scale: (0.8, 1.4) },
+    Species { name: "tall_grass", kind: Kind::Ground, scale: (0.8, 1.3) },
+    Species { name: "dry_tall_grass", kind: Kind::Ground, scale: (0.8, 1.3) },
+    Species { name: "reeds", kind: Kind::Ground, scale: (0.8, 1.4) },
     Species { name: "stump", kind: Kind::Wood, scale: (0.8, 1.2) },
     Species { name: "logs", kind: Kind::Wood, scale: (0.8, 1.2) },
     // Quaternius Stylized Nature MegaKit (textured): hero trees, boulders, bushes, ground cover.
@@ -151,6 +173,7 @@ const SPECIES: &[Species] = &[
     Species { name: "clover", kind: Kind::Ground, scale: (0.8, 1.2) },
     Species { name: "mushrooms", kind: Kind::Ground, scale: (0.8, 1.3) },
     Species { name: "plant", kind: Kind::Ground, scale: (0.8, 1.3) },
+    Species { name: "wispy_grass", kind: Kind::Ground, scale: (0.8, 1.2) },
 ];
 
 /// Probability per large placement cell of each species, by biome.
@@ -229,7 +252,26 @@ fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
         ],
         Biome::Snow => &[("stone_c", 0.015), ("rock_tall_d", 0.008)],
         Biome::Beach => &[("stone_e", 0.006), ("logs", 0.003)],
+        Biome::Desert => &[
+            ("desert_shrub", 0.03),
+            ("cactus_short", 0.012),
+            ("cactus_tall", 0.006),
+            ("rock_a", 0.01),
+            ("rock_c", 0.008),
+            ("dead_tree_b", 0.002),
+        ],
         Biome::Sea | Biome::Lake => &[],
+    }
+}
+
+/// Probability per patch cell of each tall grass species, by biome (only inside patches).
+fn patch_rules(biome: Biome) -> &'static [(&'static str, f32)] {
+    match biome {
+        Biome::Meadow => &[("tall_grass", 0.45), ("wispy_grass", 0.12)],
+        Biome::Steppe => &[("dry_tall_grass", 0.5)],
+        Biome::Marsh => &[("reeds", 0.6), ("tall_grass", 0.2)],
+        Biome::Alpine => &[("dry_tall_grass", 0.15)],
+        _ => &[],
     }
 }
 
@@ -246,6 +288,7 @@ fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
             ("flowers_b", 0.02),
         ],
         Biome::Steppe => &[("grass_b", 0.07), ("grass_a", 0.03)],
+        Biome::Desert => &[("pebbles_a", 0.02), ("pebbles_b", 0.01)],
         Biome::Marsh => &[("grass_a", 0.12), ("plant", 0.04)],
         Biome::Alpine => &[("grass_b", 0.04), ("pebbles_a", 0.02)],
         Biome::Rock => &[("pebbles_a", 0.03)],
@@ -268,7 +311,9 @@ impl Plugin for VegetationPlugin {
         app.add_systems(Startup, load_models).add_systems(
             Update,
             (
-                prepare_models.run_if(not(resource_exists::<Vegetation>)),
+                prepare_models
+                    .run_if(not(resource_exists::<Vegetation>))
+                    .run_if(resource_exists::<Map>),
                 (start_placement, finish_placement, update_levels, update_details)
                     .chain()
                     .run_if(in_state(AppState::InGame))
@@ -296,7 +341,13 @@ fn load_models(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 /// A mesh with its material.
-type Part = (Handle<Mesh>, Handle<ToonMaterial>);
+type Part = (Handle<Mesh>, PartMaterial);
+
+#[derive(Clone)]
+enum PartMaterial {
+    Toon(Handle<ToonMaterial>),
+    Sway(Handle<SwayToonMaterial>),
+}
 
 /// Geometry of a stand-in, merged into the chunks' meshes.
 #[derive(Default)]
@@ -329,7 +380,12 @@ fn prepare_models(
     meshes: Res<Assets<Mesh>>,
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut lod_materials: ResMut<Assets<LodToonMaterial>>,
+    mut sway_materials: ResMut<Assets<SwayToonMaterial>>,
+    map: Res<Map>,
 ) {
+    // Matches the terrain's snow (ground textures: from temperature 0.12 to 0.04).
+    let snow_line = map.continent.settings.snow_line;
+    let snow = Vec4::new(0.88 * snow_line - SNOW_FADE, 0.93 * snow_line, 0., 0.);
     let Some(models) = models else {
         return;
     };
@@ -353,7 +409,8 @@ fn prepare_models(
     let lod0 = models
         .0
         .iter()
-        .map(|levels| {
+        .zip(SPECIES)
+        .map(|(levels, species)| {
             primitives(&levels[0])
                 .into_iter()
                 .map(|primitive| {
@@ -363,7 +420,18 @@ fn prepare_models(
                         .and_then(|material| gltf_materials.get(material))
                         .map(standard_material_from_gltf_material)
                         .unwrap_or_default();
-                    (primitive.mesh, toon_materials.add(toon(&base)))
+                    let material = if species.sways() {
+                        PartMaterial::Sway(sway_materials.add(SwayToonMaterial {
+                            base,
+                            extension: SwayToonShader {
+                                tint: LinearRgba::WHITE,
+                                snow,
+                            },
+                        }))
+                    } else {
+                        PartMaterial::Toon(toon_materials.add(toon(&base, snow)))
+                    };
+                    (primitive.mesh, material)
                 })
                 .collect()
         })
@@ -392,13 +460,14 @@ fn prepare_models(
         extension: LodToonShader {
             tint: LinearRgba::WHITE,
             lod: Vec4::new(LOD0_DISTANCE - LOD_FADE, LOD0_DISTANCE + LOD_FADE, 0., 0.),
+            snow,
         },
     });
     commands.insert_resource(Vegetation {
         lod0,
         lod1: Arc::new(stand_ins(1)),
         lod2: Arc::new(stand_ins(2)),
-        far_material: toon_materials.add(toon(&flat)),
+        far_material: toon_materials.add(toon(&flat, snow)),
         near_material,
     });
     info!("Vegetation models ready");
@@ -481,11 +550,13 @@ impl Placement {
         cell: f32,
         salt: u32,
         rules: fn(Biome) -> &'static [(&'static str, f32)],
+        patchy: bool,
     ) -> Vec<Instance> {
         let per_chunk = (CHUNK_SIZE / cell).round() as i64;
         let cell = CHUNK_SIZE / per_chunk as f32;
         let seed = self.seed ^ salt.wrapping_mul(0x9E37_79B9);
         let clearings = Noise::new(seed ^ 0xC1EA);
+        let patches = Noise::new(seed ^ 0x7A11);
         let random = |x: i64, z: i64, k: u32| {
             worldgen::noise::hash(seed.wrapping_add(k), x as u32, z as u32) as f32 / u32::MAX as f32
         };
@@ -496,6 +567,10 @@ impl Placement {
                 let p = Vec2::new(x as f32 + random(x, z, 1), z as f32 + random(x, z, 2)) * cell;
                 let table = rules(self.biome(p));
                 if table.is_empty() {
+                    continue;
+                }
+                // Patches (tall grass) cover about `PATCH_COVER` of the ground.
+                if patchy && patches.fbm(p / 5., 3) < 0.55 - 1.4 * PATCH_COVER {
                     continue;
                 }
                 // Forests have clearings and denser groves.
@@ -674,8 +749,9 @@ fn start_placement(
         }
         let (placement, stand_ins, chunk) = (placement.clone(), vegetation.lod2.clone(), *chunk);
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let large = placement.place(chunk, LARGE_CELL, 1, large_rules);
-            let ground = placement.place(chunk, GROUND_CELL, 2, ground_rules);
+            let large = placement.place(chunk, LARGE_CELL, 1, large_rules, false);
+            let mut ground = placement.place(chunk, GROUND_CELL, 2, ground_rules, false);
+            ground.extend(placement.place(chunk, PATCH_CELL, 3, patch_rules, true));
             let origin = (chunk.as_vec2() * CHUNK_SIZE).extend(0.).xzy();
             let far = merged_mesh(&stand_ins, &large, origin, false);
             Placed { large, ground, far }
@@ -867,7 +943,6 @@ fn update_details(
                     .map(|(mesh, material)| {
                         let mut entity = commands.spawn((
                             Mesh3d(mesh.clone()),
-                            MeshMaterial3d(material.clone()),
                             instance.transform(),
                             VisibilityRange {
                                 start_margin: 0.0..0.0,
@@ -876,6 +951,14 @@ fn update_details(
                             },
                             Pickable::IGNORE,
                         ));
+                        match material {
+                            PartMaterial::Toon(material) => {
+                                entity.insert(MeshMaterial3d(material.clone()))
+                            }
+                            PartMaterial::Sway(material) => {
+                                entity.insert(MeshMaterial3d(material.clone()))
+                            }
+                        };
                         if ground {
                             entity.insert(NotShadowCaster);
                         }

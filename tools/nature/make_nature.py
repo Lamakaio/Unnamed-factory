@@ -6,9 +6,10 @@
 #   per-face vertex colours averaged from the textures. Trees and bushes: convex hull of the
 #   foliage + a trunk prism; rocks: the decimated rock.
 #
-# Low-poly kinds (`lowtree`, `lowrock`, `lowwood`: flat-coloured models such as Kenney's) are
-# recoloured by material name to the game's palette and baked to vertex colours as one mesh;
-# LOD1 and LOD2 are the same model decimated.
+# Low-poly kinds (`lowtree`, `lowrock`, `lowwood`, `lowground`: flat-coloured models such as
+# Kenney's) are recoloured by material name to the game's palette (leaves, and grass when a
+# colour is given, take the entry's colour) and baked to vertex colours as one mesh; LOD1 and
+# LOD2 are the same model decimated (`lowground`: LOD0 only).
 #
 # Usage: blender -b -P make_nature.py -- <out_dir> name=kind=path[=leaf colour][=scale] ...
 import os
@@ -32,7 +33,7 @@ HULL_FACES = {"tree": (36, 18), "bush": (24, 10), "rock": (80, 14), "wood": (60,
 # Foliage clusters (separate hulls) of the stand-ins: lobed crowns, tiered pines.
 CLUSTERS = {"tree": (3, 1), "bush": (2, 1)}
 # Faces of the decimated low-poly models: (lod1, lod2).
-LOW_FACES = {"lowtree": (90, 28), "lowrock": (40, 14), "lowwood": (40, 14)}
+LOW_FACES = {"lowtree": (90, 28), "lowrock": (40, 14), "lowwood": (40, 14), "lowground": ()}
 
 # The game's palette (sRGB) for the materials of low-poly packs, by material name.
 PALETTE = {
@@ -184,7 +185,7 @@ def prism(name, base_radius, top_radius, top, sides):
 
 def palette_color(material_name, leaf_hex):
     name = material_name.lower()
-    if name.startswith("leaf"):
+    if name.startswith("leaf") or (name == "grass" and leaf_hex):
         return hex_color(leaf_hex or "4a6c22")
     for key in ("birch", "inner", "wood", "grass", "dirt", "stone"):
         if key in name:

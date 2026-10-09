@@ -4,6 +4,7 @@
 //! - `ground[0]`: sand, rock, snow, marsh weights.
 //! - `ground[1]`: dryness (0 lush .. 1 dry grass), deciduous forest floor, conifer forest floor,
 //!   alpine grass.
+//! - `ground[2]`: desert (the rest is free for later).
 //!
 //! Steep slopes, river beds and the sea floor are decided per pixel by the shader.
 
@@ -17,10 +18,11 @@ use worldgen::{Biome, Continent, noise::smoothstep};
 
 /// The ground textures and the mapping from world xz to their coordinates
 /// (`uv = xz * zw + xy`).
-pub fn ground_textures(continent: &Continent) -> ([Image; 2], Vec4) {
+pub fn ground_textures(continent: &Continent) -> ([Image; 3], Vec4) {
     let size = continent.size();
     let mut a = Vec::with_capacity(size * size * 4);
     let mut b = Vec::with_capacity(size * size * 4);
+    let mut c = Vec::with_capacity(size * size * 4);
     for i in 0..size * size {
         let biome = continent.biome[i];
         let weights = |table: &[(Biome, f32)]| {
@@ -41,6 +43,8 @@ pub fn ground_textures(continent: &Continent) -> ([Image; 2], Vec4) {
         let dryness = smoothstep(1.05, 0.35, continent.moisture[i]);
         a.extend([sand, rock, snow, marsh].map(unorm));
         b.extend([dryness, deciduous, conifer, alpine].map(unorm));
+        let desert = weights(&[(Biome::Desert, 1.)]);
+        c.extend([desert, 0., 0., 0.].map(unorm));
     }
     let image = |data| {
         let mut image = Image::new(
@@ -62,7 +66,7 @@ pub fn ground_textures(continent: &Continent) -> ([Image; 2], Vec4) {
     let scale = 1. / (cell * size as f32);
     let offset = ((size / 2) as f32 + 0.5) / size as f32;
     (
-        [image(a), image(b)],
+        [image(a), image(b), image(c)],
         Vec4::new(offset, offset, scale, scale),
     )
 }

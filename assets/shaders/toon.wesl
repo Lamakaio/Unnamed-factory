@@ -8,6 +8,9 @@
 // carries its object's origin (UV0 = x, z; UV1.x = y), and the object fades out where its
 // detailed model fades in, with the same dither as Bevy's visibility ranges (`lod` = the
 // detailed model's end margin), so the patterns complement each other.
+//
+// Snow settles on upward faces above the snow line (`snow.x` to `snow.y`, world heights),
+// matching the terrain's snow.
 
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -32,6 +35,23 @@ import bevy_pbr::render::{
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var<uniform> snow: vec4<f32>;
+
+const SNOW: vec3<f32> = vec3(0.92, 0.94, 0.98);
+
+// Cheap noise for the snow edge.
+fn hash2(q: vec2<f32>) -> f32 {
+    return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+fn noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let bottom = mix(hash2(cell), hash2(cell + vec2(1.0, 0.0)), u.x);
+    let top = mix(hash2(cell + vec2(0.0, 1.0)), hash2(cell + vec2(1.0, 1.0)), u.x);
+    return mix(bottom, top, u.y) * 2.0 - 1.0;
+}
 @if(LOD_FADE)
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> lod: vec4<f32>;
 
@@ -94,8 +114,14 @@ fn fragment(
 @if(PREPASS_PIPELINE) {
     out = deferred_output(in, pbr_input);
 } @else {
-    let albedo = pbr_input.material.base_color.rgb;
+    var albedo = pbr_input.material.base_color.rgb;
     let n = pbr_input.N;
+    if snow.y > snow.x {
+        let world = in.world_position.xyz;
+        let wobble = noise(world.xz * 0.5) * 0.8;
+        let cover = smoothstep(snow.x, snow.y, world.y + wobble) * smoothstep(0.3, 0.7, n.y);
+        albedo = mix(albedo, SNOW, crisp(0.5, cover));
+    }
     let sun = lights.directional_lights[0];
     let sun_level = dot(sun.color.rgb * view.exposure, vec3(0.2126, 0.7152, 0.0722))
         / 3.14159265;

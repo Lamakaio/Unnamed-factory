@@ -169,7 +169,7 @@ pub enum PatchOp {
 struct TerrainTextures {
     gradient: Handle<Image>,
     gradient_map: Vec4,
-    ground: [Handle<Image>; 2],
+    ground: [Handle<Image>; 3],
     ground_map: Vec4,
 }
 
@@ -178,7 +178,7 @@ struct GeneratedWorld {
     continent: Continent,
     heights: TerrainHeights,
     gradient: (Image, Vec4),
-    ground: ([Image; 2], Vec4),
+    ground: ([Image; 3], Vec4),
 }
 
 /// The world being generated on the [`AsyncComputeTaskPool`].
@@ -254,6 +254,7 @@ fn bind_terrain_textures(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial
         extension.gradient_map = textures.gradient_map;
         extension.ground_a = Some(textures.ground[0].clone());
         extension.ground_b = Some(textures.ground[1].clone());
+        extension.ground_c = Some(textures.ground[2].clone());
         extension.ground_map = textures.ground_map;
     }
 }
