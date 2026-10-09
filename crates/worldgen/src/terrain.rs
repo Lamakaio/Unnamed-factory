@@ -297,6 +297,10 @@ fn rainfall(settings: &WorldgenSettings, shape: &Shape, noise: Noise) -> Vec<f32
         .collect()
 }
 
+/// Largest explicit diffusion step: the cell-sized checker mode is multiplied by `1 - 8k`
+/// per step, so it is damped quickly below ~0.12.
+const MAX_DIFFUSION_STEP: f32 = 0.1;
+
 /// Stage B: stream-power-law erosion with an implicit solver (Braun & Willett 2013) and hillslope
 /// diffusion. Returns heights in the simulation's relative units (scaled later).
 ///
@@ -335,22 +339,28 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
             heights[i] = (uplifted + f * heights[r]) / (1. + f);
         }
 
-        // Hillslope diffusion (explicit; stable while diffusion * dt <= 0.25).
-        let previous = heights.clone();
-        for i in 0..heights.len() {
-            if shape.base_level[i] {
-                continue;
-            }
-            let k = (shape.diffusion[i] * dt).min(0.24);
-            let mut sum = 0.;
-            let mut count = 0.;
-            for (j, distance) in neighbours(size, i) {
-                if distance <= 1. {
-                    sum += previous[j];
-                    count += 1.;
+        // Hillslope diffusion, explicit, in substeps of at most `MAX_DIFFUSION_STEP`: closer
+        // to the stability limit (0.25), the cell-sized checker mode stops being damped and
+        // shows as stripes.
+        let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt;
+        let substeps = (max_k / MAX_DIFFUSION_STEP).ceil().max(1.);
+        for _ in 0..substeps as usize {
+            let previous = heights.clone();
+            for i in 0..heights.len() {
+                if shape.base_level[i] {
+                    continue;
                 }
+                let k = shape.diffusion[i] * dt / substeps;
+                let mut sum = 0.;
+                let mut count = 0.;
+                for (j, distance) in neighbours(size, i) {
+                    if distance <= 1. {
+                        sum += previous[j];
+                        count += 1.;
+                    }
+                }
+                heights[i] += k * (sum - count * previous[i]);
             }
-            heights[i] += k * (sum - count * previous[i]);
         }
     }
     priority_flood(size, &heights, &shape.base_level, 1e-4)
