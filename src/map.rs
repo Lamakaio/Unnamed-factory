@@ -6,27 +6,12 @@ use bevy::{
     prelude::*,
 };
 use kdtree_collisions::{KdTree, KdValue};
-use noiz::{
-    Noise, Sampleable, SampleableFor,
-    cell_noise::{MixCellValuesForDomain, PerNearestPoint},
-    cells::{OrthoGrid, SimplexGrid, Voronoi},
-    curves::Smoothstep,
-    math_noise::{NoiseCurve, Pow2, Pow4},
-    misc_noise::Scaled,
-    prelude::{
-        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, ManhattanLength, Masked,
-        MixCellGradients, Normed, NormedByDerivative, Octave, PeakDerivativeContribution,
-        PerCellPointDistances, Persistence, QuickGradients, SNormToUNorm, SimplecticBlend,
-        WorleyLeastDistance,
-    },
-    rng::{NoiseRng, SNorm, UNorm},
-};
 use serde::Deserialize;
 
 use crate::{
-    build::{Building, BuildingType},
+    build::Building,
     mapgen::Continent,
-    shaders::{MapMaterial, TerrainShader},
+    shaders::MapMaterial,
 };
 pub struct MapPlugin {
     pub seed: u128,
@@ -439,7 +424,7 @@ impl Map {
         let chunk_pos = I64Vec2::new(chunk_pos.x as i64, chunk_pos.z as i64);
         let chunk = self.chunks.get(&chunk_pos);
         if let Some(chunk) = chunk {
-            let offset = ((pos - chunk.get_world_pos()) / GRID_SQUARE_SIZE);
+            let offset = (pos - chunk.get_world_pos()) / GRID_SQUARE_SIZE;
             let floor = offset.floor();
             let fract = offset.fract();
             let h00 = chunk.grid[Chunk::get_index(floor.x as i32, floor.z as i32)];
@@ -509,7 +494,7 @@ pub fn spawn_chunk(
         if !chunk.spawned {
             chunk.spawned = true;
             let mesh = chunk.get_mesh(&mut *meshes);
-            let mut entity = commands.spawn((
+            let _entity = commands.spawn((
                 Name::new(format!("chunk {} {}", chunk_pos.x, chunk_pos.y)),
                 Mesh3d(mesh),
                 MeshMaterial3d(mat.clone()),

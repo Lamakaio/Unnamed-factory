@@ -8,17 +8,14 @@ use bevy::{
 use fast_hilbert;
 use kdtree_collisions::{KdTree, KdValue};
 use noiz::{
-    Noise, Sampleable, SampleableFor,
+    Noise, SampleableFor,
     cell_noise::MixCellValuesForDomain,
-    cells::{OrthoGrid, SimplexGrid, Voronoi, WithGradient},
+    cells::{OrthoGrid, SimplexGrid, WithGradient},
     curves::Smoothstep,
-    math_noise::{NoiseCurve, Pow2, Pow4, PowF},
-    misc_noise::WithGradientOf,
+    math_noise::{Pow2, PowF},
     prelude::{
-        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, ManhattanLength, Masked,
-        MixCellGradients, Normed, NormedByDerivative, Octave, PeakDerivativeContribution,
-        PerCellPointDistances, Persistence, QuickGradients, SNormToUNorm, Scaled, SimplecticBlend,
-        WorleyLeastDistance,
+        BlendCellGradients, EuclideanLength, FractalLayers, LayeredNoise, Masked,
+        MixCellGradients, Normed, NormedByDerivative, Octave, PeakDerivativeContribution, Persistence, QuickGradients, SNormToUNorm, Scaled, SimplecticBlend,
     },
     rng::{NoiseRng, SNorm},
 };
@@ -26,7 +23,6 @@ use rand::SeedableRng;
 use rand_distr::Distribution;
 use std::{
     collections::BTreeMap,
-    default,
     f32::consts::PI,
     ops::{Index, IndexMut},
 };
