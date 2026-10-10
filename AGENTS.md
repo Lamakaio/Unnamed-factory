@@ -82,7 +82,7 @@ assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
 assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
 assets/shaders/map_material.wesl   terrain fragment shader (WESL): toon ground colours + cel lighting, per-pixel normals
-assets/shaders/water.wesl          water fragment shader (WESL): toon water (depth colour, shore foam, glints)
+assets/shaders/water.wesl          water fragment shader (WESL): toon water (depth bands, refracted swell and breakers, river flow and falls, glints)
 CREDITS.md              sources of every borrowed technique (papers, articles, shaders); keep it up to date
 ```
 
@@ -123,7 +123,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
 - **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`, gizmo
   config groups `AabbGizmos` / `RiverGizmos` toggled with run conditions. Setting
   `UF_SCREENSHOT=<png>` (and optionally `UF_SCREENSHOT_DELAY`, default 20 s) saves a
-  screenshot and exits. See §6.
+  screenshot and exits. `UF_LAB=<dir>` (lab mode) keeps the game running and takes
+  screenshots on request (`<dir>/shots.txt`). See §6.
 
 ### 3.2 World generation (`crates/worldgen`) and terrain (`map/`)
 - **`worldgen` crate** (workspace member, no Bevy ECS; depends on `bevy_math` and `rand`;
@@ -250,14 +251,22 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   vertex counts are logged at `debug` (`RUST_LOG=info,unnamed_factory=debug`): up to ~0.1 s /
   170k vertices per chunk on the eroded terrain.
 - **Water** (`map/water.rs`): one translucent, double-sided `WaterMaterial`
-  (`ExtendedMaterial<StandardMaterial, WaterShader>`, `water.wesl`: colour from the water
-  thickness behind each pixel via the depth prepass, shore foam, animated glints, cel
-  lighting) for a sea plane
+  (`ExtendedMaterial<StandardMaterial, WaterShader>`, `water.wesl`, see §3.4) for a sea plane
   at 0, lake surfaces (lake cells plus shore cells above the water), and river ribbons at the
   water line (width + 0.25 per side). Ribbons stop where the water reaches the sea (within 0.12: the
   sea plane covers the carved channel) or the lake the river flows into (overlapping
   translucent surfaces look darker). Ground under water is darkened at once (×0.6), so
   shallows don't read as dry sand. Water has `Pickable::IGNORE` and `NotShadowCaster`.
+  - **River profile** (`river_profile`): where the water line is steeper than
+    `CASCADE_SLOPE` (0.18), it runs in steps: pools (keeping `POOL_TILT` of the slope,
+    centred on the natural line, at most `CASCADE_STEP` × depth high) with a steep fall row
+    between them. Single-point pools (very steep streams) stay ramps (continuous rapids).
+    River vertices carry UV0 = (across, travel time of the water) and UV1 = (speed,
+    whitewater: rapids and foam below falls).
+  - **Sea field** (`map/sea.rs`, `Rgba16Float` per continent cell, binding 101–103): wave
+    travel time to the shore (Dijkstra with knight moves, speed ~ √depth, so crests refract
+    around headlands and bunch up in the shallows), depth, exposure to the prevailing wind
+    (`Continent::wind_angle`, binding 104) and shore distance.
 - River center-line debug gizmos live in `dev_tools.rs` (F4, off by default).
 - **Vegetation** (`map/vegetation.rs`): trees, bushes, rocks, dead wood and ground cover,
   placed deterministically per chunk on jittered grids (0.9 / 0.35 units) with per-biome
@@ -326,12 +335,23 @@ hot reload). The shader is WESL (`map_material.wesl`):
   pixel): grass (lush → dry in steps, lighter patches, dirt spots), alpine grass, forest
   floors, marsh (dark pools), sand, rock (two-tone strata on cliffs), snow, river/lake beds,
   sea floor (sand → teal, darker with depth). Edges are antialiased with `fwidth` (`crisp`).
-  - **Grass is animated** (no geometry): short blade strokes along the wind close up, and
-    wind gusts sweeping downwind as lighter bands, at every distance (`wind()`, `WIND`,
-    `GUST_SPEED`, `globals.time`). Alpine grass and marsh reeds use it too.
+  - **Grass carpet** (no geometry, `grass_carpet`): the view ray is marched (`GRASS_STEPS`)
+    through a thin layer (`BLADE_HEIGHT`) whose blades are peaks of value noise
+    (`BLADE_SCALE` per unit, taller in `clumps`), tips bent downwind; bases are shaded, tips
+    lighter, some tips are flowers in lush meadows. Fixed world size (perspective); it fades
+    to its average shade when blades are under ~2 px apart. Gusts sweep downwind as lighter
+    bands at every distance. The wind is the world's prevailing wind (`wind`, binding 108,
+    set with the textures). Forest floors get a weaker carpet.
   - **Snow** settles on flat ground (steep rock stays bare), with a ragged noisy edge and
     wind-blown drifts. **Desert** (`ground_c.r`): dune ripples, cracked clay flats, redder
     rock. **Marsh**: reed beds (wind strokes) around still teal pools with a muddy rim.
+- **Water** (`water.wesl`, `WaterShader`): crisp depth bands (`BANDS`; sea depth from the
+  sea field, else the depth prepass). Sea: swell crests on isolines of the travel time
+  (`WAVE_LENGTH`, `WAVE_PERIOD`), arriving obliquely with the wind, in segments; breakers
+  with lacy foam in the surf zone (`BREAK_DEPTH` scaled by exposure, `SURF_ZONE`); a swash
+  foam line pulsing at the shore; wind ripple lines offshore and on lakes. Rivers: streaks
+  scrolled along the travel time (stretched where fast, never distorting), whitewater
+  patches, and falls (steep faces from the screen-space normal) with falling streaks.
 - **Lighting** is custom (no PBR/specular): the sun (`lights.directional_lights[0]`, its
   brightness × `view.exposure`) gives a hard two-tone lit / cool-shadow step from the slope
   and `fetch_directional_shadow`, plus a highlight band and a rim light; fog etc. via
@@ -643,7 +663,10 @@ of the migration work.
 5. Commit in small steps (one migration step or one refactor per commit).
 6. **Verify visually without a human:** run
    `UF_SCREENSHOT=<scratch>/shot.png cargo run` (optionally `UF_SCREENSHOT_DELAY=<secs>`). The
-   game saves a screenshot and exits, and you can then view the PNG. `UF_CAMERA=x,z[,dx,dy,dz]`
+   game saves a screenshot and exits, and you can then view the PNG. For shader work, run
+   `UF_LAB=target/lab/shots cargo run` in the background once: write lines
+   `<name>.png x z [dx dy dz]` to `target/lab/shots/shots.txt`, wait for `done.txt`, view the
+   PNGs; shaders hot-reload between requests (Rust changes need a restart). `UF_CAMERA=x,z[,dx,dy,dz]`
    points the start view at world (x, z) from offset (dx, dy, dz). Also scan the log for
    `ERROR` / `panicked`. To exercise interactive paths (placement, sim screen), apply a
    *temporary* patch (e.g. a fake cursor at window centre, or trigger `StartPlacement` from

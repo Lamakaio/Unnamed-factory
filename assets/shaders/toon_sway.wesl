@@ -10,8 +10,8 @@ import bevy_pbr::render::{
     mesh_view_bindings::globals,
 };
 
-// Same wind as the terrain grass (map_material.wesl).
-const WIND: vec2<f32> = vec2(0.8, 0.6);
+// Prevailing wind direction (x, z), as for the terrain grass (map_material.wesl).
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var<uniform> wind: vec4<f32>;
 
 @vertex
 fn vertex(vertex_in: Vertex) -> VertexOutput {
@@ -29,11 +29,11 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     let scale = max(length(world_from_local[1].xyz), 1e-4);
     let metres = height / scale;
     let time = globals.time;
-    let along = dot(origin.xz, WIND);
+    let along = dot(origin.xz, wind.xy);
     let gust = 0.55 + 0.45 * sin(time * 0.36 - along * 0.12);
     let sway = (0.5 + 0.5 * sin(time * 2.4 + along * 0.9 + origin.x * 0.37)) * gust;
     let bend = height * 0.3 * min(metres, 1.5) * sway;
-    world = vec4(world.xyz + vec3(WIND.x, 0.0, WIND.y) * bend, 1.0);
+    world = vec4(world.xyz + vec3(wind.x, 0.0, wind.y) * bend, 1.0);
 
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);

@@ -15,6 +15,7 @@ mod mesh;
 mod rivers;
 mod spatial;
 mod vegetation;
+mod sea;
 mod water;
 
 use std::time::Instant;
@@ -171,6 +172,9 @@ struct TerrainTextures {
     gradient_map: Vec4,
     ground: [Handle<Image>; 3],
     ground_map: Vec4,
+    /// Sea wave field (see `sea`), used by the water material.
+    sea: Handle<Image>,
+    sea_map: Vec4,
 }
 
 /// Generated world data, before it becomes a [`Map`].
@@ -179,6 +183,7 @@ struct GeneratedWorld {
     heights: TerrainHeights,
     gradient: (Image, Vec4),
     ground: ([Image; 3], Vec4),
+    sea: (Image, Vec4),
 }
 
 /// The world being generated on the [`AsyncComputeTaskPool`].
@@ -196,6 +201,7 @@ fn start_generation(mut commands: Commands, seed: u32) {
         let heights = TerrainHeights::new(&continent);
         let gradient = heights.gradient_texture();
         let ground = ground::ground_textures(&continent);
+        let sea = sea::sea_texture(&continent);
         info!(
             "World generated in {:.1?} ({} rivers, {} lakes): {:?}",
             start.elapsed(),
@@ -208,6 +214,7 @@ fn start_generation(mut commands: Commands, seed: u32) {
             heights,
             gradient,
             ground,
+            sea,
         }
     });
     commands.insert_resource(Generation(task));
@@ -232,6 +239,8 @@ fn finish_generation(
             gradient_map: world.gradient.1,
             ground: world.ground.0.map(|image| images.add(image)),
             ground_map: world.ground.1,
+            sea: images.add(world.sea.0),
+            sea_map: world.sea.1,
         },
         heights: world.heights,
         chunks: default(),
@@ -256,6 +265,8 @@ fn bind_terrain_textures(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial
         extension.ground_b = Some(textures.ground[1].clone());
         extension.ground_c = Some(textures.ground[2].clone());
         extension.ground_map = textures.ground_map;
+        let wind = Vec2::from_angle(map.continent.wind_angle);
+        extension.wind = Vec4::new(wind.x, wind.y, 0., 0.);
     }
 }
 

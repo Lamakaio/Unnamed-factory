@@ -94,6 +94,9 @@ pub struct SwayToonShader {
     pub tint: LinearRgba,
     #[uniform(102)]
     pub snow: Vec4,
+    /// Prevailing wind direction (x, z).
+    #[uniform(103)]
+    pub wind: Vec4,
 }
 
 impl MaterialExtension for SwayToonShader {
@@ -132,6 +135,16 @@ pub fn toon(base: &StandardMaterial, snow: Vec4) -> ToonMaterial {
 pub struct WaterShader {
     #[uniform(100)]
     pub tint: LinearRgba,
+    /// Sea wave field over the continent (see `map::sea`).
+    #[texture(101)]
+    #[sampler(102)]
+    pub sea: Option<Handle<Image>>,
+    /// Mapping from world xz to `sea` coordinates: `uv = xz * zw + xy`. Zero until bound.
+    #[uniform(103)]
+    pub sea_map: Vec4,
+    /// Prevailing wind direction (x, z).
+    #[uniform(104)]
+    pub wind: Vec4,
 }
 
 impl MaterialExtension for WaterShader {
@@ -167,6 +180,9 @@ pub struct TerrainShader {
     /// Mapping from world xz to `ground_*` coordinates: `uv = xz * zw + xy`.
     #[uniform(106)]
     pub ground_map: Vec4,
+    /// Prevailing wind direction (x, z).
+    #[uniform(108)]
+    pub wind: Vec4,
 }
 
 impl MaterialExtension for TerrainShader {
@@ -287,6 +303,7 @@ impl AssetLoader for MapMaterialLoader {
             ground_b: None,
             ground_c: None,
             ground_map: Vec4::ZERO,
+            wind: Vec4::new(1., 0., 0., 0.),
         };
         Ok(MapMaterial {base, extension})
     }

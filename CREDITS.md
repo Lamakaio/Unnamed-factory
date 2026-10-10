@@ -53,6 +53,20 @@ someone else's work, add it here (and mention it in the code comment where it is
   Breath of the Wild ([video](https://www.youtube.com/watch?v=By7qcgaqGI4)).
 - **Wind over grass** (gust bands sweeping across meadows, swaying vegetation): the common
   stylized technique popularized by Breath of the Wild and Ghost of Tsushima.
+- **Grass carpet** (the view ray marched through a layer of noise-peak blades, tips displaced
+  by the wind, bases shaded by depth): after the Shadertoy grass shader MdsGzS
+  (shadertoy.com/view/MdsGzS), adapted to a parallax layer over the terrain.
+  (`map_material.wesl::grass_carpet`)
+- **Swell refraction** (crests along the travel time of waves to the shore, wave speed
+  ~ √depth): the eikonal / fast marching view of wave fronts, J. A. Sethian, *Level Set
+  Methods and Fast Marching Methods*, 1999, and the shallow-water dispersion of swell
+  (refraction, shoaling). (`map/sea.rs`, `water.wesl`)
+- **Step-pool streams** (steep rivers as pools between small falls): D. R. Montgomery and
+  J. M. Buffington, *Channel-reach morphology in mountain drainage basins*, GSA Bulletin
+  109, 1997. (`map/water.rs::river_profile`)
+- **Flow along travel time** (river patterns scrolled along the water's travel time, so they
+  stretch where fast without distorting): a variant of flow mapping, after Valve's water
+  flow (A. Vlachos, *Water Flow in Portal 2*, SIGGRAPH 2010).
 - **Toon water** (colour from the depth behind the surface, shoreline foam): Roystan's
   *Toon Water Shader* tutorial (roystan.net). (`water.wesl`)
 - **Inverse-size noise fading** (octaves fade below a pixel): standard procedural

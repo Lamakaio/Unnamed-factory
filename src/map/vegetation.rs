@@ -386,6 +386,8 @@ fn prepare_models(
     // Matches the terrain's snow (ground textures: from temperature 0.12 to 0.04).
     let snow_line = map.continent.settings.snow_line;
     let snow = Vec4::new(0.88 * snow_line - SNOW_FADE, 0.93 * snow_line, 0., 0.);
+    let wind = Vec2::from_angle(map.continent.wind_angle);
+    let wind = Vec4::new(wind.x, wind.y, 0., 0.);
     let Some(models) = models else {
         return;
     };
@@ -426,6 +428,7 @@ fn prepare_models(
                             extension: SwayToonShader {
                                 tint: LinearRgba::WHITE,
                                 snow,
+                                wind,
                             },
                         }))
                     } else {

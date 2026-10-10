@@ -52,13 +52,18 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Ground weights: (desert, -, -, -).
 @group(constants::MATERIAL_BIND_GROUP) @binding(107) var ground_c: texture_2d<f32>;
 
-// Wind direction (shared with toon_sway.wesl) and gust speed (world units per second).
-const WIND: vec2<f32> = vec2(0.8, 0.6);
+// Prevailing wind direction (x, z), as in toon_sway.wesl and water.wesl.
+@group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> wind: vec4<f32>;
+// Gust speed (world units per second).
 const GUST_SPEED: f32 = 3.0;
-// Grass tuft grid cell (world units): tufts have a fixed size, so they follow perspective.
-const TUFT_SIZE: f32 = 0.5;
-// Tufts fade out between these cell sizes on screen (pixels), before they get too small.
-const TUFT_FADE: vec2<f32> = vec2(4.0, 8.0);
+// Grass blades: per world unit, height of the grass layer (world units), ray march steps, and
+// the blade spacing on screen (pixels) over which they fade out far away.
+const BLADE_SCALE: f32 = 12.0;
+const BLADE_HEIGHT: f32 = 0.16;
+const GRASS_STEPS: i32 = 24;
+const BLADE_FADE: vec2<f32> = vec2(1.5, 3.0);
+// Clumps of taller grass per world unit.
+const CLUMP_SCALE: f32 = 1.6;
 
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
@@ -139,80 +144,93 @@ fn rock_color(p: vec3<f32>, n: vec3<f32>, footprint: f32) -> vec3<f32> {
     return mix(srgb(0.52, 0.49, 0.47), srgb(0.62, 0.59, 0.55), patches(pattern, 0.1));
 }
 
-// One layer of grass tufts on a grid of `cell` world units. Most cells hold a tuft of two blades
-// standing from a random point, drawn as tapered strokes pointing away from the camera (`away`,
-// so they read as standing up on screen) and leaning downwind (`lean`, relative to the blade
-// length), each tuft swaying with its own phase. Returns (coverage, position along the blade:
-// 0 at the base, 1 at the tip).
-fn tufts(
-    xz: vec2<f32>,
-    cell: f32,
-    away: vec2<f32>,
-    lean: vec2<f32>,
-    time: f32,
-    footprint: f32,
-) -> vec2<f32> {
-    let g = xz / cell;
-    let home = vec2<i32>(floor(g));
-    let pixel = footprint / cell;
-    let side = vec2(-away.y, away.x);
-    var best = vec2(0.0);
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let c = home + vec2(dx, dy);
-            if hash(c + vec2(9127, 3301)) > 0.75 {
-                continue;
-            }
-            let base = vec2<f32>(c) + vec2(hash(c), hash(c + vec2(4513, 77)));
-            let phase = hash(c + vec2(211, 6007)) * 6.2832;
-            let sway = 0.5 + 0.5 * sin(time * 2.2 + phase);
-            for (var k = 0; k < 2; k++) {
-                let r = hash(c + vec2(k * 1931 + 17, k * 733 + 5));
-                let size = 0.7 + 0.3 * r;
-                let spread = (f32(k) - 0.5) * 0.6 + (r - 0.5) * 0.3;
-                let blade = ((away + side * spread) + lean * sway) * size;
-                let q = g - base;
-                let t = saturate(dot(q, blade) / dot(blade, blade));
-                let d = length(q - blade * t);
-                let width = 0.11 * (1.0 - t);
-                let coverage = 1.0 - smoothstep(width - pixel * 0.5, width + pixel * 0.5, d);
-                if coverage > best.x {
-                    best = vec2(coverage, t);
-                }
-            }
-        }
+// Grass carpet: the blades are a height field (peaks of value noise) filling a thin layer
+// whose top is the terrain surface, and the view ray is marched down through it (parallax
+// mapping), so the grass has depth: blades hide each other, their bases are darker, and their
+// tips bend downwind (more than their bases). After the grass reference, Shadertoy MdsGzS (see
+// CREDITS.md). The blades have a fixed world size, so they follow perspective.
+//
+// Height of the blade field at `q` (blade units), 0 (ground) to 1 (blade tips): narrow peaks.
+// `clump` (0..1, see `clumps`) makes the blades taller and denser.
+fn blade_field(q: vec2<f32>, clump: f32) -> f32 {
+    let v = value_noise(q) * 0.5 + 0.5;
+    return pow(v, 2.2 - clump) * (0.8 + 0.5 * clump);
+}
+
+// Clumps of taller grass, a few blades across (world position).
+fn clumps(xz: vec2<f32>, footprint: f32) -> f32 {
+    return saturate(fbm(xz * CLUMP_SCALE, 2, footprint * CLUMP_SCALE) * 1.2 + 0.5);
+}
+
+// March the view ray `dir` through the grass layer from the surface point `p` (normal `n`).
+// Returns (height of the blade seen, 0 = ground to 1 = tip; blade coordinates seen).
+fn grass_shell(
+    p: vec3<f32>,
+    n: vec3<f32>,
+    dir: vec3<f32>,
+    bend: vec2<f32>,
+    clump: f32,
+) -> vec3<f32> {
+    let down = max(-dot(dir, n), 0.25);
+    let span = BLADE_HEIGHT / down;
+    var previous_h = 1.0;
+    var previous_gap = 1.0 - blade_field(p.xz * BLADE_SCALE + bend, clump);
+    var q = p.xz * BLADE_SCALE + bend;
+    if previous_gap <= 0.0 {
+        return vec3(1.0, q);
     }
-    return best;
+    for (var i = 1; i <= GRASS_STEPS; i++) {
+        let f = f32(i) / f32(GRASS_STEPS);
+        let h = 1.0 - f;
+        q = (p.xz + dir.xz * (span * f)) * BLADE_SCALE + bend * h * h;
+        let gap = h - blade_field(q, clump);
+        if gap <= 0.0 {
+            let k = previous_gap / (previous_gap - gap);
+            return vec3(mix(previous_h, h, k), q);
+        }
+        previous_gap = gap;
+        previous_h = h;
+    }
+    return vec3(0.0, q);
 }
 
-// Brightness of grass tufts: dark at the base, light at the tip (more so in gusts).
-fn tuft_shade(tuft: vec2<f32>, gust: f32) -> f32 {
-    return mix(1.0, mix(0.6, 1.18 + 0.12 * gust, tuft.y), tuft.x);
-}
-
-// Grass animation: blade tufts swaying in the wind, and gusts sweeping across meadows as
-// lighter bands where the grass bends further. Returns the brightness factor. `away` is the
-// ground direction away from the camera.
-fn wind(xz: vec2<f32>, away: vec2<f32>, footprint: f32, time: f32) -> f32 {
-    let along = dot(xz, WIND);
-    let across = dot(xz, vec2(-WIND.y, WIND.x));
+// Grass: the carpet, swaying in the wind, with gusts sweeping across meadows as lighter bands
+// where the grass bends further. Returns (brightness, flower amount, gust, blade tip amount).
+// `dir` is the view direction.
+fn grass_carpet(p: vec3<f32>, n: vec3<f32>, dir: vec3<f32>, footprint: f32, time: f32) -> vec4<f32> {
+    let xz = p.xz;
+    let along = dot(xz, wind.xy);
+    let across = dot(xz, vec2(-wind.y, wind.x));
     let gust_noise = fbm(
         vec2(along * 0.12 - time * GUST_SPEED * 0.12, across * 0.05),
         2,
         footprint * 0.12
     );
     let gust = smoothstep(0.05, 0.3, gust_noise);
+    let gust_light = 1.0 + 0.18 * gust;
 
-    // Tufts of a fixed world size (`TUFT_SIZE`), fading out far away once they are only a few
-    // pixels on screen (then only the gusts remain).
-    let pixels = TUFT_SIZE / max(footprint, 1e-5);
-    let visible = smoothstep(TUFT_FADE.x, TUFT_FADE.y, pixels);
-    var shade = 1.0;
-    if visible > 0.0 {
-        let lean = WIND * (0.15 + 0.5 * gust);
-        shade = mix(1.0, tuft_shade(tufts(xz, TUFT_SIZE, away, lean, time, footprint), gust), visible);
+    // Blades fade out far away, once they are only a couple of pixels apart, leaving the clumps
+    // (as their average shade).
+    let clump = clumps(xz, footprint);
+    let far_shade = 0.72 + 0.3 * clump;
+    let pixels = 1.0 / (BLADE_SCALE * max(footprint, 1e-5));
+    let visible = smoothstep(BLADE_FADE.x, BLADE_FADE.y, pixels);
+    if visible <= 0.0 {
+        return vec4(far_shade * gust_light, 0.0, gust, 0.4 + 0.4 * clump);
     }
-    return shade * (1.0 + 0.22 * gust);
+    let sway = 0.25 * sin(time * 2.3 + along * 2.0 + 0.7 * sin(across * 1.3));
+    let bend = wind.xy * (0.3 + 1.1 * gust + sway);
+    let seen = grass_shell(p, n, dir, bend, clump);
+    let h = seen.x;
+    let blade = vec2<i32>(floor(seen.yz));
+    // Bases in shade, tips lit, and a little variation between blades.
+    var shade = mix(0.42, 1.08, pow(h, 0.8)) * (0.92 + 0.16 * hash(blade));
+    shade = mix(far_shade, shade, visible) * gust_light;
+    // Flowers: on some blade tips, in scattered clumps.
+    let clumps = patches(fbm(xz * 0.35 + vec2(31.0, 5.0), 2, footprint * 0.35), 0.5);
+    let flower = clumps * step(0.82, hash(blade + vec2(71, 13))) * smoothstep(0.7, 0.85, h)
+        * visible;
+    return vec4(shade, flower, gust, mix(0.4 + 0.4 * clump, h, visible));
 }
 
 fn ground(
@@ -222,7 +240,7 @@ fn ground(
     b: vec4<f32>,
     c: vec4<f32>,
     wet: f32,
-    away: vec2<f32>,
+    dir: vec3<f32>,
     footprint: f32,
     time: f32,
 ) -> vec3<f32> {
@@ -231,7 +249,8 @@ fn ground(
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
     let large = fbm(xz * 0.07 + vec2(7.1, 3.3), 3, footprint * 0.07);
     let blotches = fbm(xz * 0.18 + vec2(2.0, 8.0), 3, footprint * 0.18);
-    let wind_shade = wind(xz, away, footprint, time);
+    let carpet = grass_carpet(p, n, dir, footprint, time);
+    let wind_shade = carpet.x;
 
     // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches, swept
     // by the wind.
@@ -239,7 +258,12 @@ fn ground(
     let dry_step = floor(dry * 3.0 + 0.5) / 3.0;
     var grass = mix(srgb(0.40, 0.66, 0.24), srgb(0.80, 0.72, 0.38), dry_step);
     grass = mix(grass, grass * vec3(1.1, 1.1, 0.9), patches(blotches, 0.25));
-    var color = grass * wind_shade;
+    // Blade tips catch a warmer light; flowers in lush meadows.
+    let tips = mix(grass, grass * vec3(1.12, 1.1, 0.8), carpet.w * carpet.w);
+    var color = tips * wind_shade;
+    let flower_color = mix(srgb(0.95, 0.45, 0.70), srgb(0.98, 0.92, 0.55),
+        patches(fbm(xz * 0.05 + vec2(3.0, 3.0), 2, footprint * 0.05), 0.0));
+    color = mix(color, flower_color, carpet.y * (1.0 - dry_step));
     let dirt = patches(fbm(xz * 0.5 + vec2(3.3, 1.1), 3, footprint * 0.5), 0.72 - 0.1 * dry);
     color = mix(color, srgb(0.66, 0.52, 0.34), dirt);
 
@@ -247,17 +271,18 @@ fn ground(
     let alpine = mix(srgb(0.60, 0.68, 0.42), srgb(0.66, 0.66, 0.50), patches(blotches, 0.1));
     color = mix(color, alpine * wind_shade, border(b.a, medium));
 
-    // Forest floors.
+    // Forest floors (a sparser, shaded carpet).
+    let floor_shade = mix(1.0, wind_shade, 0.6);
     let deciduous = mix(srgb(0.27, 0.48, 0.18), srgb(0.33, 0.44, 0.17), patches(blotches, 0.0));
-    color = mix(color, deciduous, border(b.g, medium));
+    color = mix(color, deciduous * floor_shade, border(b.g, medium));
     let conifer = mix(srgb(0.21, 0.38, 0.22), srgb(0.30, 0.34, 0.20), patches(blotches, 0.1));
-    color = mix(color, conifer, border(b.b, medium));
+    color = mix(color, conifer * floor_shade, border(b.b, medium));
 
     // Marsh: reed beds (dark strokes) around still pools with a muddy rim.
     let pool_noise = fbm(xz * 0.45 + vec2(5.0, 9.0), 3, footprint * 0.45);
     let pools = patches(pool_noise, 0.15);
     let mud = patches(pool_noise, 0.05) - pools;
-    let reed_stroke = value_noise(vec2(dot(xz, WIND) * 5.0, dot(xz, vec2(-WIND.y, WIND.x)) * 22.0));
+    let reed_stroke = value_noise(vec2(dot(xz, wind.xy) * 5.0, dot(xz, vec2(-wind.y, wind.x)) * 22.0));
     let reeds = mix(srgb(0.42, 0.52, 0.26), srgb(0.30, 0.40, 0.20), patches(reed_stroke, 0.3))
         * wind_shade;
     let pool_water = mix(srgb(0.16, 0.30, 0.34), srgb(0.30, 0.46, 0.48),
@@ -271,7 +296,7 @@ fn ground(
     color = mix(color, sand, border(a.r, medium));
 
     // Desert: warm sand in dune ripples, cracked clay flats.
-    let along = dot(xz, WIND);
+    let along = dot(xz, wind.xy);
     let ripples = sin(along * 1.4 + fbm(xz * 0.15, 3, footprint * 0.15) * 4.0);
     var desert = mix(srgb(0.90, 0.72, 0.47), srgb(0.80, 0.60, 0.38), patches(ripples, 0.55));
     let flats = patches(fbm(xz * 0.1 + vec2(13.0, 4.0), 3, footprint * 0.1), 0.3);
@@ -293,7 +318,7 @@ fn ground(
     let snow_noise = fbm(xz * 0.25 + vec2(3.0, 17.0), 3, footprint * 0.25);
     let snow_value = a.b * 1.25 + 0.3 * snow_noise + 0.6 * (n.y - 0.85)
         - smoothstep(0.35, 0.6, steep);
-    let drifts = patches(fbm(vec2(along * 0.6, dot(xz, vec2(-WIND.y, WIND.x)) * 0.2), 3,
+    let drifts = patches(fbm(vec2(along * 0.6, dot(xz, vec2(-wind.y, wind.x)) * 0.2), 3,
         footprint * 0.6), 0.25);
     let snow_color = mix(srgb(0.97, 0.98, 1.0), srgb(0.84, 0.89, 0.97), drifts);
     color = mix(color, snow_color, crisp(0.5, snow_value, fwidth(snow_value)));
@@ -366,8 +391,8 @@ fn fragment(
 @if(VERTEX_COLORS)
     wet = in.color.r;
 
-    let away = normalize(p.xz - view.world_position.xz + vec2(1e-4, 0.0));
-    let albedo = ground(p, n, a, b, c, wet, away, footprint, globals.time) * tint.rgb;
+    let dir = normalize(p - view.world_position.xyz);
+    let albedo = ground(p, n, a, b, c, wet, dir, footprint, globals.time) * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).
     let sun = lights.directional_lights[0];

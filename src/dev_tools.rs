@@ -7,6 +7,11 @@
 //!
 //! Setting `UF_SCREENSHOT=<path.png>` saves a screenshot after `UF_SCREENSHOT_DELAY` seconds
 //! (default 20) and exits. Agents use this to check visuals without a human.
+//!
+//! Lab mode, `UF_LAB=<dir>`: the game keeps running (shaders hot-reload) and takes screenshots
+//! on request. Each line of `<dir>/shots.txt` is `<file.png> x z [dx dy dz]` (camera target and
+//! offset, as `UF_CAMERA`); the file is removed once read, and `<dir>/done.txt` is written once
+//! the screenshots are saved.
 
 use bevy::{
     camera::primitives::Aabb,
@@ -17,6 +22,8 @@ use bevy::{
     remote::{RemotePlugin, http::RemoteHttpPlugin},
     render::view::screenshot::{Screenshot, save_to_disk},
 };
+
+use bevy::camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamera;
 
 use crate::{
     AppState,
@@ -49,6 +56,13 @@ impl Plugin for DevToolsPlugin {
                     .run_if(in_state(AppState::InGame)),
             ),
         );
+        if let Ok(dir) = std::env::var("UF_LAB") {
+            app.insert_resource(Lab {
+                dir: dir.into(),
+                ..default()
+            })
+            .add_systems(Update, lab_shots.run_if(in_state(AppState::InGame)));
+        }
         if let Ok(path) = std::env::var("UF_SCREENSHOT") {
             let delay = std::env::var("UF_SCREENSHOT_DELAY")
                 .ok()
@@ -192,5 +206,72 @@ fn auto_screenshot(
             .observe(save_to_disk(request.path.clone()));
     } else if *taken && elapsed >= request.delay + 1.0 {
         exit.write(AppExit::Success);
+    }
+}
+
+/// Lab mode state (`UF_LAB`).
+#[derive(Resource, Default)]
+struct Lab {
+    dir: std::path::PathBuf,
+    queue: std::collections::VecDeque<(String, Vec3, Vec3)>,
+    /// Frames left before the current shot (letting chunks remesh and TAA settle).
+    wait: u32,
+    current: Option<String>,
+    since_poll: f32,
+}
+
+/// Frames rendered at a new camera position before its screenshot.
+const LAB_SETTLE_FRAMES: u32 = 60;
+
+fn lab_shots(
+    mut commands: Commands,
+    mut lab: ResMut<Lab>,
+    mut camera: Single<&mut Transform, With<PanOrbitCamera>>,
+    map: Res<Map>,
+    time: Res<Time>,
+) {
+    lab.since_poll += time.delta_secs();
+    if lab.current.is_none() && lab.queue.is_empty() && lab.since_poll > 0.25 {
+        lab.since_poll = 0.;
+        let request = lab.dir.join("shots.txt");
+        if let Ok(text) = std::fs::read_to_string(&request) {
+            let _ = std::fs::remove_file(&request);
+            let _ = std::fs::remove_file(lab.dir.join("done.txt"));
+            for line in text.lines() {
+                let mut words = line.split_whitespace();
+                let Some(file) = words.next() else {
+                    continue;
+                };
+                let values: Vec<f32> = words.filter_map(|w| w.parse().ok()).collect();
+                let target = Vec3::new(values[0], 0., values[1]);
+                let target = target.with_y(map.get_height(target));
+                let offset = match values[..] {
+                    [_, _, dx, dy, dz] => Vec3::new(dx, dy, dz),
+                    _ => Vec3::new(0., 30., 40.),
+                };
+                lab.queue.push_back((file.to_owned(), target, offset));
+            }
+        }
+    }
+    if lab.current.is_none() {
+        if let Some((file, target, offset)) = lab.queue.pop_front() {
+            **camera = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+            lab.current = Some(file);
+            lab.wait = LAB_SETTLE_FRAMES;
+        }
+        return;
+    }
+    if lab.wait > 0 {
+        lab.wait -= 1;
+        return;
+    }
+    let file = lab.current.take().unwrap();
+    let path = lab.dir.join(&file);
+    info!("Lab screenshot {} ({:.0} fps)", path.display(), 1. / time.delta_secs());
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
+    if lab.queue.is_empty() {
+        let _ = std::fs::write(lab.dir.join("done.txt"), &file);
     }
 }
