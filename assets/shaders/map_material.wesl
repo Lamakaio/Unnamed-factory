@@ -58,7 +58,11 @@ const GUST_SPEED: f32 = 3.0;
 // Grass tuft grid: cell size on screen (pixels), and its smallest / largest size (world units).
 const TUFT_PIXELS: f32 = 26.0;
 const TUFT_MIN: f32 = 0.08;
-const TUFT_MAX: f32 = 2.0;
+const TUFT_MAX: f32 = 2.5;
+// Past `TUFT_FAR` (world units), tufts grow slower than the pixel size (exponent
+// `TUFT_GROWTH`), so they get smaller on screen with distance instead of fading out early.
+const TUFT_FAR: f32 = 1.0;
+const TUFT_GROWTH: f32 = 0.6;
 
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
@@ -205,8 +209,10 @@ fn wind(xz: vec2<f32>, away: vec2<f32>, footprint: f32, time: f32) -> f32 {
 
     // Tufts stay about `TUFT_PIXELS` per grid cell on screen: between two grid scales (a factor
     // two apart), never smaller than `TUFT_MIN` (they grow when zooming in), and fading out
-    // past `TUFT_MAX` (far away, only the gusts remain).
-    let wanted = max(footprint * TUFT_PIXELS, TUFT_MIN);
+    // past `TUFT_MAX` (far away, only the gusts remain). Beyond `TUFT_FAR` they shrink on
+    // screen.
+    let linear = max(footprint * TUFT_PIXELS, TUFT_MIN);
+    let wanted = select(linear, TUFT_FAR * pow(linear / TUFT_FAR, TUFT_GROWTH), linear > TUFT_FAR);
     let level = log2(wanted / TUFT_MIN);
     let blend = fract(level);
     let cell = TUFT_MIN * exp2(floor(level));
