@@ -167,6 +167,14 @@ impl SurfaceBuilder {
         }
     }
 
+    /// A river vertex (position, flow velocity, whitewater); returns its index.
+    fn vertex(&mut self, position: Vec3, flow: Vec2, foam: f32) -> u32 {
+        self.positions.push(position.to_array());
+        self.flow.push(flow.to_array());
+        self.flow_b.push([foam, 0.]);
+        self.positions.len() as u32 - 1
+    }
+
     fn build(self) -> Mesh {
         let normals = vec![[0., 1., 0.]; self.positions.len()];
         let mut mesh = Mesh::new(
@@ -469,21 +477,6 @@ fn inside_ribbon(river: &River, p: Vec2) -> f32 {
         .fold(f32::MIN, f32::max)
 }
 
-/// Where the segment `a` -> `b` enters a river's ribbon (`a` outside, `b` inside), by
-/// bisection.
-fn ribbon_entry(river: &River, a: Vec3, b: Vec3) -> Vec3 {
-    let (mut lo, mut hi) = (0f32, 1f32);
-    for _ in 0..12 {
-        let mid = (lo + hi) / 2.;
-        if inside_ribbon(river, a.lerp(b, mid).xz()) > 0. {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-    a.lerp(b, hi)
-}
-
 /// A ribbon along each river, at its water line. Tributaries join their parent along its
 /// ribbon edge (clipped there, so the two surfaces neither overlap nor leave a gap), and the
 /// parent gets whitewater just below the confluence.
@@ -545,24 +538,31 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             RiverEnd::Lake(lake) => (continent.lakes[lake].level, 1e-3),
             RiverEnd::Junction(_) => (f32::MIN, 0.),
         };
+        let count = rows
+            .iter()
+            .position(|row| {
+                let center = row.center();
+                let ground = continent.surface.bilinear(center.xz());
+                center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level
+            })
+            .unwrap_or(rows.len());
+        let mut rows = rows[..count].to_vec();
         let parent = match river.end {
-            RiverEnd::Junction(parent) => rivers.get(parent),
+            RiverEnd::Junction(parent) => rivers.get(parent).zip(all_rows.get(parent)),
             _ => None,
         };
-        let inside = |p: Vec3| parent.is_some_and(|parent| inside_ribbon(parent, p.xz()) > 0.);
+        let Some((parent_river, parent_rows)) = parent else {
+            for pair in rows.windows(2) {
+                builder.ribbon_quad(&pair[0], &pair[1]);
+            }
+            continue;
+        };
         // Near the confluence, the tributary turns towards its parent's flow.
-        let parent_rows = match river.end {
-            RiverEnd::Junction(parent) => all_rows.get(parent),
-            _ => None,
-        };
         let turn_reach = CONFLUENCE_TURN_REACH.0
             + CONFLUENCE_TURN_REACH.1 * river.points.last().map_or(0., |p| p.width);
-        let turn = |row: &mut Row| {
-            let (Some(parent), Some(parent_rows)) = (parent, parent_rows) else {
-                return;
-            };
+        for row in &mut rows {
             for (vertex, flow) in [(row.left, &mut row.left_flow), (row.right, &mut row.right_flow)] {
-                let depth = inside_ribbon(parent, vertex.xz());
+                let depth = inside_ribbon(parent_river, vertex.xz());
                 if depth < -2. * turn_reach {
                     continue;
                 }
@@ -577,39 +577,131 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
                     *flow = steer(*flow, nearest.flow(), amount);
                 }
             }
-        };
-        // Each side stops where it enters the parent's ribbon; the other one goes on until it
-        // does too.
-        let (mut left_end, mut right_end): (Option<Vec3>, Option<Vec3>) = (None, None);
-        let Some(first) = rows.first() else {
-            continue;
-        };
-        let mut previous = first.clone();
-        turn(&mut previous);
-        for row in &rows[1..] {
-            let center = (row.left + row.right) / 2.;
-            let ground = continent.surface.bilinear(center.xz());
-            if center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level {
-                break;
-            }
-            let mut next = row.clone();
-            if let Some(parent) = parent {
-                if left_end.is_none() && inside(next.left) {
-                    left_end = Some(ribbon_entry(parent, previous.left, next.left));
+        }
+        // The tributary ends on its parent's actual mesh edge, sharing its vertices.
+        let edge = near_edge(parent_rows, &rows);
+        match junction_cap(&rows, &edge) {
+            Some(cap) => {
+                for pair in rows[..cap.full_rows].windows(2) {
+                    builder.ribbon_quad(&pair[0], &pair[1]);
                 }
-                if right_end.is_none() && inside(next.right) {
-                    right_end = Some(ribbon_entry(parent, previous.right, next.right));
+                // A fan from the cap's middle over its outline.
+                let n = cap.outline.len() as f32;
+                let middle = cap.outline.iter().map(|v| v.0).sum::<Vec3>() / n;
+                let middle_flow = cap.outline.iter().map(|v| v.1).sum::<Vec2>() / n;
+                let middle_foam = cap.outline.iter().map(|v| v.2).sum::<f32>() / n;
+                let center = builder.vertex(middle, middle_flow, middle_foam);
+                let outline: Vec<u32> = cap
+                    .outline
+                    .iter()
+                    .map(|&(position, flow, foam)| builder.vertex(position, flow, foam))
+                    .collect();
+                // Closed: the last triangle joins the right and left ends of the last full row.
+                for (k, &vertex) in outline.iter().enumerate() {
+                    let next = outline[(k + 1) % outline.len()];
+                    builder.indices.extend([center, vertex, next]);
                 }
             }
-            next.left = left_end.unwrap_or(next.left);
-            next.right = right_end.unwrap_or(next.right);
-            turn(&mut next);
-            builder.ribbon_quad(&previous, &next);
-            if left_end.is_some() && right_end.is_some() {
-                break;
+            None => {
+                for pair in rows.windows(2) {
+                    builder.ribbon_quad(&pair[0], &pair[1]);
+                }
             }
-            previous = next;
         }
     }
     builder.build()
+}
+
+/// A vertex of a ribbon edge: position, flow velocity, whitewater.
+type EdgeVertex = (Vec3, Vec2, f32);
+
+/// The edge of the parent ribbon on the tributary's side.
+fn near_edge(parent_rows: &[Row], tributary: &[Row]) -> Vec<EdgeVertex> {
+    let (Some(end), Some(approach)) = (
+        tributary.last(),
+        tributary.get(tributary.len().saturating_sub(6)),
+    ) else {
+        return Vec::new();
+    };
+    let approach = approach.center().xz();
+    let nearest = parent_rows.iter().min_by(|a, b| {
+        a.center()
+            .xz()
+            .distance_squared(end.center().xz())
+            .total_cmp(&b.center().xz().distance_squared(end.center().xz()))
+    });
+    let left = nearest.is_none_or(|row| {
+        row.left.xz().distance(approach) < row.right.xz().distance(approach)
+    });
+    parent_rows
+        .iter()
+        .map(|row| {
+            if left {
+                (row.left, row.left_flow, row.foam)
+            } else {
+                (row.right, row.right_flow, row.foam)
+            }
+        })
+        .collect()
+}
+
+/// Where the segment `a` -> `b` crosses `c` -> `d` (in xz): the parameters along each.
+fn crossing(a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> Option<(f32, f32)> {
+    let (ab, cd, ac) = ((b - a).xz(), (d - c).xz(), (c - a).xz());
+    let denominator = ab.perp_dot(cd);
+    if denominator.abs() < 1e-9 {
+        return None;
+    }
+    let t = ac.perp_dot(cd) / denominator;
+    let u = ac.perp_dot(ab) / denominator;
+    ((0.0..=1.).contains(&t) && (0.0..=1.).contains(&u)).then_some((t, u))
+}
+
+/// The end of a tributary on its parent's edge: the rows drawn as quads, then an outline
+/// (from the last full row's left vertex along the tributary's left edge to the parent's edge,
+/// along the parent's edge, and back along the right edge) to fill.
+struct JunctionCap {
+    full_rows: usize,
+    outline: Vec<EdgeVertex>,
+}
+
+fn junction_cap(rows: &[Row], edge: &[EdgeVertex]) -> Option<JunctionCap> {
+    // First crossing of each tributary edge with the parent's edge: (row, point, position
+    // along the parent's edge).
+    let hit = |side: fn(&Row) -> (Vec3, Vec2)| -> Option<(usize, EdgeVertex, f32)> {
+        for k in 1..rows.len() {
+            let (a, b) = (side(&rows[k - 1]).0, side(&rows[k]).0);
+            for j in 1..edge.len() {
+                if let Some((_, u)) = crossing(a, b, edge[j - 1].0, edge[j].0) {
+                    let (c, d) = (edge[j - 1], edge[j]);
+                    let vertex = (c.0.lerp(d.0, u), c.1.lerp(d.1, u), c.2 + (d.2 - c.2) * u);
+                    return Some((k, vertex, (j - 1) as f32 + u));
+                }
+            }
+        }
+        None
+    };
+    let (left_row, left_hit, left_at) = hit(|row| (row.left, row.left_flow))?;
+    let (right_row, right_hit, right_at) = hit(|row| (row.right, row.right_flow))?;
+    let full_rows = left_row.min(right_row);
+    let mut outline = Vec::new();
+    for row in &rows[full_rows - 1..left_row] {
+        outline.push((row.left, row.left_flow, row.foam));
+    }
+    outline.push(left_hit);
+    // Parent edge vertices strictly between the two crossings.
+    if left_at < right_at {
+        for vertex in &edge[left_at.floor() as usize + 1..=right_at.floor() as usize] {
+            outline.push(*vertex);
+        }
+    } else {
+        for vertex in edge[right_at.floor() as usize + 1..=left_at.floor() as usize].iter().rev() {
+            outline.push(*vertex);
+        }
+    }
+    outline.push(right_hit);
+    for row in rows[full_rows - 1..right_row].iter().rev() {
+        outline.push((row.right, row.right_flow, row.foam));
+    }
+    Some(JunctionCap { full_rows, outline })
 }

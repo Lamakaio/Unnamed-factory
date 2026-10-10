@@ -264,8 +264,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     a random `POOL_TILT` share of the slope, centred on the natural line, about
     `CASCADE_STEP` × depth high) with a fall row between them (slant `FALL_RUN`), and
     sloping chutes (`CHUTE_SHARE`). Single-point pools (very steep streams) stay ramps
-    (continuous rapids). Tributary ribbons are clipped where each edge enters the parent's
-    ribbon (`ribbon_entry`), so the surfaces share an edge; the parent gets whitewater below
+    (continuous rapids). Tributary ribbons end on the parent's actual mesh edge: each
+    tributary edge is cut where it crosses the parent's near edge, and the end is filled by a
+    fan over an outline that runs along the parent's edge vertices (`junction_cap`), so the
+    surfaces share vertices (positions, heights, flow); the parent gets whitewater below
     each confluence (`CONFLUENCE_FOAM`). Tributaries join `JOIN_LEAD` points downstream of
     the nearest parent point (`rivers.rs`), so they meet at a downstream-leaning angle.
     River vertices carry UV0 = flow velocity (world x, z; per side, so it can vary across)

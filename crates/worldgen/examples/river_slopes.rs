@@ -46,6 +46,10 @@ fn main() {
         }
     }
     println!("bends tighter than 1 width: {tight}, tightest {worst:.2} widths");
+    for river in continent.rivers.iter().filter(|r| matches!(r.end, worldgen::RiverEnd::Junction(_))).take(12) {
+        let end = river.points.last().unwrap();
+        println!("  junction at {:.1} {:.1} (width {:.2})", end.position.x, end.position.z, end.width);
+    }
     let mut slopes = Vec::new();
     let mut steep = Vec::new();
     for (r, river) in continent.rivers.iter().enumerate() {
