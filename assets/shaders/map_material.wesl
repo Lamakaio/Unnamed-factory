@@ -8,8 +8,8 @@
 //   weights come from two textures baked per continent cell (`map::ground`), warped and
 //   sharpened with noise so borders are crisp and irregular; rock on steep slopes and snow
 //   sliding off them are decided per pixel. Mesh vertex color red is the river/lake wetness.
-// - Grass is animated: tufts of blades (drawn standing up on screen, a roughly constant size
-//   in pixels) swaying and leaning downwind, and gusts sweeping across meadows as lighter bands
+// - Grass is animated: tufts of blades (drawn standing up on screen, a fixed world size)
+//   swaying and leaning downwind, and gusts sweeping across meadows as lighter bands
 //   where the grass bends further.
 // - Lighting: the sun is a hard-edged two-tone (lit / cool shadow, from the slope and the
 //   shadow maps) with a small highlight band and a rim light. No specular.
@@ -55,14 +55,10 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Wind direction (shared with toon_sway.wesl) and gust speed (world units per second).
 const WIND: vec2<f32> = vec2(0.8, 0.6);
 const GUST_SPEED: f32 = 3.0;
-// Grass tuft grid: cell size on screen (pixels), and its smallest / largest size (world units).
-const TUFT_PIXELS: f32 = 26.0;
-const TUFT_MIN: f32 = 0.08;
-const TUFT_MAX: f32 = 2.5;
-// Past `TUFT_FAR` (world units), tufts grow slower than the pixel size (exponent
-// `TUFT_GROWTH`), so they get smaller on screen with distance instead of fading out early.
-const TUFT_FAR: f32 = 1.0;
-const TUFT_GROWTH: f32 = 0.6;
+// Grass tuft grid cell (world units): tufts have a fixed size, so they follow perspective.
+const TUFT_SIZE: f32 = 0.5;
+// Tufts fade out between these cell sizes on screen (pixels), before they get too small.
+const TUFT_FADE: vec2<f32> = vec2(4.0, 8.0);
 
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
@@ -207,22 +203,15 @@ fn wind(xz: vec2<f32>, away: vec2<f32>, footprint: f32, time: f32) -> f32 {
     );
     let gust = smoothstep(0.05, 0.3, gust_noise);
 
-    // Tufts stay about `TUFT_PIXELS` per grid cell on screen: between two grid scales (a factor
-    // two apart), never smaller than `TUFT_MIN` (they grow when zooming in), and fading out
-    // past `TUFT_MAX` (far away, only the gusts remain). Beyond `TUFT_FAR` they shrink on
-    // screen.
-    let linear = max(footprint * TUFT_PIXELS, TUFT_MIN);
-    let wanted = select(linear, TUFT_FAR * pow(linear / TUFT_FAR, TUFT_GROWTH), linear > TUFT_FAR);
-    let level = log2(wanted / TUFT_MIN);
-    let blend = fract(level);
-    let cell = TUFT_MIN * exp2(floor(level));
-    let lean = WIND * (0.15 + 0.5 * gust);
-    var shade = tuft_shade(tufts(xz, cell, away, lean, time, footprint), gust);
-    if blend > 0.01 {
-        let coarse = tuft_shade(tufts(xz, cell * 2.0, away, lean, time, footprint), gust);
-        shade = mix(shade, coarse, blend);
+    // Tufts of a fixed world size (`TUFT_SIZE`), fading out far away once they are only a few
+    // pixels on screen (then only the gusts remain).
+    let pixels = TUFT_SIZE / max(footprint, 1e-5);
+    let visible = smoothstep(TUFT_FADE.x, TUFT_FADE.y, pixels);
+    var shade = 1.0;
+    if visible > 0.0 {
+        let lean = WIND * (0.15 + 0.5 * gust);
+        shade = mix(1.0, tuft_shade(tufts(xz, TUFT_SIZE, away, lean, time, footprint), gust), visible);
     }
-    shade = mix(shade, 1.0, smoothstep(TUFT_MAX, TUFT_MAX * 2.0, wanted));
     return shade * (1.0 + 0.22 * gust);
 }
 
