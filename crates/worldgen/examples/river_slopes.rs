@@ -50,6 +50,10 @@ fn main() {
         let end = river.points.last().unwrap();
         println!("  junction at {:.1} {:.1} (width {:.2})", end.position.x, end.position.z, end.width);
     }
+    for (river, mouth) in continent.mouths.iter().take(12) {
+        let end = continent.rivers[*river].points.last().unwrap();
+        println!("  mouth {mouth:?} at {:.1} {:.1} (width {:.2})", end.position.x, end.position.z, end.width);
+    }
     let mut slopes = Vec::new();
     let mut steep = Vec::new();
     for (r, river) in continent.rivers.iter().enumerate() {

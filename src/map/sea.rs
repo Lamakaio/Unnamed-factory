@@ -33,6 +33,10 @@ const MIN_SPEED: f32 = 0.2;
 const MAX_TRAVEL: f32 = 60.;
 const MAX_DEPTH: f32 = 30.;
 const MAX_DISTANCE: f32 = 60.;
+/// Openness (share of sea cells within `OPEN_RADIUS`) from which swell reaches a cell: a
+/// straight coast is about 0.5 open, a narrow channel much less.
+const OPEN_RADIUS: usize = 6;
+const OPEN_WATER: (f32, f32) = (0.3, 0.55);
 
 /// The sea field texture and the mapping from world xz to its coordinates
 /// (`uv = xz * zw + xy`).
@@ -101,6 +105,13 @@ pub fn sea_texture(continent: &Continent) -> (Image, Vec4) {
             let facing = heading.normalize_or_zero().dot(wind);
             exposure[z * size + x] = 0.2 + 0.8 * smoothstep(-0.3, 0.7, facing);
         }
+    }
+    // Swell hardly gets into narrow channels (river mouths): exposure scales with how much
+    // of the surroundings is open water.
+    let open: Vec<f32> = sea.iter().map(|&s| if s { 1. } else { 0. }).collect();
+    let open = blur(size, &open, OPEN_RADIUS);
+    for (e, &o) in exposure.iter_mut().zip(&open) {
+        *e *= smoothstep(OPEN_WATER.0, OPEN_WATER.1, o);
     }
     let exposure = blur(size, &blur(size, &exposure, 3), 3);
 

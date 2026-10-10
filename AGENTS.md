@@ -285,7 +285,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   - **Sea field** (`map/sea.rs`, `Rgba16Float` per continent cell, binding 101–103): wave
     travel time to the shore (Dijkstra with knight moves, speed ~ √depth, so crests refract
     around headlands and bunch up in the shallows), depth, exposure to the prevailing wind
-    (`Continent::wind_angle`, binding 104) and shore distance.
+    (`Continent::wind_angle`, binding 104) and shore distance. Exposure is scaled down where
+    little of the surroundings is open water (`OPEN_WATER`), so swell stays out of narrow
+    channels.
+  - **River ends**: rivers fade out into the sea or lake they flow into (`RIVER_FADE`, UV1.y
+    = opacity), extended straight past their last point if needed; fading quads are split at
+    the center line so their sides fade too (no hard edge without banks).
 - River center-line debug gizmos live in `dev_tools.rs` (F4, off by default).
 - **Vegetation** (`map/vegetation.rs`): trees, bushes, rocks, dead wood and ground cover,
   placed deterministically per chunk on jittered grids (0.9 / 0.35 units) with per-biome
@@ -356,7 +361,7 @@ hot reload). The shader is WESL (`map_material.wesl`):
   sea floor (sand → teal, darker with depth). Edges are antialiased with `fwidth` (`crisp`).
   - **Grass carpet** (no geometry, `grass_carpet`): the view ray is marched (`GRASS_STEPS`)
     through a thin layer (`BLADE_HEIGHT`) whose blades are peaks of value noise
-    (`BLADE_SCALE` per unit, taller in `clumps`), tips bent downwind; bases are shaded, tips
+    (`BLADE_SCALE` per unit, narrow peaks, taller in `clumps`), tips bent downwind; bases are shaded, tips
     lighter, some tips are flowers in lush meadows. Fixed world size (perspective); it fades
     to its average shade when blades are under ~2 px apart. Gusts sweep downwind as lighter
     bands at every distance. The wind is the world's prevailing wind (`wind`, binding 108,

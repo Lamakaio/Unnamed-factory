@@ -58,9 +58,9 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 const GUST_SPEED: f32 = 3.0;
 // Grass blades: per world unit, height of the grass layer (world units), ray march steps, and
 // the blade spacing on screen (pixels) over which they fade out far away.
-const BLADE_SCALE: f32 = 12.0;
-const BLADE_HEIGHT: f32 = 0.16;
-const GRASS_STEPS: i32 = 24;
+const BLADE_SCALE: f32 = 50.0;
+const BLADE_HEIGHT: f32 = 0.11;
+const GRASS_STEPS: i32 = 32;
 const BLADE_FADE: vec2<f32> = vec2(1.5, 3.0);
 // Clumps of taller grass per world unit.
 const CLUMP_SCALE: f32 = 1.6;
@@ -154,7 +154,7 @@ fn rock_color(p: vec3<f32>, n: vec3<f32>, footprint: f32) -> vec3<f32> {
 // `clump` (0..1, see `clumps`) makes the blades taller and denser.
 fn blade_field(q: vec2<f32>, clump: f32) -> f32 {
     let v = value_noise(q) * 0.5 + 0.5;
-    return pow(v, 2.2 - clump) * (0.8 + 0.5 * clump);
+    return pow(v, 4.0 - 1.5 * clump) * (0.85 + 0.4 * clump);
 }
 
 // Clumps of taller grass, a few blades across (world position).

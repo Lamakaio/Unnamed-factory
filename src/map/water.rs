@@ -128,7 +128,7 @@ fn spawn_lakes_and_rivers(
 #[derive(Default)]
 struct SurfaceBuilder {
     positions: Vec<[f32; 3]>,
-    /// Rivers only: flow velocity (world x, z) and (whitewater, -), see [`Row`].
+    /// Rivers only: flow velocity (world x, z) and (whitewater, opacity), see [`Row`].
     flow: Vec<[f32; 2]>,
     flow_b: Vec<[f32; 2]>,
     indices: Vec<u32>,
@@ -147,6 +147,39 @@ impl SurfaceBuilder {
     /// triangles: at a pinched bend, the usual diagonal can fall outside the quad and flip a
     /// triangle.
     fn ribbon_quad(&mut self, a: &Row, b: &Row) {
+        // Fading out: split at the center line, which keeps the opacity while the sides fade
+        // to nothing (no hard edge where there are no banks to hide it).
+        if a.fade < 1. || b.fade < 1. {
+            let half = |row: &Row, left: bool| {
+                let center = row.center();
+                let flow = row.flow();
+                let (edge, edge_flow) = if left {
+                    (row.left, row.left_flow)
+                } else {
+                    (row.right, row.right_flow)
+                };
+                let edge_fade = (row.fade * 2. - 1.).max(0.);
+                [(edge, edge_flow, edge_fade), (center, flow, row.fade)]
+            };
+            for left in [true, false] {
+                let ([ea, ca], [eb, cb]) = (half(a, left), half(b, left));
+                let foams = [a.foam, a.foam, b.foam, b.foam];
+                let vertices = [ea, ca, eb, cb].into_iter().zip(foams).map(|((position, flow, fade), foam)| {
+                    let index = self.vertex(position, flow, foam);
+                    self.flow_b[index as usize][1] = fade;
+                    index
+                }).collect::<Vec<u32>>();
+                self.indices.extend([
+                    vertices[0],
+                    vertices[2],
+                    vertices[1],
+                    vertices[1],
+                    vertices[2],
+                    vertices[3],
+                ]);
+            }
+            return;
+        }
         let corners = [a.left, a.right, b.left, b.right];
         let area = |i: usize, j: usize, k: usize| {
             (corners[j] - corners[i])
@@ -161,8 +194,12 @@ impl SurfaceBuilder {
         self.flow.extend(
             [a.left_flow, a.right_flow, b.left_flow, b.right_flow].map(|flow| flow.to_array()),
         );
-        self.flow_b
-            .extend([[a.foam, 0.], [a.foam, 0.], [b.foam, 0.], [b.foam, 0.]]);
+        self.flow_b.extend([
+            [a.foam, a.fade],
+            [a.foam, a.fade],
+            [b.foam, b.fade],
+            [b.foam, b.fade],
+        ]);
         if other <= usual {
             self.indices
                 .extend([first, first + 2, first + 1, first + 1, first + 2, first + 3]);
@@ -176,7 +213,7 @@ impl SurfaceBuilder {
     fn vertex(&mut self, position: Vec3, flow: Vec2, foam: f32) -> u32 {
         self.positions.push(position.to_array());
         self.flow.push(flow.to_array());
-        self.flow_b.push([foam, 0.]);
+        self.flow_b.push([foam, 1.]);
         self.positions.len() as u32 - 1
     }
 
@@ -239,6 +276,55 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
     builder.build()
 }
 
+/// Rivers fade out over this distance (a constant plus this many widths) into the water they
+/// flow into.
+const RIVER_FADE: (f32, f32) = (1., 2.5);
+
+/// Fade a river out from row `start` on, extending it straight past its end if needed, and
+/// drop the rows past the fade.
+fn fade_out(rows: &mut Vec<Row>, start: usize) {
+    let width = (rows[start].left - rows[start].right).length();
+    let length = RIVER_FADE.0 + RIVER_FADE.1 * width;
+    let step = 0.5;
+    // Extend straight past the end while still visible.
+    let mut distance_left = length;
+    for pair in rows[start..].windows(2) {
+        distance_left -= pair[0].center().xz().distance(pair[1].center().xz());
+    }
+    if distance_left > 0. && rows.len() >= 2 {
+        let last = rows[rows.len() - 1].clone();
+        let before = &rows[rows.len() - 2];
+        let direction = (last.center() - before.center())
+            .xz()
+            .normalize_or_zero()
+            .extend(0.)
+            .xzy();
+        let extra = (distance_left / step).ceil() as usize;
+        for k in 1..=extra {
+            let offset = direction * step * k as f32;
+            rows.push(Row {
+                left: last.left + offset,
+                right: last.right + offset,
+                ..last.clone()
+            });
+        }
+    }
+    let mut distance = 0.;
+    let mut keep = rows.len();
+    for k in start..rows.len() {
+        if k > start {
+            distance += rows[k].center().xz().distance(rows[k - 1].center().xz());
+        }
+        let fade = 1. - distance / length;
+        rows[k].fade = fade.max(0.);
+        if fade <= 0. {
+            keep = k + 1;
+            break;
+        }
+    }
+    rows.truncate(keep);
+}
+
 /// The spring ponds: a fan over each outline, at the water line.
 fn ponds_mesh(springs: &[Spring]) -> Mesh {
     let mut builder = SurfaceBuilder::default();
@@ -277,6 +363,8 @@ struct Row {
     right_flow: Vec2,
     /// Whitewater, 0..1 (rapids, below falls and confluences).
     foam: f32,
+    /// Opacity: rivers fade out into the sea or lake they flow into.
+    fade: f32,
 }
 
 impl Row {
@@ -456,6 +544,7 @@ fn river_rows(river: &River) -> Vec<Row> {
             left_flow: Vec2::new(here.speed, 0.),
             right_flow: Vec2::ZERO,
             foam: here.foam,
+            fade: 1.,
         });
         // A fall: a steep row a little downstream, at the next pool's level.
         if here.drop > 0. && i + 1 < points.len() {
@@ -468,6 +557,7 @@ fn river_rows(river: &River) -> Vec<Row> {
                 left_flow: Vec2::new(here.speed.max(2.), 0.),
                 right_flow: Vec2::ZERO,
                 foam: 1.,
+                fade: 1.,
             });
         }
     }
@@ -561,23 +651,23 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
 
     let mut builder = SurfaceBuilder::default();
     for (river_index, (river, rows)) in rivers.iter().zip(&all_rows).enumerate() {
-        // Stop where the river reaches the water it flows into (its water line, or the ground
-        // under it, at that level): overlapping translucent surfaces show as a darker patch.
-        // Close to the sea level, the infinite sea surface already covers the carved channel.
+        // Where the river reaches the water it flows into (its water line, or the ground under
+        // it, at that level), it fades out over a few widths, carrying on straight if needed:
+        // the overlapping translucent surfaces would show a hard edge.
         let (end_level, margin) = match river.end {
             RiverEnd::Sea => (0., 0.12),
             RiverEnd::Lake(lake) => (continent.lakes[lake].level, 1e-3),
             RiverEnd::Junction(_) => (f32::MIN, 0.),
         };
-        let count = rows
-            .iter()
-            .position(|row| {
-                let center = row.center();
-                let ground = continent.surface.bilinear(center.xz());
-                center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level
-            })
-            .unwrap_or(rows.len());
-        let mut rows = rows[..count].to_vec();
+        let reached = rows.iter().position(|row| {
+            let center = row.center();
+            let ground = continent.surface.bilinear(center.xz());
+            center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level
+        });
+        let mut rows = rows.to_vec();
+        if let Some(start) = reached {
+            fade_out(&mut rows, start);
+        }
         if rows.len() < 2 {
             continue;
         }
@@ -611,6 +701,7 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
                     left_flow: first.left_flow.normalize_or_zero() * 2.,
                     right_flow: first.right_flow.normalize_or_zero() * 2.,
                     foam: 1.,
+                    fade: 1.,
                 };
                 rows.insert(0, spout);
             }

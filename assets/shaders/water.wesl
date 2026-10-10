@@ -215,12 +215,15 @@ fn fragment(
     var swash = 0.035;
     var chop = 0.35;
     var river = false;
+    // Rivers fade out into the water they flow into.
+    var fade = 1.0;
 
 @if(VERTEX_UVS_B) {
     // Rivers: flow velocity (world x, z) and (whitewater, -).
     river = true;
     let velocity = in.uv;
     let whitewater = in.uv_b.x;
+    fade = in.uv_b.y;
     let speed = max(length(velocity), 0.05);
     let dir = velocity / speed;
     let side = vec2(-dir.y, dir.x);
@@ -314,6 +317,7 @@ fn fragment(
     alpha = max(alpha, max(foam * 0.95, crest * 0.75));
     color *= mix(SHADOW, vec3(1.0), lit) * sun_level;
 
+    alpha *= fade;
     pbr_input.material.base_color = vec4(color, alpha);
     var out: FragmentOutput;
     // In-shader post processing (fog, alpha-premultiply, tonemapping if the camera is not HDR).
