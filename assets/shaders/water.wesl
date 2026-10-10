@@ -6,8 +6,9 @@
 //   to the shore, so they wrap around headlands and bunch up in the shallows; they arrive a
 //   little obliquely with the wind, break into foam on windward shallows, and wash up the beach
 //   (a pulsing foam line). Offshore and on lakes, short wind ripples drift downwind.
-// - Rivers: a flow pattern scrolled along the water's travel time (river mesh UVs), streaky
-//   where fast, whitewater on rapids and below falls, and falling streaks on steep faces
+// - Rivers: a flow map (river mesh UVs: velocity, whitewater; after Vlachos 2010): streaks
+//   pushed along the flow, stretched where fast, bending from tributaries into their parent;
+//   whitewater on rapids, below falls and confluences; falling streaks on steep faces
 //   (waterfalls).
 // - Glints and cel lighting from the sun and its shadows, like the terrain.
 //
@@ -54,6 +55,8 @@ const WAVE_PERIOD: f32 = 5.0;
 const SWELL_REACH: vec2<f32> = vec2(18.0, 34.0);
 // Swell breaks into foam in water shallower than this (on fully exposed shores).
 const BREAK_DEPTH: f32 = 1.5;
+// River flow map: seconds before the pattern resets (two phases, cross-faded).
+const FLOW_PERIOD: f32 = 1.6;
 // ...and only this close to the shore (travel time, deep-water world units).
 const SURF_ZONE: f32 = 10.0;
 
@@ -214,22 +217,47 @@ fn fragment(
     var river = false;
 
 @if(VERTEX_UVS_B) {
-    // Rivers: (across, travel time) and (speed, whitewater).
+    // Rivers: flow velocity (world x, z) and (whitewater, -).
     river = true;
-    let across = in.uv.x;
-    let flow = in.uv.y - time;
-    let speed = in.uv_b.x;
-    let whitewater = in.uv_b.y;
+    let velocity = in.uv;
+    let whitewater = in.uv_b.x;
+    let speed = max(length(velocity), 0.05);
+    let dir = velocity / speed;
+    let side = vec2(-dir.y, dir.x);
+    let across = dot(p.xz, side);
     // Geometric slope of the surface: falls are steep.
     let face = normalize(cross(dpdx(p), dpdy(p)));
     let fall = smoothstep(0.35, 0.7, 1.0 - abs(face.y));
-    // Streaks along the flow (scrolled along the travel time, so stretched where fast).
-    let streak = value_noise(vec2(across * 5.0, flow * 2.2));
-    let streak2 = value_noise(vec2(across * 9.0 + 5.0, flow * 3.1));
-    let streaks = crisp(0.58, max(streak, streak2 * 0.9)) * (1.0 - smoothstep(0.05, 0.15, footprint));
+    // Flow map (two phases, cross-faded): the pattern is sampled in world space, pushed
+    // downstream by the velocity and reset every FLOW_PERIOD; stretched along the flow where
+    // fast. Velocities are continuous where rivers meet, so the pattern bends from one into
+    // the other.
+    let offset = value_noise(p.xz * 0.4) * 0.5;
+    var streak_sum = 0.0;
+    var froth_sum = 0.0;
+    var weights = 0.0;
+    for (var k = 0; k < 2; k++) {
+        let t = fract(time / FLOW_PERIOD + f32(k) * 0.5 + offset);
+        let w = 1.0 - abs(2.0 * t - 1.0);
+        let q = p.xz - velocity * (t * FLOW_PERIOD) + f32(k) * vec2(17.0, 31.0);
+        // Streaks: isotropic noise smeared along the flow (no rotated coordinates, which
+        // would swing wildly with small direction changes far from the origin).
+        let smear = dir * (0.2 + 0.35 * speed);
+        var streak = -1.0;
+        for (var j = 0; j < 4; j++) {
+            let s = q - smear * f32(j);
+            streak = max(streak, max(value_noise(s * 5.0), value_noise(s * 8.0 + 5.0) * 0.9));
+        }
+        streak_sum += w * streak;
+        froth_sum += w * fbm2(q * 3.0);
+        weights += w * w;
+    }
+    // Normalized so the blend keeps the contrast of a single layer (no pulsing).
+    let norm = inverseSqrt(max(weights, 1e-3));
+    let streaks = crisp(0.86, streak_sum * norm) * (1.0 - smoothstep(0.05, 0.15, footprint));
     crest = streaks * mix(0.5, 1.0, smoothstep(0.4, 1.5, speed));
     // Whitewater: foam patches, more where rougher.
-    let froth = fbm2(vec2(across * 3.0, flow * 3.5)) * 0.5 + 0.5;
+    let froth = froth_sum * norm * 0.5 + 0.5;
     foam = crisp(1.0 - 0.55 * whitewater, froth);
     // Waterfalls: white falling streaks.
     let falling = value_noise(vec2(across * 8.0, p.y * 3.0 + time * 5.0)) * 0.5 + 0.5;

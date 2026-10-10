@@ -64,9 +64,9 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Step-pool streams** (steep rivers as pools between small falls): D. R. Montgomery and
   J. M. Buffington, *Channel-reach morphology in mountain drainage basins*, GSA Bulletin
   109, 1997. (`map/water.rs::river_profile`)
-- **Flow along travel time** (river patterns scrolled along the water's travel time, so they
-  stretch where fast without distorting): a variant of flow mapping, after Valve's water
-  flow (A. Vlachos, *Water Flow in Portal 2*, SIGGRAPH 2010).
+- **Flow maps** (river patterns pushed along a per-vertex velocity in two cross-faded
+  phases, continuous where rivers meet): A. Vlachos, *Water Flow in Portal 2*, SIGGRAPH
+  2010. (`water.wesl`, `map/water.rs`)
 - **Toon water** (colour from the depth behind the surface, shoreline foam): Roystan's
   *Toon Water Shader* tutorial (roystan.net). (`water.wesl`)
 - **Inverse-size noise fading** (octaves fade below a pixel): standard procedural

@@ -268,8 +268,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     ribbon (`ribbon_entry`), so the surfaces share an edge; the parent gets whitewater below
     each confluence (`CONFLUENCE_FOAM`). Tributaries join `JOIN_LEAD` points downstream of
     the nearest parent point (`rivers.rs`), so they meet at a downstream-leaning angle.
-    River vertices carry UV0 = (across, travel time of the water) and UV1 = (speed,
-    whitewater: rapids and foam below falls).
+    River vertices carry UV0 = flow velocity (world x, z; per side, so it can vary across)
+    and UV1.x = whitewater (rapids, below falls and confluences). At a confluence the
+    tributary's flow turns towards its parent's and the parent's near bank towards the
+    tributary's (`CONFLUENCE_TURN`), so the flow-mapped pattern bends from one into the
+    other.
   - **Sea field** (`map/sea.rs`, `Rgba16Float` per continent cell, binding 101–103): wave
     travel time to the shore (Dijkstra with knight moves, speed ~ √depth, so crests refract
     around headlands and bunch up in the shallows), depth, exposure to the prevailing wind
@@ -356,9 +359,10 @@ hot reload). The shader is WESL (`map_material.wesl`):
   sea field, else the depth prepass). Sea: swell crests on isolines of the travel time
   (`WAVE_LENGTH`, `WAVE_PERIOD`), arriving obliquely with the wind, in segments; breakers
   with lacy foam in the surf zone (`BREAK_DEPTH` scaled by exposure, `SURF_ZONE`); a swash
-  foam line pulsing at the shore; wind ripple lines offshore and on lakes. Rivers: streaks
-  scrolled along the travel time (stretched where fast, never distorting), whitewater
-  patches, and falls (steep faces from the screen-space normal) with falling streaks.
+  foam line pulsing at the shore; wind ripple lines offshore and on lakes. Rivers: a two-phase
+  flow map (`FLOW_PERIOD`): world-space noise pushed along the velocity, smeared along the
+  flow into streaks (no rotated coordinates: they swing wildly far from the origin), so the
+  pattern is continuous where rivers meet; whitewater patches, and falls (steep faces from the screen-space normal) with falling streaks.
 - **Lighting** is custom (no PBR/specular): the sun (`lights.directional_lights[0]`, its
   brightness × `view.exposure`) gives a hard two-tone lit / cool-shadow step from the slope
   and `fetch_directional_shadow`, plus a highlight band and a rim light; fog etc. via

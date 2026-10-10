@@ -123,7 +123,7 @@ fn spawn_lakes_and_rivers(
 #[derive(Default)]
 struct SurfaceBuilder {
     positions: Vec<[f32; 3]>,
-    /// Rivers only: (across, travel time) and (speed, whitewater), see [`Row`].
+    /// Rivers only: flow velocity (world x, z) and (whitewater, -), see [`Row`].
     flow: Vec<[f32; 2]>,
     flow_b: Vec<[f32; 2]>,
     indices: Vec<u32>,
@@ -153,18 +153,11 @@ impl SurfaceBuilder {
         let first = self.positions.len() as u32;
         self.positions
             .extend(corners.map(|corner| corner.to_array()));
-        self.flow.extend([
-            [-a.half, a.time],
-            [a.half, a.time],
-            [-b.half, b.time],
-            [b.half, b.time],
-        ]);
-        self.flow_b.extend([
-            [a.speed, a.foam],
-            [a.speed, a.foam],
-            [b.speed, b.foam],
-            [b.speed, b.foam],
-        ]);
+        self.flow.extend(
+            [a.left_flow, a.right_flow, b.left_flow, b.right_flow].map(|flow| flow.to_array()),
+        );
+        self.flow_b
+            .extend([[a.foam, 0.], [a.foam, 0.], [b.foam, 0.], [b.foam, 0.]]);
         if other <= usual {
             self.indices
                 .extend([first, first + 2, first + 1, first + 1, first + 2, first + 3]);
@@ -238,15 +231,32 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
 struct Row {
     left: Vec3,
     right: Vec3,
-    /// Distance from the center line to the ribbon edges.
-    half: f32,
-    /// Travel time of the water from the source (seconds): the shader scrolls its flow pattern
-    /// along it, so faster water has longer streaks and the pattern never distorts.
-    time: f32,
-    /// Flow speed, world units per second.
-    speed: f32,
-    /// Whitewater, 0..1 (rapids, and below falls).
+    /// Flow velocity at each side (world x, z, units per second): the shader pushes its
+    /// world-space pattern along it (a flow map), so where rivers meet and their velocities
+    /// are blended, the pattern bends from one into the other.
+    left_flow: Vec2,
+    right_flow: Vec2,
+    /// Whitewater, 0..1 (rapids, below falls and confluences).
     foam: f32,
+}
+
+impl Row {
+    fn center(&self) -> Vec3 {
+        (self.left + self.right) / 2.
+    }
+
+    fn flow(&self) -> Vec2 {
+        (self.left_flow + self.right_flow) / 2.
+    }
+}
+
+/// Turn a flow velocity towards another direction (keeping its speed), by `amount` 0..1.
+fn steer(flow: Vec2, towards: Vec2, amount: f32) -> Vec2 {
+    let direction = flow
+        .normalize_or_zero()
+        .lerp(towards.normalize_or_zero(), amount)
+        .normalize_or_zero();
+    direction * flow.length()
 }
 
 /// Water line and flow of a river, per point.
@@ -360,6 +370,11 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// tributary widths (plus a constant).
 const CONFLUENCE_FOAM: f32 = 0.55;
 const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
+/// At a confluence, the tributary's flow turns towards its parent's, and the parent's near
+/// bank towards the tributary's, by up to this much, over this many tributary widths (plus a
+/// constant).
+const CONFLUENCE_TURN: f32 = 0.6;
+const CONFLUENCE_TURN_REACH: (f32, f32) = (1., 1.5);
 
 /// The cross-sections of a river ribbon, at its water line (see [`river_profile`]).
 fn river_rows(river: &River) -> Vec<Row> {
@@ -393,20 +408,14 @@ fn river_rows(river: &River) -> Vec<Row> {
         edge
     };
     let (lefts, rights) = (side(-1.), side(1.));
-    let mut time = 0.;
+    // Rows with their speed in `left_flow.x` for now.
     let mut rows: Vec<Row> = Vec::with_capacity(points.len() + 8);
     for (i, here) in profile.iter().enumerate() {
-        if i > 0 {
-            let run = (points[i].position - points[i - 1].position).xz().length();
-            time += run * 2. / (here.speed + profile[i - 1].speed);
-        }
-        let half = points[i].width / 2. + RIVER_OVERLAP;
         rows.push(Row {
             left: lefts[i],
             right: rights[i],
-            half,
-            time,
-            speed: here.speed,
+            left_flow: Vec2::new(here.speed, 0.),
+            right_flow: Vec2::ZERO,
             foam: here.foam,
         });
         // A fall: a steep row a little downstream, at the next pool's level.
@@ -417,14 +426,31 @@ fn river_rows(river: &River) -> Vec<Row> {
             rows.push(Row {
                 left: lefts[i].lerp(lefts[i + 1], t).with_y(lefts[i].y) - down,
                 right: rights[i].lerp(rights[i + 1], t).with_y(rights[i].y) - down,
-                half,
-                time: time + 0.05,
-                speed: here.speed.max(2.),
+                left_flow: Vec2::new(here.speed.max(2.), 0.),
+                right_flow: Vec2::ZERO,
                 foam: 1.,
             });
         }
     }
+    // Velocities: along the ribbon, measured over a few rows.
+    let centers: Vec<Vec2> = rows.iter().map(|row| row.center().xz()).collect();
+    let n = rows.len();
+    for (k, row) in rows.iter_mut().enumerate() {
+        let direction = (centers[(k + 2).min(n - 1)] - centers[k.saturating_sub(2)])
+            .normalize_or_zero();
+        let velocity = direction * row.left_flow.x;
+        row.left_flow = velocity;
+        row.right_flow = velocity;
+    }
     rows
+}
+
+/// The flow direction of a river at its end (from its last points).
+fn river_rows_end_flow(river: &River) -> Vec2 {
+    let n = river.points.len();
+    (river.points[n - 1].position - river.points[n.saturating_sub(4)].position)
+        .xz()
+        .normalize_or_zero()
 }
 
 /// How far `p` is inside a river's ribbon (positive inside): its half-width (with the overlap
@@ -471,7 +497,7 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
         let Some(rows) = all_rows.get_mut(parent) else {
             continue;
         };
-        let center = |row: &Row| ((row.left + row.right) / 2.).xz();
+        let center = |row: &Row| row.center().xz();
         let Some(nearest) = (0..rows.len()).min_by(|&a, &b| {
             center(&rows[a])
                 .distance(join.position.xz())
@@ -479,6 +505,22 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
         }) else {
             continue;
         };
+        // The parent's bank on the tributary's side turns towards the incoming water.
+        let incoming = river_rows_end_flow(river);
+        let approach = river.points[river.points.len().saturating_sub(8)].position.xz();
+        let turn_reach = CONFLUENCE_TURN_REACH.0 + CONFLUENCE_TURN_REACH.1 * join.width;
+        for row in rows.iter_mut() {
+            let distance = row.center().xz().distance(join.position.xz());
+            if distance > 4. * turn_reach {
+                continue;
+            }
+            let amount = CONFLUENCE_TURN * (-distance / turn_reach).exp();
+            if row.left.xz().distance(approach) < row.right.xz().distance(approach) {
+                row.left_flow = steer(row.left_flow, incoming, amount);
+            } else {
+                row.right_flow = steer(row.right_flow, incoming, amount);
+            }
+        }
         let reach = CONFLUENCE_REACH.0 + CONFLUENCE_REACH.1 * join.width;
         let mut distance = 0.;
         for k in nearest..rows.len() {
@@ -508,6 +550,34 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             _ => None,
         };
         let inside = |p: Vec3| parent.is_some_and(|parent| inside_ribbon(parent, p.xz()) > 0.);
+        // Near the confluence, the tributary turns towards its parent's flow.
+        let parent_rows = match river.end {
+            RiverEnd::Junction(parent) => all_rows.get(parent),
+            _ => None,
+        };
+        let turn_reach = CONFLUENCE_TURN_REACH.0
+            + CONFLUENCE_TURN_REACH.1 * river.points.last().map_or(0., |p| p.width);
+        let turn = |row: &mut Row| {
+            let (Some(parent), Some(parent_rows)) = (parent, parent_rows) else {
+                return;
+            };
+            for (vertex, flow) in [(row.left, &mut row.left_flow), (row.right, &mut row.right_flow)] {
+                let depth = inside_ribbon(parent, vertex.xz());
+                if depth < -2. * turn_reach {
+                    continue;
+                }
+                let amount = CONFLUENCE_TURN * smoothstep(-2. * turn_reach, 0., depth);
+                let nearest = parent_rows.iter().min_by(|a, b| {
+                    a.center()
+                        .xz()
+                        .distance_squared(vertex.xz())
+                        .total_cmp(&b.center().xz().distance_squared(vertex.xz()))
+                });
+                if let Some(nearest) = nearest {
+                    *flow = steer(*flow, nearest.flow(), amount);
+                }
+            }
+        };
         // Each side stops where it enters the parent's ribbon; the other one goes on until it
         // does too.
         let (mut left_end, mut right_end): (Option<Vec3>, Option<Vec3>) = (None, None);
@@ -515,6 +585,7 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             continue;
         };
         let mut previous = first.clone();
+        turn(&mut previous);
         for row in &rows[1..] {
             let center = (row.left + row.right) / 2.;
             let ground = continent.surface.bilinear(center.xz());
@@ -532,6 +603,7 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             }
             next.left = left_end.unwrap_or(next.left);
             next.right = right_end.unwrap_or(next.right);
+            turn(&mut next);
             builder.ribbon_quad(&previous, &next);
             if left_end.is_some() && right_end.is_some() {
                 break;
