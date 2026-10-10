@@ -30,7 +30,7 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     let metres = height / scale;
     let time = globals.time;
     let along = dot(origin.xz, WIND);
-    let gust = 0.55 + 0.45 * sin(time * 0.8 - along * 0.12);
+    let gust = 0.55 + 0.45 * sin(time * 0.36 - along * 0.12);
     let sway = (0.5 + 0.5 * sin(time * 2.4 + along * 0.9 + origin.x * 0.37)) * gust;
     let bend = height * 0.3 * min(metres, 1.5) * sway;
     world = vec4(world.xyz + vec3(WIND.x, 0.0, WIND.y) * bend, 1.0);

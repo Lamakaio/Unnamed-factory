@@ -8,8 +8,9 @@
 //   weights come from two textures baked per continent cell (`map::ground`), warped and
 //   sharpened with noise so borders are crisp and irregular; rock on steep slopes and snow
 //   sliding off them are decided per pixel. Mesh vertex color red is the river/lake wetness.
-// - Grass is animated: short blade strokes along the wind close up, and gusts sweeping across
-//   meadows as lighter bands (grass bending), at every distance.
+// - Grass is animated: tufts of blades (drawn standing up on screen, a roughly constant size
+//   in pixels) swaying and leaning downwind, and gusts sweeping across meadows as lighter bands
+//   where the grass bends further.
 // - Lighting: the sun is a hard-edged two-tone (lit / cool shadow, from the slope and the
 //   shadow maps) with a small highlight band and a rim light. No specular.
 //
@@ -54,6 +55,10 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Wind direction (shared with toon_sway.wesl) and gust speed (world units per second).
 const WIND: vec2<f32> = vec2(0.8, 0.6);
 const GUST_SPEED: f32 = 3.0;
+// Grass tuft grid: cell size on screen (pixels), and its smallest / largest size (world units).
+const TUFT_PIXELS: f32 = 26.0;
+const TUFT_MIN: f32 = 0.08;
+const TUFT_MAX: f32 = 2.0;
 
 // Cel lighting: colour of lit and shadowed ground (relative to the sun's brightness), extra
 // light on faces turned to the sun, rim light.
@@ -134,19 +139,85 @@ fn rock_color(p: vec3<f32>, n: vec3<f32>, footprint: f32) -> vec3<f32> {
     return mix(srgb(0.52, 0.49, 0.47), srgb(0.62, 0.59, 0.55), patches(pattern, 0.1));
 }
 
-// Grass animation: blade strokes (close up) and wind gusts. Returns the brightness factor.
-fn wind(xz: vec2<f32>, footprint: f32, time: f32) -> f32 {
+// One layer of grass tufts on a grid of `cell` world units. Most cells hold a tuft of two blades
+// standing from a random point, drawn as tapered strokes pointing away from the camera (`away`,
+// so they read as standing up on screen) and leaning downwind (`lean`, relative to the blade
+// length), each tuft swaying with its own phase. Returns (coverage, position along the blade:
+// 0 at the base, 1 at the tip).
+fn tufts(
+    xz: vec2<f32>,
+    cell: f32,
+    away: vec2<f32>,
+    lean: vec2<f32>,
+    time: f32,
+    footprint: f32,
+) -> vec2<f32> {
+    let g = xz / cell;
+    let home = vec2<i32>(floor(g));
+    let pixel = footprint / cell;
+    let side = vec2(-away.y, away.x);
+    var best = vec2(0.0);
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let c = home + vec2(dx, dy);
+            if hash(c + vec2(9127, 3301)) > 0.75 {
+                continue;
+            }
+            let base = vec2<f32>(c) + vec2(hash(c), hash(c + vec2(4513, 77)));
+            let phase = hash(c + vec2(211, 6007)) * 6.2832;
+            let sway = 0.5 + 0.5 * sin(time * 2.2 + phase);
+            for (var k = 0; k < 2; k++) {
+                let r = hash(c + vec2(k * 1931 + 17, k * 733 + 5));
+                let size = 0.7 + 0.3 * r;
+                let spread = (f32(k) - 0.5) * 0.6 + (r - 0.5) * 0.3;
+                let blade = ((away + side * spread) + lean * sway) * size;
+                let q = g - base;
+                let t = saturate(dot(q, blade) / dot(blade, blade));
+                let d = length(q - blade * t);
+                let width = 0.11 * (1.0 - t);
+                let coverage = 1.0 - smoothstep(width - pixel * 0.5, width + pixel * 0.5, d);
+                if coverage > best.x {
+                    best = vec2(coverage, t);
+                }
+            }
+        }
+    }
+    return best;
+}
+
+// Brightness of grass tufts: dark at the base, light at the tip (more so in gusts).
+fn tuft_shade(tuft: vec2<f32>, gust: f32) -> f32 {
+    return mix(1.0, mix(0.6, 1.18 + 0.12 * gust, tuft.y), tuft.x);
+}
+
+// Grass animation: blade tufts swaying in the wind, and gusts sweeping across meadows as
+// lighter bands where the grass bends further. Returns the brightness factor. `away` is the
+// ground direction away from the camera.
+fn wind(xz: vec2<f32>, away: vec2<f32>, footprint: f32, time: f32) -> f32 {
     let along = dot(xz, WIND);
     let across = dot(xz, vec2(-WIND.y, WIND.x));
-    // Short strokes stretched along the wind, swaying a little.
-    let sway = sin(time * 1.8 + along * 0.8 + across * 0.35) * 0.25;
-    let stroke = value_noise(vec2(along * 3.0 + sway, across * 16.0));
-    let near = 1.0 - smoothstep(0.015, 0.05, footprint);
-    let strokes = (patches(stroke, 0.55) * 0.1 - patches(-stroke, 0.55) * 0.08) * near;
-    // Gusts: wide bands moving downwind; bent grass shows its lighter side.
-    let gust = fbm(vec2(along * 0.1 - time * GUST_SPEED * 0.1, across * 0.04), 2, footprint * 0.1);
-    let gusting = smoothstep(0.2, 0.45, gust);
-    return 1.0 + strokes + 0.1 * gusting;
+    let gust_noise = fbm(
+        vec2(along * 0.12 - time * GUST_SPEED * 0.12, across * 0.05),
+        2,
+        footprint * 0.12
+    );
+    let gust = smoothstep(0.05, 0.3, gust_noise);
+
+    // Tufts stay about `TUFT_PIXELS` per grid cell on screen: between two grid scales (a factor
+    // two apart), never smaller than `TUFT_MIN` (they grow when zooming in), and fading out
+    // past `TUFT_MAX` (far away, only the gusts remain).
+    let wanted = max(footprint * TUFT_PIXELS, TUFT_MIN);
+    let level = log2(wanted / TUFT_MIN);
+    let blend = fract(level);
+    let cell = TUFT_MIN * exp2(floor(level));
+    let lean = WIND * (0.15 + 0.5 * gust);
+    var shade = tuft_shade(tufts(xz, cell, away, lean, time, footprint), gust);
+    if blend > 0.01 {
+        let coarse = tuft_shade(tufts(xz, cell * 2.0, away, lean, time, footprint), gust);
+        shade = mix(shade, coarse, blend);
+    }
+    shade = mix(shade, 1.0, smoothstep(TUFT_MAX, TUFT_MAX * 2.0, wanted));
+    return shade * (1.0 + 0.22 * gust);
 }
 
 fn ground(
@@ -156,6 +227,7 @@ fn ground(
     b: vec4<f32>,
     c: vec4<f32>,
     wet: f32,
+    away: vec2<f32>,
     footprint: f32,
     time: f32,
 ) -> vec3<f32> {
@@ -164,7 +236,7 @@ fn ground(
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
     let large = fbm(xz * 0.07 + vec2(7.1, 3.3), 3, footprint * 0.07);
     let blotches = fbm(xz * 0.18 + vec2(2.0, 8.0), 3, footprint * 0.18);
-    let wind_shade = wind(xz, footprint, time);
+    let wind_shade = wind(xz, away, footprint, time);
 
     // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches, swept
     // by the wind.
@@ -299,7 +371,8 @@ fn fragment(
 @if(VERTEX_COLORS)
     wet = in.color.r;
 
-    let albedo = ground(p, n, a, b, c, wet, footprint, globals.time) * tint.rgb;
+    let away = normalize(p.xz - view.world_position.xz + vec2(1e-4, 0.0));
+    let albedo = ground(p, n, a, b, c, wet, away, footprint, globals.time) * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).
     let sun = lights.directional_lights[0];
