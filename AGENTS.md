@@ -113,7 +113,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `SyncCameraPosition`. The camera controller applies deltas to `Transform`, so
   `keyboard_pan` (Update) and `keep_above_terrain` (PostUpdate) edit the transform directly.
   The camera spawns at startup (it renders the loading screen) and `look_at_start` places it
-  over `Continent::start_point()` on entering `InGame` (`UF_CAMERA=x,z[,dx,dy,dz]` overrides
+  over `Continent::start_point()` on entering `InGame` (`UF_CAMERA=x,z[,dx,dy,dz]`
+   (and `cargo run -- --seed <n>` picks the world seed, default 1082) overrides
   the target and offset, for automated screenshots). The ambient light is a weak sky blue so
   the sun shapes the relief.
 - **Environment**: sun `DirectionalLight` (`lux::RAW_SUNLIGHT`, low and from the side of the

@@ -15,10 +15,21 @@ mod ui;
 
 use bevy::prelude::*;
 
-/// World generation seed.
+/// Default world generation seed.
 const SEED: u128 = 1082;
 
+/// The world seed: `--seed <n>` on the command line, else [`SEED`].
+fn seed() -> u128 {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|arg| arg == "--seed")
+        .and_then(|i| args.get(i + 1))
+        .map(|value| value.parse().expect("--seed takes a number"))
+        .unwrap_or(SEED)
+}
+
 fn main() {
+    let seed = seed();
     App::new()
         .add_plugins((
             DefaultPlugins.set(ImagePlugin::default_nearest()),
@@ -29,7 +40,7 @@ fn main() {
             dev_tools::DevToolsPlugin,
             environment::EnvironmentPlugin,
             camera::CameraPlugin,
-            map::MapPlugin { seed: SEED },
+            map::MapPlugin { seed },
             shaders::ShadersPlugin,
             build_asset::BuildAssetPlugin,
             build::BuildPlugin,
