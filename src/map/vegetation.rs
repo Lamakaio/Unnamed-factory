@@ -36,7 +36,7 @@ use worldgen::{
     noise::{Noise, smoothstep},
 };
 
-use super::{CHUNK_SIZE, IsGround, Map, heights::TerrainHeights};
+use super::{CHUNK_SIZE, IsGround, Map, heights::TerrainHeights, springs::SpringKind};
 use crate::{
     AppState,
     shaders::{LodToonMaterial, LodToonShader, SwayToonMaterial, SwayToonShader, ToonMaterial, toon},
@@ -611,7 +611,46 @@ impl Placement {
         }
         instances
     }
+
+    /// Rock outcrops the hillside springs in a chunk spout from: a tall rock right behind the
+    /// spout (hiding its top) and boulders on both sides.
+    fn spring_rocks(&self, chunk: I64Vec2) -> Vec<Instance> {
+        let min = chunk.as_vec2() * CHUNK_SIZE;
+        let max = min + CHUNK_SIZE;
+        let mut instances = Vec::new();
+        for spring in self.heights.springs() {
+            let p = spring.position.xz();
+            if !matches!(spring.kind, SpringKind::Hillside)
+                || p.cmplt(min).any()
+                || p.cmpge(max).any()
+            {
+                continue;
+            }
+            let back = spring.direction;
+            let side = back.perp();
+            let tall = ["rock_tall_a", "rock_tall_b", "rock_tall_c", "rock_tall_d"]
+                [(p.x.abs() as usize + p.y.abs() as usize) % 4];
+            let flank = spring.width * 0.4 + 0.3;
+            for (name, offset, scale) in [
+                (tall, -back * 0.45, SPRING_ROCK_SCALE),
+                ("boulder_a", -back * 0.15 + side * flank, SPRING_ROCK_SCALE * 0.55),
+                ("boulder_c", -back * 0.2 - side * flank, SPRING_ROCK_SCALE * 0.45),
+            ] {
+                let at = p + offset;
+                instances.push(Instance {
+                    species: species_index(name),
+                    position: at.extend(self.heights.height(at) - 0.08).xzy(),
+                    yaw: (-back).to_angle() + (p.x * 7.3).sin() * 0.5,
+                    scale: METERS_TO_WORLD * scale,
+                });
+            }
+        }
+        instances
+    }
 }
+
+/// Scale of the rock a hillside spring comes out of (on top of [`METERS_TO_WORLD`]).
+const SPRING_ROCK_SCALE: f32 = 5.;
 
 /// The stand-ins of `instances` merged into one mesh, relative to `origin`. With
 /// `with_origins`, each vertex also carries its instance's world origin (UV0 = x, z;
@@ -752,7 +791,8 @@ fn start_placement(
         }
         let (placement, stand_ins, chunk) = (placement.clone(), vegetation.lod2.clone(), *chunk);
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let large = placement.place(chunk, LARGE_CELL, 1, large_rules, false);
+            let mut large = placement.place(chunk, LARGE_CELL, 1, large_rules, false);
+            large.extend(placement.spring_rocks(chunk));
             let mut ground = placement.place(chunk, GROUND_CELL, 2, ground_rules, false);
             ground.extend(placement.place(chunk, PATCH_CELL, 3, patch_rules, true));
             let origin = (chunk.as_vec2() * CHUNK_SIZE).extend(0.).xzy();

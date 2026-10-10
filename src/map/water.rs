@@ -14,7 +14,10 @@ use bevy::{
 };
 use worldgen::{Continent, River, RiverEnd, RiverPoint};
 
-use super::Map;
+use super::{
+    Map,
+    springs::{SPOUT_HEIGHT, Spring, SpringKind},
+};
 use crate::{
     AppState,
     shaders::{WaterMaterial, WaterShader},
@@ -105,9 +108,11 @@ fn spawn_lakes_and_rivers(
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let continent = &map.continent;
+    let springs = map.heights.springs();
     for (name, mesh) in [
         ("Lakes", lakes_mesh(continent)),
-        ("Rivers", rivers_mesh(continent)),
+        ("Ponds", ponds_mesh(springs)),
+        ("Rivers", rivers_mesh(continent, springs)),
     ] {
         commands.spawn((
             Name::new(name),
@@ -233,6 +238,32 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
     }
     builder.build()
 }
+
+/// The spring ponds: a fan over each outline, at the water line.
+fn ponds_mesh(springs: &[Spring]) -> Mesh {
+    let mut builder = SurfaceBuilder::default();
+    for spring in springs {
+        let SpringKind::Pond { center, outline } = &spring.kind else {
+            continue;
+        };
+        let y = spring.position.y + RIVER_OFFSET;
+        let first = builder.positions.len() as u32;
+        builder.positions.push(center.extend(y).xzy().to_array());
+        builder
+            .positions
+            .extend(outline.iter().map(|p| p.extend(y).xzy().to_array()));
+        let n = outline.len() as u32;
+        for k in 0..n {
+            builder
+                .indices
+                .extend([first, first + 1 + k, first + 1 + (k + 1) % n]);
+        }
+    }
+    builder.build()
+}
+
+/// Whitewater at a hillside spring, on its first rows.
+const SPRING_FOAM: [f32; 4] = [1., 0.8, 0.55, 0.3];
 
 /// A cross-section of a river ribbon.
 #[derive(Clone)]
@@ -480,7 +511,7 @@ fn inside_ribbon(river: &River, p: Vec2) -> f32 {
 /// A ribbon along each river, at its water line. Tributaries join their parent along its
 /// ribbon edge (clipped there, so the two surfaces neither overlap nor leave a gap), and the
 /// parent gets whitewater just below the confluence.
-fn rivers_mesh(continent: &Continent) -> Mesh {
+fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
     let rivers = &continent.rivers;
     let mut all_rows: Vec<Vec<Row>> = rivers.iter().map(river_rows).collect();
     for river in rivers {
@@ -529,7 +560,7 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
     }
 
     let mut builder = SurfaceBuilder::default();
-    for (river, rows) in rivers.iter().zip(&all_rows) {
+    for (river_index, (river, rows)) in rivers.iter().zip(&all_rows).enumerate() {
         // Stop where the river reaches the water it flows into (its water line, or the ground
         // under it, at that level): overlapping translucent surfaces show as a darker patch.
         // Close to the sea level, the infinite sea surface already covers the carved channel.
@@ -547,6 +578,44 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             })
             .unwrap_or(rows.len());
         let mut rows = rows[..count].to_vec();
+        if rows.len() < 2 {
+            continue;
+        }
+        match springs.iter().find(|spring| spring.river == river_index).map(|s| (s, &s.kind)) {
+            // Out of a pond: the river starts on the pond's outline (sharing its vertices).
+            Some((spring, SpringKind::Pond { outline, .. })) => {
+                let y = spring.position.y + RIVER_OFFSET;
+                let outflow = spring.direction * 0.15;
+                let mut edge: Vec<EdgeVertex> = outline
+                    .iter()
+                    .map(|p| (p.extend(y).xzy(), outflow, 0.1))
+                    .collect();
+                edge.push(edge[0]);
+                let reversed: Vec<Row> = rows.iter().rev().cloned().collect();
+                if let Some(cap) = junction_cap(&reversed, &edge, true) {
+                    fan(&mut builder, &cap.outline);
+                    rows = reversed[..cap.full_rows].iter().rev().cloned().collect();
+                }
+            }
+            // Out of the hillside: a spout from the notch, foaming.
+            Some((spring, SpringKind::Hillside)) => {
+                for (row, foam) in rows.iter_mut().zip(SPRING_FOAM) {
+                    row.foam = row.foam.max(foam);
+                }
+                let first = &rows[0];
+                let center = first.center();
+                let back = (spring.direction * 0.4).extend(0.).xzy();
+                let spout = Row {
+                    left: first.left.lerp(center, 0.55) - back + Vec3::Y * SPOUT_HEIGHT,
+                    right: first.right.lerp(center, 0.55) - back + Vec3::Y * SPOUT_HEIGHT,
+                    left_flow: first.left_flow.normalize_or_zero() * 2.,
+                    right_flow: first.right_flow.normalize_or_zero() * 2.,
+                    foam: 1.,
+                };
+                rows.insert(0, spout);
+            }
+            None => {}
+        }
         let parent = match river.end {
             RiverEnd::Junction(parent) => rivers.get(parent).zip(all_rows.get(parent)),
             _ => None,
@@ -580,27 +649,12 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
         }
         // The tributary ends on its parent's actual mesh edge, sharing its vertices.
         let edge = near_edge(parent_rows, &rows);
-        match junction_cap(&rows, &edge) {
+        match junction_cap(&rows, &edge, false) {
             Some(cap) => {
                 for pair in rows[..cap.full_rows].windows(2) {
                     builder.ribbon_quad(&pair[0], &pair[1]);
                 }
-                // A fan from the cap's middle over its outline.
-                let n = cap.outline.len() as f32;
-                let middle = cap.outline.iter().map(|v| v.0).sum::<Vec3>() / n;
-                let middle_flow = cap.outline.iter().map(|v| v.1).sum::<Vec2>() / n;
-                let middle_foam = cap.outline.iter().map(|v| v.2).sum::<f32>() / n;
-                let center = builder.vertex(middle, middle_flow, middle_foam);
-                let outline: Vec<u32> = cap
-                    .outline
-                    .iter()
-                    .map(|&(position, flow, foam)| builder.vertex(position, flow, foam))
-                    .collect();
-                // Closed: the last triangle joins the right and left ends of the last full row.
-                for (k, &vertex) in outline.iter().enumerate() {
-                    let next = outline[(k + 1) % outline.len()];
-                    builder.indices.extend([center, vertex, next]);
-                }
+                fan(&mut builder, &cap.outline);
             }
             None => {
                 for pair in rows.windows(2) {
@@ -614,6 +668,23 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
 
 /// A vertex of a ribbon edge: position, flow velocity, whitewater.
 type EdgeVertex = (Vec3, Vec2, f32);
+
+/// Fill a closed outline with a fan from its middle.
+fn fan(builder: &mut SurfaceBuilder, outline: &[EdgeVertex]) {
+    let n = outline.len() as f32;
+    let middle = outline.iter().map(|v| v.0).sum::<Vec3>() / n;
+    let middle_flow = outline.iter().map(|v| v.1).sum::<Vec2>() / n;
+    let middle_foam = outline.iter().map(|v| v.2).sum::<f32>() / n;
+    let center = builder.vertex(middle, middle_flow, middle_foam);
+    let vertices: Vec<u32> = outline
+        .iter()
+        .map(|&(position, flow, foam)| builder.vertex(position, flow, foam))
+        .collect();
+    for (k, &vertex) in vertices.iter().enumerate() {
+        let next = vertices[(k + 1) % vertices.len()];
+        builder.indices.extend([center, vertex, next]);
+    }
+}
 
 /// The edge of the parent ribbon on the tributary's side.
 fn near_edge(parent_rows: &[Row], tributary: &[Row]) -> Vec<EdgeVertex> {
@@ -665,7 +736,9 @@ struct JunctionCap {
     outline: Vec<EdgeVertex>,
 }
 
-fn junction_cap(rows: &[Row], edge: &[EdgeVertex]) -> Option<JunctionCap> {
+/// `edge` is a polyline; with `closed`, a loop (its last vertex repeating the first), and the
+/// outline follows the shorter way round between the crossings.
+fn junction_cap(rows: &[Row], edge: &[EdgeVertex], closed: bool) -> Option<JunctionCap> {
     // First crossing of each tributary edge with the parent's edge: (row, point, position
     // along the parent's edge).
     let hit = |side: fn(&Row) -> (Vec3, Vec2)| -> Option<(usize, EdgeVertex, f32)> {
@@ -689,14 +762,29 @@ fn junction_cap(rows: &[Row], edge: &[EdgeVertex]) -> Option<JunctionCap> {
         outline.push((row.left, row.left_flow, row.foam));
     }
     outline.push(left_hit);
-    // Parent edge vertices strictly between the two crossings.
-    if left_at < right_at {
-        for vertex in &edge[left_at.floor() as usize + 1..=right_at.floor() as usize] {
-            outline.push(*vertex);
+    // Edge vertices strictly between the two crossings.
+    let n = if closed { edge.len() - 1 } else { edge.len() };
+    let forward = if closed {
+        (right_at - left_at).rem_euclid(n as f32) <= n as f32 / 2.
+    } else {
+        left_at < right_at
+    };
+    let (from, mut to) = (left_at, right_at);
+    if forward {
+        if closed && to < from {
+            to += n as f32;
+        }
+        for k in from.floor() as i64 + 1..=to.floor() as i64 {
+            outline.push(edge[k.rem_euclid(n as i64) as usize]);
         }
     } else {
-        for vertex in edge[right_at.floor() as usize + 1..=left_at.floor() as usize].iter().rev() {
-            outline.push(*vertex);
+        if closed && to > from {
+            to -= n as f32;
+        }
+        let mut k = from.floor() as i64;
+        while k > to.floor() as i64 {
+            outline.push(edge[k.rem_euclid(n as i64) as usize]);
+            k -= 1;
         }
     }
     outline.push(right_hit);

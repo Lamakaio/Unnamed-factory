@@ -275,6 +275,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     tributary's flow turns towards its parent's and the parent's near bank towards the
     tributary's (`CONFLUENCE_TURN`), so the flow-mapped pattern bends from one into the
     other.
+  - **Springs** (`map/springs.rs`): each river source not on a lake, the sea or another
+    river gets a spring, by the terrain slope around it (`POND_MAX_SLOPE`): a lumpy
+    **pond** (bowl carved like river channels, the river ribbon starting on its outline via
+    `junction_cap` with a closed edge; pond surfaces in their own mesh), or a **hillside
+    spring** (a notch carved in the slope, a spout row `SPOUT_HEIGHT` above the stream with
+    foam, and a rock outcrop placed by `vegetation::Placement::spring_rocks`). Springs are
+    part of `TerrainHeights` (carving, wetness, mesh detail).
   - **Sea field** (`map/sea.rs`, `Rgba16Float` per continent cell, binding 101–103): wave
     travel time to the shore (Dijkstra with knight moves, speed ~ √depth, so crests refract
     around headlands and bunch up in the shallows), depth, exposure to the prevailing wind

@@ -14,6 +14,7 @@ mod heights;
 mod mesh;
 mod rivers;
 mod spatial;
+mod springs;
 mod vegetation;
 mod sea;
 mod water;

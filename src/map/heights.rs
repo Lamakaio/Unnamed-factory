@@ -17,6 +17,7 @@ use worldgen::{Continent, Heightmap};
 use super::{
     edits::{EditLayer, TerrainEdit},
     rivers::RiverLayer,
+    springs::{Spring, SpringLayer, find_springs},
 };
 
 
@@ -36,6 +37,7 @@ pub struct TerrainSample {
 pub struct TerrainHeights {
     base: Arc<BaseGrid>,
     rivers: Arc<RiverLayer>,
+    springs: Arc<SpringLayer>,
     edits: Arc<EditLayer>,
 }
 
@@ -44,6 +46,7 @@ impl TerrainHeights {
         Self {
             base: Arc::new(BaseGrid::new(continent)),
             rivers: Arc::new(RiverLayer::new(&continent.rivers)),
+            springs: Arc::new(SpringLayer::new(find_springs(continent))),
             edits: default(),
         }
     }
@@ -53,6 +56,7 @@ impl TerrainHeights {
         let wetness = self
             .rivers
             .carve(p, &mut height)
+            .max(self.springs.carve(p, &mut height))
             .max(self.base.lakes.bilinear(p));
         self.edits.apply(p, &mut height);
         TerrainSample {
@@ -64,8 +68,14 @@ impl TerrainHeights {
     pub fn height(&self, p: Vec2) -> f32 {
         let mut height = self.base.surface.bicubic(p);
         self.rivers.carve(p, &mut height);
+        self.springs.carve(p, &mut height);
         self.edits.apply(p, &mut height);
         height
+    }
+
+    /// The river springs (ponds and hillside springs).
+    pub fn springs(&self) -> &[Spring] {
+        self.springs.springs()
     }
 
     pub fn normal(&self, p: Vec2) -> Vec3 {
@@ -125,13 +135,14 @@ impl TerrainHeights {
 
     /// Smallest mesh cell size requested by rivers or edits overlapping `min..max`.
     pub fn feature_cell(&self, min: Vec2, max: Vec2) -> Option<f32> {
-        match (
+        [
             self.rivers.detail_cell(min, max),
+            self.springs.detail_cell(min, max),
             self.edits.detail_cell(min, max),
-        ) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(f32::min)
     }
 
     /// Spacing of the base surface samples, in world units.
