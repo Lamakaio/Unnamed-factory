@@ -276,6 +276,9 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
     builder.build()
 }
 
+/// Rivers also start fading out where the water under them is this deep.
+const OPEN_WATER_DEPTH: f32 = 0.5;
+
 /// Rivers fade out over this distance (a constant plus this many widths) into the water they
 /// flow into.
 const RIVER_FADE: (f32, f32) = (1., 2.5);
@@ -662,9 +665,18 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
         };
         let reached = rows.iter().position(|row| {
             let bank = |p: Vec3| continent.surface.bilinear(p.xz()) <= end_level + 0.02;
-            bank(row.left) && bank(row.right)
+            let deep = continent.surface.bilinear(row.center().xz()) < end_level - OPEN_WATER_DEPTH;
+            (bank(row.left) && bank(row.right)) || deep
         });
         let mut rows = rows.to_vec();
+        // Never below the sea (delta branches carry on over the sea floor: no falls into it).
+        if river.end == RiverEnd::Sea {
+            let floor = end_level - 0.1 + RIVER_OFFSET;
+            for row in &mut rows {
+                row.left.y = row.left.y.max(floor);
+                row.right.y = row.right.y.max(floor);
+            }
+        }
         if let Some(start) = reached {
             fade_out(&mut rows, start);
         }
@@ -830,10 +842,11 @@ struct JunctionCap {
 /// `edge` is a polyline; with `closed`, a loop (its last vertex repeating the first), and the
 /// outline follows the shorter way round between the crossings.
 fn junction_cap(rows: &[Row], edge: &[EdgeVertex], closed: bool) -> Option<JunctionCap> {
-    // First crossing of each tributary edge with the parent's edge: (row, point, position
-    // along the parent's edge).
+    // Last crossing of each tributary edge with the parent's edge (where it finally enters the
+    // parent: a tributary may brush the parent's edge before running alongside it): (row,
+    // point, position along the parent's edge).
     let hit = |side: fn(&Row) -> (Vec3, Vec2)| -> Option<(usize, EdgeVertex, f32)> {
-        for k in 1..rows.len() {
+        for k in (1..rows.len()).rev() {
             let (a, b) = (side(&rows[k - 1]).0, side(&rows[k]).0);
             for j in 1..edge.len() {
                 if let Some((_, u)) = crossing(a, b, edge[j - 1].0, edge[j].0) {
