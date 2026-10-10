@@ -9,6 +9,7 @@
 //!   ([`mesh`]), and re-meshed when the camera moves enough or an edit touches them.
 
 mod edits;
+mod grass;
 mod ground;
 mod heights;
 mod mesh;
@@ -63,7 +64,11 @@ pub struct MapPlugin {
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         let seed = self.seed as u32;
-        app.add_plugins((water::WaterPlugin, vegetation::VegetationPlugin))
+        app.add_plugins((
+            water::WaterPlugin,
+            vegetation::VegetationPlugin,
+            grass::GrassPlugin,
+        ))
             .add_systems(Startup, move |commands: Commands| {
                 start_generation(commands, seed)
             })

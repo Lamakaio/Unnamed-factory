@@ -363,7 +363,11 @@ hot reload). The shader is WESL (`map_material.wesl`):
     through a thin layer (`BLADE_HEIGHT`) whose blades are peaks of value noise
     (`BLADE_SCALE` per unit, narrow peaks, taller in `clumps`), tips bent downwind; bases are shaded, tips
     lighter, some tips are flowers in lush meadows. Fixed world size (perspective); it fades
-    to its average shade when blades are under ~2 px apart. Gusts sweep downwind as lighter
+    to its average shade only when blades are well under a pixel apart (`BLADE_FADE`, TAA
+    turns them into a grain). Very close to the camera, real blades (`map/grass.rs`: a mesh
+    of blade triangles per 1×1 tile around the point looked at, where the biome has grass,
+    `GrassBladeMaterial` with `grass_blades.wesl` bending them with the same wind, gusts and
+    sway as the carpet) stand in front of it and fade out with distance. Gusts sweep downwind as lighter
     bands at every distance. The wind is the world's prevailing wind (`wind`, binding 108,
     set with the textures). Forest floors get a weaker carpet.
   - **Snow** settles on flat ground (steep rock stays bare), with a ragged noisy edge and

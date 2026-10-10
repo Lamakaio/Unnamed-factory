@@ -16,6 +16,7 @@ impl Plugin for ShadersPlugin {
             MaterialPlugin::<ToonMaterial>::default(),
             MaterialPlugin::<LodToonMaterial>::default(),
             MaterialPlugin::<SwayToonMaterial>::default(),
+            MaterialPlugin::<GrassBladeMaterial>::default(),
         ));
         app.init_asset_loader::<MapMaterialLoader>();
     }
@@ -25,6 +26,7 @@ const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water.wesl";
 const TOON_SHADER_ASSET_PATH: &str = "shaders/toon.wesl";
 const SWAY_SHADER_ASSET_PATH: &str = "shaders/toon_sway.wesl";
+const GRASS_BLADES_SHADER_ASSET_PATH: &str = "shaders/grass_blades.wesl";
 
 /// Toon material for objects (vegetation, rocks): the standard material's colours with the
 /// terrain's cel lighting. `tint` multiplies them; snow covers upward faces between the world
@@ -114,6 +116,37 @@ impl MaterialExtension for SwayToonShader {
 }
 
 pub type SwayToonMaterial = ExtendedMaterial<StandardMaterial, SwayToonShader>;
+
+/// [`ToonShader`] for the grass blades drawn as geometry close to the camera
+/// (`map::grass`): `grass_blades.wesl` bends each blade with the wind (UV0.x: 0 at the base,
+/// 1 at the tip). Same bindings as [`SwayToonShader`].
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct GrassBladeShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+    #[uniform(102)]
+    pub snow: Vec4,
+    /// Prevailing wind direction (x, z).
+    #[uniform(103)]
+    pub wind: Vec4,
+}
+
+impl MaterialExtension for GrassBladeShader {
+    fn vertex_shader() -> ShaderRef {
+        GRASS_BLADES_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        TOON_SHADER_ASSET_PATH.into()
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+}
+
+pub type GrassBladeMaterial = ExtendedMaterial<StandardMaterial, GrassBladeShader>;
 
 /// The toon version of a standard material (e.g. one loaded from a glTF file), with snow
 /// between the world heights `snow.x` and `snow.y`.

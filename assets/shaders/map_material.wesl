@@ -57,11 +57,12 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Gust speed (world units per second).
 const GUST_SPEED: f32 = 3.0;
 // Grass blades: per world unit, height of the grass layer (world units), ray march steps, and
-// the blade spacing on screen (pixels) over which they fade out far away.
+// the blade spacing on screen (pixels) over which they fade out far away: well below a pixel
+// (temporal antialiasing turns them into a fine grassy grain).
 const BLADE_SCALE: f32 = 50.0;
 const BLADE_HEIGHT: f32 = 0.11;
-const GRASS_STEPS: i32 = 32;
-const BLADE_FADE: vec2<f32> = vec2(1.5, 3.0);
+const GRASS_STEPS: i32 = 24;
+const BLADE_FADE: vec2<f32> = vec2(0.2, 0.5);
 // Clumps of taller grass per world unit.
 const CLUMP_SCALE: f32 = 1.6;
 
@@ -170,19 +171,21 @@ fn grass_shell(
     dir: vec3<f32>,
     bend: vec2<f32>,
     clump: f32,
+    scale: f32,
+    height: f32,
 ) -> vec3<f32> {
     let down = max(-dot(dir, n), 0.25);
-    let span = BLADE_HEIGHT / down;
+    let span = height / down;
     var previous_h = 1.0;
-    var previous_gap = 1.0 - blade_field(p.xz * BLADE_SCALE + bend, clump);
-    var q = p.xz * BLADE_SCALE + bend;
+    var previous_gap = 1.0 - blade_field(p.xz * scale + bend, clump);
+    var q = p.xz * scale + bend;
     if previous_gap <= 0.0 {
         return vec3(1.0, q);
     }
     for (var i = 1; i <= GRASS_STEPS; i++) {
         let f = f32(i) / f32(GRASS_STEPS);
         let h = 1.0 - f;
-        q = (p.xz + dir.xz * (span * f)) * BLADE_SCALE + bend * h * h;
+        q = (p.xz + dir.xz * (span * f)) * scale + bend * h * h;
         let gap = h - blade_field(q, clump);
         if gap <= 0.0 {
             let k = previous_gap / (previous_gap - gap);
@@ -209,28 +212,36 @@ fn grass_carpet(p: vec3<f32>, n: vec3<f32>, dir: vec3<f32>, footprint: f32, time
     let gust = smoothstep(0.05, 0.3, gust_noise);
     let gust_light = 1.0 + 0.18 * gust;
 
-    // Blades fade out far away, once they are only a couple of pixels apart, leaving the clumps
+    // Blades have a fixed size; far away, once much finer than a pixel, only the clumps remain
     // (as their average shade).
     let clump = clumps(xz, footprint);
-    let far_shade = 0.72 + 0.3 * clump;
+    let far_shade = 0.82 + 0.24 * clump;
     let pixels = 1.0 / (BLADE_SCALE * max(footprint, 1e-5));
     let visible = smoothstep(BLADE_FADE.x, BLADE_FADE.y, pixels);
     if visible <= 0.0 {
         return vec4(far_shade * gust_light, 0.0, gust, 0.4 + 0.4 * clump);
     }
-    let sway = 0.25 * sin(time * 2.3 + along * 2.0 + 0.7 * sin(across * 1.3));
-    let bend = wind.xy * (0.3 + 1.1 * gust + sway);
-    let seen = grass_shell(p, n, dir, bend, clump);
+    // Swaying: each blade layer bends downwind, more in gusts, with waves running through.
+    let sway = 0.6 * sin(time * 3.1 + along * 3.0 + 0.8 * sin(across * 1.7))
+        + 0.3 * sin(time * 5.3 + along * 7.0 + across * 2.0);
+    let bend = wind.xy * (0.6 + 2.2 * gust + sway);
+    let seen = grass_shell(p, n, dir, bend, clump, BLADE_SCALE, BLADE_HEIGHT);
+    var shade = blade_shade(seen);
     let h = seen.x;
     let blade = vec2<i32>(floor(seen.yz));
-    // Bases in shade, tips lit, and a little variation between blades.
-    var shade = mix(0.42, 1.08, pow(h, 0.8)) * (0.92 + 0.16 * hash(blade));
     shade = mix(far_shade, shade, visible) * gust_light;
     // Flowers: on some blade tips, in scattered clumps.
     let clumps = patches(fbm(xz * 0.35 + vec2(31.0, 5.0), 2, footprint * 0.35), 0.5);
     let flower = clumps * step(0.82, hash(blade + vec2(71, 13))) * smoothstep(0.7, 0.85, h)
         * visible;
     return vec4(shade, flower, gust, mix(0.4 + 0.4 * clump, h, visible));
+}
+
+// Brightness of the blade seen (`grass_shell`): bases a little shaded, tips lit, and some
+// variation between blades.
+fn blade_shade(seen: vec3<f32>) -> f32 {
+    let blade = vec2<i32>(floor(seen.yz));
+    return mix(0.7, 1.06, seen.x) * (0.93 + 0.14 * hash(blade));
 }
 
 fn ground(
