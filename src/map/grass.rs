@@ -177,7 +177,10 @@ fn tile_mesh(map: &Map, tile: IVec2, ground: f32) -> Option<Mesh> {
         }
         let sample = map.sample(p.extend(0.).xzy());
         let steepness = 1. - map.heights.normal(p).y;
-        if sample.wetness > 0.02 || steepness > 0.3 || sample.height < 0.15 || map.heights.edited(p)
+        if sample.wetness > 0.02
+            || steepness > 0.3
+            || sample.height < 0.15
+            || map.heights.grass_clearance(p) > r1 * 0.5
         {
             continue;
         }

@@ -28,7 +28,7 @@ use bevy::camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamer
 use crate::{
     AppState,
     build::BuildId,
-    map::{ChunkMeshTask, IsGround, Map},
+    map::{ChunkMeshTask, GroundMesh, Map},
 };
 
 pub struct DevToolsPlugin;
@@ -135,7 +135,7 @@ fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) {
 /// Log the generation data of the terrain point under a click.
 fn log_terrain_on_click(
     click: On<PointerClick>,
-    chunks: Query<(), With<IsGround>>,
+    chunks: Query<(), With<GroundMesh>>,
     map: Option<Res<Map>>,
 ) {
     let (true, Some(map), Some(pos)) = (

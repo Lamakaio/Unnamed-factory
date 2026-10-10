@@ -651,18 +651,18 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
 
     let mut builder = SurfaceBuilder::default();
     for (river_index, (river, rows)) in rivers.iter().zip(&all_rows).enumerate() {
-        // Where the river reaches the water it flows into (its water line, or the ground under
-        // it, at that level), it fades out over a few widths, carrying on straight if needed:
-        // the overlapping translucent surfaces would show a hard edge.
-        let (end_level, margin) = match river.end {
-            RiverEnd::Sea => (0., 0.12),
-            RiverEnd::Lake(lake) => (continent.lakes[lake].level, 1e-3),
-            RiverEnd::Junction(_) => (f32::MIN, 0.),
+        // Where the river reaches the water it flows into (both its banks under that water),
+        // it fades out over a few widths, carrying on straight if needed: the overlapping
+        // translucent surfaces would show a hard edge. (Not by its own water level: delta
+        // branches are at sea level all along.)
+        let end_level = match river.end {
+            RiverEnd::Sea => 0.,
+            RiverEnd::Lake(lake) => continent.lakes[lake].level,
+            RiverEnd::Junction(_) => f32::MIN,
         };
         let reached = rows.iter().position(|row| {
-            let center = row.center();
-            let ground = continent.surface.bilinear(center.xz());
-            center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level
+            let bank = |p: Vec3| continent.surface.bilinear(p.xz()) <= end_level + 0.02;
+            bank(row.left) && bank(row.right)
         });
         let mut rows = rows.to_vec();
         if let Some(start) = reached {

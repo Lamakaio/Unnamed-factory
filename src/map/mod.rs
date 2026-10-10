@@ -276,11 +276,34 @@ fn bind_terrain_textures(map: Res<Map>, mut materials: ResMut<Assets<MapMaterial
     }
 }
 
-/// Marks terrain chunk entities, with their chunk coordinates.
+/// Marks terrain chunk entities, with their chunk coordinates. Their terrain mesh is split
+/// into [`TerrainPart`] children (see `mesh::PART_DEPTH`).
 #[derive(Component)]
 pub struct IsGround(pub I64Vec2);
 
-/// LOD state of a terrain chunk.
+/// Marks the entities drawing the ground (terrain chunk parts): what ground picking hits.
+#[derive(Component)]
+pub struct GroundMesh;
+
+/// A part of a terrain chunk with its own mesh, built separately so rebuilds stay small: the
+/// quadtree node `index` (x, z) at depth `mesh::PART_DEPTH` in its chunk.
+#[derive(Component, Clone, Copy)]
+struct TerrainPart {
+    chunk: I64Vec2,
+    index: UVec2,
+}
+
+impl TerrainPart {
+    fn size() -> f32 {
+        CHUNK_SIZE / mesh::PARTS as f32
+    }
+
+    fn min(&self) -> Vec2 {
+        self.chunk.as_vec2() * CHUNK_SIZE + self.index.as_vec2() * Self::size()
+    }
+}
+
+/// LOD state of a terrain part.
 #[derive(Component, Default)]
 struct TerrainChunk {
     /// Camera position the current mesh was built for.
@@ -289,10 +312,10 @@ struct TerrainChunk {
     built_edits: u64,
 }
 
-/// A chunk mesh being built.
+/// A terrain part mesh being built (`None`: the part has no geometry of its own).
 #[derive(Component)]
 pub(crate) struct ChunkMeshTask {
-    task: Task<Mesh>,
+    task: Task<Option<Mesh>>,
     camera: Vec3,
     edits: u64,
 }
@@ -319,22 +342,37 @@ fn spawn_chunks(
                 .spawn((
                     Name::new(format!("chunk {} {}", chunk.x, chunk.y)),
                     IsGround(chunk),
-                    TerrainChunk::default(),
                     Transform::from_xyz(origin.x, 0., origin.y),
                     Visibility::default(),
                 ))
+                .with_children(|parent| {
+                    for z in 0..mesh::PARTS {
+                        for x in 0..mesh::PARTS {
+                            parent.spawn((
+                                TerrainPart {
+                                    chunk,
+                                    index: UVec2::new(x, z),
+                                },
+                                TerrainChunk::default(),
+                                GroundMesh,
+                                Transform::default(),
+                                Visibility::default(),
+                            ));
+                        }
+                    }
+                })
                 .id();
             map.chunks.insert(chunk, entity);
         }
     }
 }
 
-/// Start building meshes for the chunks that need one, nearest and edited chunks first.
+/// Start building meshes for the terrain parts that need one, nearest and edited first.
 fn schedule_chunk_meshes(
     mut commands: Commands,
     map: Res<Map>,
     camera: Single<&Transform, With<Camera3d>>,
-    chunks: Query<(Entity, &IsGround, &TerrainChunk), Without<ChunkMeshTask>>,
+    chunks: Query<(Entity, &TerrainPart, &TerrainChunk), Without<ChunkMeshTask>>,
     running: Query<(), With<ChunkMeshTask>>,
 ) {
     let available = MAX_MESH_TASKS.saturating_sub(running.iter().len());
@@ -342,39 +380,41 @@ fn schedule_chunk_meshes(
         return;
     }
     let camera = camera.translation;
-    let mut candidates: Vec<(bool, f32, Entity, I64Vec2)> = chunks
+    let mut candidates: Vec<(bool, f32, Entity, TerrainPart)> = chunks
         .iter()
-        .filter_map(|(entity, IsGround(chunk), state)| {
-            let min = chunk.as_vec2() * CHUNK_SIZE;
-            let nearest = camera.xz().clamp(min, min + CHUNK_SIZE);
+        .filter_map(|(entity, part, state)| {
+            let min = part.min();
+            let nearest = camera.xz().clamp(min, min + TerrainPart::size());
             let ground = Vec3::new(nearest.x, 0., nearest.y);
             let distance = camera.distance(ground.with_y(map.get_height(ground)));
-            let edited = map.chunk_edits(*chunk) > state.built_edits;
+            let edited = map.chunk_edits(part.chunk) > state.built_edits;
             let moved = state.built_for.is_none_or(|built_for| {
                 built_for.distance(camera) > (distance * REMESH_MOVE_RATIO).max(REMESH_MIN_MOVE)
             });
-            (edited || moved).then_some((edited, distance, entity, *chunk))
+            (edited || moved).then_some((edited, distance, entity, *part))
         })
         .collect();
     // Edited chunks first (the player is waiting for them), then by distance.
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
 
-    for (_, _, entity, chunk) in candidates.into_iter().take(available) {
+    for (_, _, entity, part) in candidates.into_iter().take(available) {
         let heights = map.heights.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let start = Instant::now();
-            let mesh = mesh::build_chunk_mesh(&heights, chunk, camera);
+            let mesh = mesh::build_part_mesh(&heights, part.chunk, part.index, camera);
             debug!(
-                "chunk {chunk} meshed in {:.1?}: {} vertices",
+                "chunk {} part {} meshed in {:.1?}: {} vertices",
+                part.chunk,
+                part.index,
                 start.elapsed(),
-                mesh.count_vertices()
+                mesh.as_ref().map_or(0, Mesh::count_vertices)
             );
             mesh
         });
         commands.entity(entity).insert(ChunkMeshTask {
             task,
             camera,
-            edits: map.chunk_edits(chunk),
+            edits: map.chunk_edits(part.chunk),
         });
     }
 }
@@ -395,18 +435,25 @@ fn finish_chunk_meshes(
         let Some(mesh) = check_ready(&mut task.task) else {
             continue;
         };
-        match mesh3d {
-            Some(mesh3d) => {
+        match (mesh, mesh3d) {
+            (Some(mesh), Some(mesh3d)) => {
                 if let Err(error) = meshes.insert(&mesh3d.0, mesh) {
                     warn!("Could not replace a chunk mesh: {error}");
                 }
             }
-            None => {
+            (Some(mesh), None) => {
                 commands.entity(entity).insert((
                     Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(map.material.clone()),
                 ));
             }
+            (None, Some(mesh3d)) => {
+                meshes.remove(&mesh3d.0);
+                commands
+                    .entity(entity)
+                    .remove::<(Mesh3d, MeshMaterial3d<MapMaterial>)>();
+            }
+            (None, None) => {}
         }
         state.built_for = Some(task.camera);
         state.built_edits = task.edits;

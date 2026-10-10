@@ -250,6 +250,23 @@ impl SpringLayer {
         wetness
     }
 
+    /// How close `p` is to a pond's water or a spring's notch: 1 at the edge (and inside), 0
+    /// from `margin` beyond it.
+    pub fn near_water(&self, p: Vec2, margin: f32) -> f32 {
+        let mut near: f32 = 0.;
+        for &id in self.lookup.query_point(p) {
+            let spring = &self.springs[id as usize];
+            let beyond = match &spring.kind {
+                SpringKind::Pond { center, outline } => {
+                    p.distance(*center) - Spring::pond_radius(*center, outline, p)
+                }
+                SpringKind::Hillside => p.distance(spring.position.xz()) - spring.notch_radius(),
+            };
+            near = near.max(1. - (beyond / margin).clamp(0., 1.));
+        }
+        near
+    }
+
     /// Mesh cell size wanted by the springs overlapping `min..max`, if any.
     pub fn detail_cell(&self, min: Vec2, max: Vec2) -> Option<f32> {
         self.lookup

@@ -120,6 +120,22 @@ impl RiverLayer {
         wetness
     }
 
+    /// How close `p` is to a river's water: 1 at the channel edge (and inside), 0 from
+    /// `margin` beyond it.
+    pub fn near_water(&self, p: Vec2, margin: f32) -> f32 {
+        let mut near: f32 = 0.;
+        for &id in self.lookup.query_point(p) {
+            let segment = &self.segments[id as usize];
+            let (a, b) = (segment.a.xz(), segment.b.xz());
+            let ab = b - a;
+            let u = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0., 1.);
+            let half = segment.width_a.lerp(segment.width_b, u) / 2.;
+            let beyond = p.distance(a + ab * u) - half;
+            near = near.max(1. - (beyond / margin).clamp(0., 1.));
+        }
+        near
+    }
+
     /// Mesh cell size wanted by the rivers in `min..max`, if any: finest around the water line,
     /// medium on the rest of the banks, coarser where the node only covers the channel bed
     /// (under the water, a smooth bowl).

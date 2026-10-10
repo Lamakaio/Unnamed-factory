@@ -54,6 +54,16 @@ fn main() {
         let end = continent.rivers[*river].points.last().unwrap();
         println!("  mouth {mouth:?} at {:.1} {:.1} (width {:.2})", end.position.x, end.position.z, end.width);
     }
+    let mut shown = 0;
+    for (r, river) in continent.rivers.iter().enumerate() {
+        let start = river.points[0].position;
+        let on_other = continent.rivers.iter().enumerate().any(|(o, other)| o != r
+            && other.points.iter().any(|q| q.position.xz().distance(start.xz()) < q.width / 2. + 0.5));
+        if !on_other || shown >= 4 { continue; }
+        shown += 1;
+        let ys: Vec<String> = river.points.iter().take(16).map(|p| format!("{:.3}", p.position.y)).collect();
+        println!("  branch {r} ({} pts) width {:.2}: {}", river.points.len(), river.points[0].width, ys.join(" "));
+    }
     let mut slopes = Vec::new();
     let mut steep = Vec::new();
     for (r, river) in continent.rivers.iter().enumerate() {

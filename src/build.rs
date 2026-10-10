@@ -23,7 +23,7 @@ use bevy::{
 
 use crate::{
     AppState,
-    map::{BuildingInstance, GRID_SQUARE_SIZE, IsGround, Map, PatchOp, TerrainEdit},
+    map::{BuildingInstance, GRID_SQUARE_SIZE, GroundMesh, Map, PatchOp, TerrainEdit},
     sim::RhaiScript,
     ui::PointerOverUi,
 };
@@ -337,7 +337,7 @@ fn build_follow_cursor(
     mut press: ResMut<PlacementPress>,
     mut cursor: ResMut<PlacementCursor>,
     over_ui: PointerOverUi,
-    chunks: Query<(), With<IsGround>>,
+    chunks: Query<(), With<GroundMesh>>,
 ) {
     let Some(placing) = placing else {
         press.0 = None;

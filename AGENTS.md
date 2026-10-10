@@ -232,7 +232,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     smootherstep bell). Edits apply in insertion order and are found through a spatial grid.
     `Map::add_edit` records the touched chunks for re-meshing. `PatchOp::Smooth` is not
     supported yet (logs a warning).
-- **Meshing** (`map/mesh.rs`): each 64-unit chunk is a quadtree of 16×16-quad patches. Cells
+- **Meshing** (`map/mesh.rs`): each 64-unit chunk is a quadtree of 16×16-quad patches, meshed
+  in 4×4 separate parts (`TerrainPart` child entities with `GroundMesh`, the picking target;
+  `PART_DEPTH`), so rebuilds near the camera stay small. Cells
   go from 4 units down to `MIN_CELL` = 1/16. A node splits while its cell is larger than
   needed:
   - for the base terrain: curvature (max-curvature pyramid in `BaseGrid`) against an error
@@ -367,7 +369,8 @@ hot reload). The shader is WESL (`map_material.wesl`):
     turns them into a grain). Very close to the camera, real blades (`map/grass.rs`: a mesh
     of blade triangles per 1×1 tile around the point looked at, where the biome has grass,
     `GrassBladeMaterial` with `grass_blades.wesl` bending them with the same wind, gusts and
-    sway as the carpet) stand in front of it and fade out with distance. Gusts sweep downwind as lighter
+    sway as the carpet) stand in front of it and fade out with distance. Grass flattens near
+    water and on edited ground (`TerrainHeights::grass_clearance`, mesh vertex colour green). Gusts sweep downwind as lighter
     bands at every distance. The wind is the world's prevailing wind (`wind`, binding 108,
     set with the textures). Forest floors get a weaker carpet.
   - **Snow** settles on flat ground (steep rock stays bare), with a ragged noisy edge and
@@ -391,7 +394,7 @@ hot reload). The shader is WESL (`map_material.wesl`):
   desert (binding 107). They are sampled
   at a noise-warped position and sharpened with noise (`edge`), so borders are irregular.
   Rock on steep slopes (1 − N.y from ~0.28 to 0.45) and snow sliding off them are per pixel.
-  Mesh vertex colour red is the river/lake wetness (the only per-vertex ground data).
+  Mesh vertex colour red is the river/lake wetness, green the grass clearance.
 - Tune colours in the shader (they are sRGB constants through `srgb()`); `tint` multiplies
   everything.
 

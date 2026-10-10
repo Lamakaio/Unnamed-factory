@@ -1,6 +1,9 @@
 //! Adaptive terrain meshing.
 //!
-//! Each chunk is a quadtree whose leaves are patches of [`PATCH_RES`]² quads. A node is split
+//! Each chunk is a quadtree whose leaves are patches of [`PATCH_RES`]² quads. Its nodes at
+//! depth [`PART_DEPTH`] are meshed separately (`TerrainPart`), so a rebuild near the camera
+//! only redoes a small part; where the tree stops above that depth, the part at the corner
+//! of the leaf meshes it and the others are empty. A node is split
 //! while its cell size is larger than what the terrain needs there:
 //! - the base terrain's curvature, against an error tolerance growing with camera distance,
 //! - rivers and edits overlapping it (which ask for finer cells, also relaxed with distance).
@@ -31,10 +34,20 @@ const MIN_BASE_CELL_RATIO: f32 = 0.5;
 /// Skirt depth, in cells.
 const SKIRT_CELLS: f32 = 2.;
 
-/// Build the mesh of the chunk at `chunk`, for a camera at `camera`.
+/// Depth of the quadtree nodes meshed separately, and their number per chunk side.
+pub const PART_DEPTH: u32 = 2;
+pub const PARTS: u32 = 1 << PART_DEPTH;
+
+/// Build the mesh of part `index` (x, z, at depth [`PART_DEPTH`]) of the chunk at `chunk`, for a
+/// camera at `camera`; `None` if the part has no geometry of its own.
 ///
 /// Vertex positions are relative to the chunk origin (`chunk * CHUNK_SIZE`).
-pub fn build_chunk_mesh(heights: &TerrainHeights, chunk: I64Vec2, camera: Vec3) -> Mesh {
+pub fn build_part_mesh(
+    heights: &TerrainHeights,
+    chunk: I64Vec2,
+    index: UVec2,
+    camera: Vec3,
+) -> Option<Mesh> {
     let origin = chunk.as_vec2() * CHUNK_SIZE;
     let mut builder = MeshBuilder {
         heights,
@@ -46,17 +59,37 @@ pub fn build_chunk_mesh(heights: &TerrainHeights, chunk: I64Vec2, camera: Vec3) 
         colors: Vec::new(),
         indices: Vec::new(),
     };
-    builder.visit(origin, CHUNK_SIZE);
+    // Walk down to the part's node; a leaf above it is meshed by the part at its corner.
+    let part_size = CHUNK_SIZE / PARTS as f32;
+    let part_min = origin + index.as_vec2() * part_size;
+    let (mut min, mut size) = (origin, CHUNK_SIZE);
+    while size > part_size * 1.5 {
+        if !builder.splits(min, size) {
+            if part_min.distance(min) > 1e-3 {
+                return None;
+            }
+            builder.add_patch(min, size);
+            return Some(builder.build());
+        }
+        size /= 2.;
+        min += ((part_min - min) / size + 1e-3).floor().clamp(Vec2::ZERO, Vec2::ONE) * size;
+    }
+    builder.visit(min, size);
+    Some(builder.build())
+}
 
-    Mesh::new(
+impl MeshBuilder<'_> {
+    fn build(self) -> Mesh {
+        Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, builder.positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, builder.normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, builder.uvs)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, builder.colors)
-    .with_inserted_indices(Indices::U32(builder.indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+    .with_inserted_indices(Indices::U32(self.indices))
+    }
 }
 
 struct MeshBuilder<'a> {
@@ -67,7 +100,8 @@ struct MeshBuilder<'a> {
     normals: Vec<[f32; 3]>,
     /// Slope added by rivers and edits.
     uvs: Vec<[f32; 2]>,
-    /// Red: river and lake wetness, for the terrain shader.
+    /// Red: river and lake wetness; green: grass clearance (see
+    /// `TerrainHeights::grass_clearance`), for the terrain shader.
     colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
 }
@@ -136,7 +170,8 @@ impl MeshBuilder<'_> {
                 self.positions.push([local.x, sample.height, local.y]);
                 self.normals.push(self.heights.normal(p).to_array());
                 self.uvs.push(self.heights.feature_gradient(p).to_array());
-                self.colors.push([sample.wetness, 0., 0., 1.]);
+                self.colors
+                    .push([sample.wetness, self.heights.grass_clearance(p), 0., 1.]);
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;

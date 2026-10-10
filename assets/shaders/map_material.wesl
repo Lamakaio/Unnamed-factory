@@ -200,7 +200,16 @@ fn grass_shell(
 // Grass: the carpet, swaying in the wind, with gusts sweeping across meadows as lighter bands
 // where the grass bends further. Returns (brightness, flower amount, gust, blade tip amount).
 // `dir` is the view direction.
-fn grass_carpet(p: vec3<f32>, n: vec3<f32>, dir: vec3<f32>, footprint: f32, time: f32) -> vec4<f32> {
+// `clearance` (0..1) flattens the grass near water and on building foundations, so it
+// doesn't look like it runs under them.
+fn grass_carpet(
+    p: vec3<f32>,
+    n: vec3<f32>,
+    dir: vec3<f32>,
+    footprint: f32,
+    time: f32,
+    clearance: f32,
+) -> vec4<f32> {
     let xz = p.xz;
     let along = dot(xz, wind.xy);
     let across = dot(xz, vec2(-wind.y, wind.x));
@@ -217,7 +226,7 @@ fn grass_carpet(p: vec3<f32>, n: vec3<f32>, dir: vec3<f32>, footprint: f32, time
     let clump = clumps(xz, footprint);
     let far_shade = 0.82 + 0.24 * clump;
     let pixels = 1.0 / (BLADE_SCALE * max(footprint, 1e-5));
-    let visible = smoothstep(BLADE_FADE.x, BLADE_FADE.y, pixels);
+    let visible = smoothstep(BLADE_FADE.x, BLADE_FADE.y, pixels) * (1.0 - clearance);
     if visible <= 0.0 {
         return vec4(far_shade * gust_light, 0.0, gust, 0.4 + 0.4 * clump);
     }
@@ -251,6 +260,7 @@ fn ground(
     b: vec4<f32>,
     c: vec4<f32>,
     wet: f32,
+    clearance: f32,
     dir: vec3<f32>,
     footprint: f32,
     time: f32,
@@ -260,7 +270,7 @@ fn ground(
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
     let large = fbm(xz * 0.07 + vec2(7.1, 3.3), 3, footprint * 0.07);
     let blotches = fbm(xz * 0.18 + vec2(2.0, 8.0), 3, footprint * 0.18);
-    let carpet = grass_carpet(p, n, dir, footprint, time);
+    let carpet = grass_carpet(p, n, dir, footprint, time, clearance);
     let wind_shade = carpet.x;
 
     // Grass, lush to dry (in a few steps), with lighter patches and a few dirt patches, swept
@@ -399,11 +409,14 @@ fn fragment(
         c = textureSample(ground_c, terrain_sampler, uv);
     }
     var wet = 0.0;
-@if(VERTEX_COLORS)
+    var clearance = 0.0;
+@if(VERTEX_COLORS) {
     wet = in.color.r;
+    clearance = in.color.g;
+}
 
     let dir = normalize(p - view.world_position.xyz);
-    let albedo = ground(p, n, a, b, c, wet, dir, footprint, globals.time) * tint.rgb;
+    let albedo = ground(p, n, a, b, c, wet, clearance, dir, footprint, globals.time) * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).
     let sun = lights.directional_lights[0];

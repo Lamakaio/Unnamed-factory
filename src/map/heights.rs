@@ -33,6 +33,9 @@ pub struct TerrainSample {
     pub wetness: f32,
 }
 
+/// Grass thins out over this distance from water (world units).
+const GRASS_CLEARANCE: f32 = 0.6;
+
 #[derive(Clone)]
 pub struct TerrainHeights {
     base: Arc<BaseGrid>,
@@ -122,6 +125,18 @@ impl TerrainHeights {
         let scale = 1. / (surface.cell * size as f32);
         let offset = ((size / 2) as f32 + 0.5) / size as f32;
         (image, Vec4::new(offset, offset, scale, scale))
+    }
+
+    /// Where grass gives way (0 to 1): at the edge of rivers, lakes and ponds, and on edited
+    /// ground (building foundations), so the grass doesn't look like it runs under them.
+    pub fn grass_clearance(&self, p: Vec2) -> f32 {
+        let water = self
+            .rivers
+            .near_water(p, GRASS_CLEARANCE)
+            .max(self.springs.near_water(p, GRASS_CLEARANCE))
+            .max(self.base.lakes.bilinear(p));
+        let edited = if self.edits.covers(p) { 1. } else { 0. };
+        water.max(edited)
     }
 
     /// Whether an edit (a building foundation or a tool) changed the ground at `p`.
