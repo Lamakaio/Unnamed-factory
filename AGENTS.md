@@ -695,7 +695,10 @@ of the migration work.
    game saves a screenshot and exits, and you can then view the PNG. For shader work, run
    `UF_LAB=target/lab/shots cargo run` in the background once: write lines
    `<name>.png x z [dx dy dz]` to `target/lab/shots/shots.txt`, wait for `done.txt`, view the
-   PNGs; shaders hot-reload between requests (Rust changes need a restart). `UF_CAMERA=x,z[,dx,dy,dz]`
+   PNGs; shaders hot-reload between requests (Rust changes need a restart). The lab keeps the
+   camera above the ground, sets the pan-orbit controller's anchor depth (its near clip plane
+   is 5% of it: a stale far anchor clips everything close), and waits until terrain chunks
+   are done meshing. For close-ups, prefer a camera a little higher and angled down. `UF_CAMERA=x,z[,dx,dy,dz]`
    points the start view at world (x, z) from offset (dx, dy, dz). Also scan the log for
    `ERROR` / `panicked`. To exercise interactive paths (placement, sim screen), apply a
    *temporary* patch (e.g. a fake cursor at window centre, or trigger `StartPlacement` from

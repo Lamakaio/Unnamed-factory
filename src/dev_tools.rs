@@ -28,7 +28,7 @@ use bevy::camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamer
 use crate::{
     AppState,
     build::BuildId,
-    map::{IsGround, Map},
+    map::{ChunkMeshTask, IsGround, Map},
 };
 
 pub struct DevToolsPlugin;
@@ -218,17 +218,27 @@ struct Lab {
     wait: u32,
     current: Option<String>,
     since_poll: f32,
+    /// Consecutive frames without chunk meshing.
+    idle: u32,
 }
 
-/// Frames rendered at a new camera position before its screenshot.
+/// Frames rendered at a new camera position before its screenshot (at least, and then until
+/// the terrain chunks are meshed, up to `LAB_MAX_FRAMES`).
 const LAB_SETTLE_FRAMES: u32 = 60;
+const LAB_MAX_FRAMES: u32 = 900;
+/// Frames without any chunk meshing before a lab screenshot.
+const LAB_IDLE_FRAMES: u32 = 30;
+/// The lab camera stays at least this high above the ground under it (an offset close to the
+/// ground could put it inside a slope).
+const LAB_CLEARANCE: f32 = 0.8;
 
 fn lab_shots(
     mut commands: Commands,
     mut lab: ResMut<Lab>,
-    mut camera: Single<&mut Transform, With<PanOrbitCamera>>,
+    mut camera: Single<(&mut Transform, &mut PanOrbitCamera)>,
     map: Res<Map>,
     time: Res<Time>,
+    meshing: Query<(), With<ChunkMeshTask>>,
 ) {
     lab.since_poll += time.delta_secs();
     if lab.current.is_none() && lab.queue.is_empty() && lab.since_poll > 0.25 {
@@ -255,13 +265,23 @@ fn lab_shots(
     }
     if lab.current.is_none() {
         if let Some((file, target, offset)) = lab.queue.pop_front() {
-            **camera = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+            let mut eye = target + offset;
+            eye.y = eye.y.max(map.get_height(eye) + LAB_CLEARANCE);
+            let (transform, controller) = &mut *camera;
+            **transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+            // The controller places the near clip plane from its anchor depth: keep it in step
+            // (a far anchor would clip everything close to the camera).
+            controller.last_anchor_depth = -f64::from(eye.distance(target));
             lab.current = Some(file);
-            lab.wait = LAB_SETTLE_FRAMES;
+            lab.wait = LAB_MAX_FRAMES;
         }
         return;
     }
-    if lab.wait > 0 {
+    // Settled once no chunk has been meshing for a while (a finished mesh built for the old
+    // camera position is only rescheduled on the next frame).
+    lab.idle = if meshing.is_empty() { lab.idle + 1 } else { 0 };
+    let settled = LAB_MAX_FRAMES - lab.wait >= LAB_SETTLE_FRAMES && lab.idle >= LAB_IDLE_FRAMES;
+    if lab.wait > 0 && !settled {
         lab.wait -= 1;
         return;
     }

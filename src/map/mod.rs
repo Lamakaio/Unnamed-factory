@@ -291,7 +291,7 @@ struct TerrainChunk {
 
 /// A chunk mesh being built.
 #[derive(Component)]
-struct ChunkMeshTask {
+pub(crate) struct ChunkMeshTask {
     task: Task<Mesh>,
     camera: Vec3,
     edits: u64,
