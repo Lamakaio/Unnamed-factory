@@ -206,12 +206,13 @@ pub fn extract_rivers(
             && let Some(parent) = rivers.get(parent)
         {
             let end = points.last().unwrap().position;
-            if let Some(nearest) = parent.points.iter().min_by(|a, b| {
-                a.position
-                    .xz()
-                    .distance_squared(end.xz())
-                    .total_cmp(&b.position.xz().distance_squared(end.xz()))
-            }) {
+            // Join a little downstream of the nearest point, so the tributary meets its parent
+            // at an angle leaning downstream, as real confluences do.
+            let distance = |k: usize| parent.points[k].position.xz().distance_squared(end.xz());
+            let nearest = (0..parent.points.len())
+                .min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
+                .map(|k| &parent.points[(k + JOIN_LEAD).min(parent.points.len() - 1)]);
+            if let Some(nearest) = nearest {
                 let last = points.last_mut().unwrap();
                 last.position = nearest.position;
                 // The snap can kink the end: relax it again.
@@ -242,6 +243,9 @@ pub fn extract_rivers(
     }
     (rivers, valley)
 }
+
+/// Tributaries join their parent this many points (of 0.5 cells) downstream of the nearest.
+const JOIN_LEAD: usize = 2;
 
 /// Smallest radius of a river bend, relative to the channel width (and at least this many
 /// cells), so the channel and its banks never fold over themselves.

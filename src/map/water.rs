@@ -12,7 +12,7 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use worldgen::{Continent, RiverEnd, RiverPoint};
+use worldgen::{Continent, River, RiverEnd, RiverPoint};
 
 use super::Map;
 use crate::{
@@ -234,6 +234,7 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
 }
 
 /// A cross-section of a river ribbon.
+#[derive(Clone)]
 struct Row {
     left: Vec3,
     right: Vec3,
@@ -355,10 +356,145 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3. - 2. * t)
 }
 
-/// A ribbon along each river, at its water line (see [`river_profile`]).
+/// Whitewater where a tributary pours into its parent, fading downstream over this many
+/// tributary widths (plus a constant).
+const CONFLUENCE_FOAM: f32 = 0.55;
+const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
+
+/// The cross-sections of a river ribbon, at its water line (see [`river_profile`]).
+fn river_rows(river: &River) -> Vec<Row> {
+    let points = &river.points;
+    let profile = river_profile(points);
+    let tangents: Vec<Vec2> = (0..points.len())
+        .map(|i| {
+            let previous = points[i.saturating_sub(RIVER_TANGENT_SPAN)].position;
+            let next = points[(i + RIVER_TANGENT_SPAN).min(points.len() - 1)].position;
+            (next - previous).xz().normalize_or_zero()
+        })
+        .collect();
+    // Offset each side, but never let an edge step backwards along the river: on bends
+    // tighter than the river is wide, the inner edge pinches instead of folding over.
+    let side = |sign: f32| -> Vec<Vec3> {
+        let mut edge: Vec<Vec3> = Vec::with_capacity(points.len());
+        for (i, (point, tangent)) in points.iter().zip(&tangents).enumerate() {
+            let normal = tangent.perp() * sign;
+            let half = point.width / 2. + RIVER_OVERLAP;
+            let center = point.position.with_y(profile[i].level) + Vec3::Y * RIVER_OFFSET;
+            let mut vertex = center + Vec3::new(normal.x, 0., normal.y) * half;
+            if let Some(&last) = edge.last() {
+                let step = (point.position - points[i - 1].position).xz();
+                let advance = (vertex - last).xz();
+                if advance.dot(*tangent) <= 0. || advance.dot(step) <= 0. {
+                    vertex = last.with_y(vertex.y);
+                }
+            }
+            edge.push(vertex);
+        }
+        edge
+    };
+    let (lefts, rights) = (side(-1.), side(1.));
+    let mut time = 0.;
+    let mut rows: Vec<Row> = Vec::with_capacity(points.len() + 8);
+    for (i, here) in profile.iter().enumerate() {
+        if i > 0 {
+            let run = (points[i].position - points[i - 1].position).xz().length();
+            time += run * 2. / (here.speed + profile[i - 1].speed);
+        }
+        let half = points[i].width / 2. + RIVER_OVERLAP;
+        rows.push(Row {
+            left: lefts[i],
+            right: rights[i],
+            half,
+            time,
+            speed: here.speed,
+            foam: here.foam,
+        });
+        // A fall: a steep row a little downstream, at the next pool's level.
+        if here.drop > 0. && i + 1 < points.len() {
+            let run = (points[i + 1].position - points[i].position).xz().length();
+            let t = (here.fall_run * here.drop / run.max(1e-3)).min(0.6);
+            let down = Vec3::Y * here.drop;
+            rows.push(Row {
+                left: lefts[i].lerp(lefts[i + 1], t).with_y(lefts[i].y) - down,
+                right: rights[i].lerp(rights[i + 1], t).with_y(rights[i].y) - down,
+                half,
+                time: time + 0.05,
+                speed: here.speed.max(2.),
+                foam: 1.,
+            });
+        }
+    }
+    rows
+}
+
+/// How far `p` is inside a river's ribbon (positive inside): its half-width (with the overlap
+/// under the banks) minus the distance to its center line, at the nearest center segment.
+fn inside_ribbon(river: &River, p: Vec2) -> f32 {
+    river
+        .points
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (w[0].position.xz(), w[1].position.xz());
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0., 1.);
+            let half = (w[0].width + (w[1].width - w[0].width) * t) / 2. + RIVER_OVERLAP;
+            half - p.distance(a + ab * t)
+        })
+        .fold(f32::MIN, f32::max)
+}
+
+/// Where the segment `a` -> `b` enters a river's ribbon (`a` outside, `b` inside), by
+/// bisection.
+fn ribbon_entry(river: &River, a: Vec3, b: Vec3) -> Vec3 {
+    let (mut lo, mut hi) = (0f32, 1f32);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.;
+        if inside_ribbon(river, a.lerp(b, mid).xz()) > 0. {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    a.lerp(b, hi)
+}
+
+/// A ribbon along each river, at its water line. Tributaries join their parent along its
+/// ribbon edge (clipped there, so the two surfaces neither overlap nor leave a gap), and the
+/// parent gets whitewater just below the confluence.
 fn rivers_mesh(continent: &Continent) -> Mesh {
+    let rivers = &continent.rivers;
+    let mut all_rows: Vec<Vec<Row>> = rivers.iter().map(river_rows).collect();
+    for river in rivers {
+        let (RiverEnd::Junction(parent), Some(join)) = (river.end, river.points.last()) else {
+            continue;
+        };
+        let Some(rows) = all_rows.get_mut(parent) else {
+            continue;
+        };
+        let center = |row: &Row| ((row.left + row.right) / 2.).xz();
+        let Some(nearest) = (0..rows.len()).min_by(|&a, &b| {
+            center(&rows[a])
+                .distance(join.position.xz())
+                .total_cmp(&center(&rows[b]).distance(join.position.xz()))
+        }) else {
+            continue;
+        };
+        let reach = CONFLUENCE_REACH.0 + CONFLUENCE_REACH.1 * join.width;
+        let mut distance = 0.;
+        for k in nearest..rows.len() {
+            if k > nearest {
+                distance += center(&rows[k]).distance(center(&rows[k - 1]));
+            }
+            let mixing = CONFLUENCE_FOAM * (-distance / reach).exp();
+            if mixing < 0.02 {
+                break;
+            }
+            rows[k].foam = rows[k].foam.max(mixing);
+        }
+    }
+
     let mut builder = SurfaceBuilder::default();
-    for river in &continent.rivers {
+    for (river, rows) in rivers.iter().zip(&all_rows) {
         // Stop where the river reaches the water it flows into (its water line, or the ground
         // under it, at that level): overlapping translucent surfaces show as a darker patch.
         // Close to the sea level, the infinite sea surface already covers the carved channel.
@@ -367,90 +503,40 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             RiverEnd::Lake(lake) => (continent.lakes[lake].level, 1e-3),
             RiverEnd::Junction(_) => (f32::MIN, 0.),
         };
-        let points = &river.points;
-        let profile = river_profile(points);
-        let tangents: Vec<Vec2> = (0..points.len())
-            .map(|i| {
-                let previous = points[i.saturating_sub(RIVER_TANGENT_SPAN)].position;
-                let next = points[(i + RIVER_TANGENT_SPAN).min(points.len() - 1)].position;
-                (next - previous).xz().normalize_or_zero()
-            })
-            .collect();
-        // Offset each side, but never let an edge step backwards along the river: on bends
-        // tighter than the river is wide, the inner edge pinches instead of folding over.
-        let side = |sign: f32| -> Vec<Vec3> {
-            let mut edge: Vec<Vec3> = Vec::with_capacity(points.len());
-            for (i, (point, tangent)) in points.iter().zip(&tangents).enumerate() {
-                let normal = tangent.perp() * sign;
-                let half = point.width / 2. + RIVER_OVERLAP;
-                let center = point.position.with_y(profile[i].level) + Vec3::Y * RIVER_OFFSET;
-                let mut vertex = center + Vec3::new(normal.x, 0., normal.y) * half;
-                if let Some(&last) = edge.last() {
-                    let step = (point.position - points[i - 1].position).xz();
-                    let advance = (vertex - last).xz();
-                    if advance.dot(*tangent) <= 0. || advance.dot(step) <= 0. {
-                        vertex = last.with_y(vertex.y);
-                    }
-                }
-                edge.push(vertex);
-            }
-            edge
-        };
-        let (lefts, rights) = (side(-1.), side(1.));
-        let mut time = 0.;
-        let mut rows: Vec<Row> = Vec::with_capacity(points.len() + 8);
-        for (i, here) in profile.iter().enumerate() {
-            if i > 0 {
-                let run = (points[i].position - points[i - 1].position).xz().length();
-                time += run * 2. / (here.speed + profile[i - 1].speed);
-            }
-            let half = points[i].width / 2. + RIVER_OVERLAP;
-            rows.push(Row {
-                left: lefts[i],
-                right: rights[i],
-                half,
-                time,
-                speed: here.speed,
-                foam: here.foam,
-            });
-            // A fall: a steep row a little downstream, at the next pool's level.
-            if here.drop > 0. && i + 1 < points.len() {
-                let run = (points[i + 1].position - points[i].position).xz().length();
-                let t = (here.fall_run * here.drop / run.max(1e-3)).min(0.6);
-                let down = Vec3::Y * here.drop;
-                rows.push(Row {
-                    left: lefts[i].lerp(lefts[i + 1], t).with_y(lefts[i].y) - down,
-                    right: rights[i].lerp(rights[i + 1], t).with_y(rights[i].y) - down,
-                    half,
-                    time: time + 0.05,
-                    speed: here.speed.max(2.),
-                    foam: 1.,
-                });
-            }
-        }
-        // Tributaries stop where they enter their parent's channel (overlapping translucent
-        // surfaces look darker).
         let parent = match river.end {
-            RiverEnd::Junction(parent) => continent.rivers.get(parent),
+            RiverEnd::Junction(parent) => rivers.get(parent),
             _ => None,
         };
-        let in_parent = |center: Vec3| {
-            parent.is_some_and(|parent| {
-                parent.points.iter().any(|p| {
-                    p.position.xz().distance(center.xz()) < p.width / 2. + RIVER_OVERLAP * 0.5
-                })
-            })
+        let inside = |p: Vec3| parent.is_some_and(|parent| inside_ribbon(parent, p.xz()) > 0.);
+        // Each side stops where it enters the parent's ribbon; the other one goes on until it
+        // does too.
+        let (mut left_end, mut right_end): (Option<Vec3>, Option<Vec3>) = (None, None);
+        let Some(first) = rows.first() else {
+            continue;
         };
-        for pair in rows.windows(2) {
-            let center = (pair[1].left + pair[1].right) / 2.;
+        let mut previous = first.clone();
+        for row in &rows[1..] {
+            let center = (row.left + row.right) / 2.;
             let ground = continent.surface.bilinear(center.xz());
-            if center.y - RIVER_OFFSET <= end_level + margin
-                || ground <= end_level
-                || in_parent(center)
-            {
+            if center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level {
                 break;
             }
-            builder.ribbon_quad(&pair[0], &pair[1]);
+            let mut next = row.clone();
+            if let Some(parent) = parent {
+                if left_end.is_none() && inside(next.left) {
+                    left_end = Some(ribbon_entry(parent, previous.left, next.left));
+                }
+                if right_end.is_none() && inside(next.right) {
+                    right_end = Some(ribbon_entry(parent, previous.right, next.right));
+                }
+            }
+            next.left = left_end.unwrap_or(next.left);
+            next.right = right_end.unwrap_or(next.right);
+            builder.ribbon_quad(&previous, &next);
+            if left_end.is_some() && right_end.is_some() {
+                break;
+            }
+            previous = next;
         }
     }
     builder.build()
