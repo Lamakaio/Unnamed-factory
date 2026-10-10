@@ -25,6 +25,27 @@ fn main() {
             }
         }
     }
+    // Sharpest bends: radius of curvature relative to the channel width.
+    let mut tight = 0;
+    let mut worst = f32::MAX;
+    for river in &continent.rivers {
+        for w in river.points.windows(3) {
+            let (a, b, c) = (w[0].position.xz(), w[1].position.xz(), w[2].position.xz());
+            let (ab, bc) = (b - a, c - b);
+            if ab.length() < 1e-4 || bc.length() < 1e-4 { continue; }
+            let turn = ab.normalize().dot(bc.normalize()).clamp(-1., 1.).acos();
+            let radius = (ab.length() + bc.length()) / 2. / turn.max(1e-4) / w[1].width;
+            worst = worst.min(radius);
+            if radius < 1.0 {
+                tight += 1;
+                if radius < 0.5 {
+                    let k = river.points.iter().position(|p| p.position == w[1].position).unwrap();
+                    println!("  tight {radius:.2} at {k}/{} {:?} end {:?}", river.points.len(), w[1].position, river.end);
+                }
+            }
+        }
+    }
+    println!("bends tighter than 1 width: {tight}, tightest {worst:.2} widths");
     let mut slopes = Vec::new();
     let mut steep = Vec::new();
     for (r, river) in continent.rivers.iter().enumerate() {

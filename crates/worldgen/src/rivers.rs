@@ -181,6 +181,10 @@ pub fn extract_rivers(
             });
         }
 
+        // Meanders offset along the valley's normal fold over on bends tighter than their
+        // amplitude: relax every bend tighter than the channel can carry.
+        relax_bends(&mut meandered, &widths);
+
         let mut points: Vec<RiverPoint> = meandered
             .iter()
             .map(|&(position, i)| RiverPoint {
@@ -210,6 +214,14 @@ pub fn extract_rivers(
             }) {
                 let last = points.last_mut().unwrap();
                 last.position = nearest.position;
+                // The snap can kink the end: relax it again.
+                let mut path: Vec<(Vec3, usize)> =
+                    points.iter().enumerate().map(|(i, p)| (p.position, i)).collect();
+                let widths: Vec<f32> = points.iter().map(|p| p.width).collect();
+                relax_bends(&mut path, &widths);
+                for (point, (position, _)) in points.iter_mut().zip(path) {
+                    point.position = position;
+                }
             }
         }
         output_index.push(Some(rivers.len()));
@@ -229,6 +241,47 @@ pub fn extract_rivers(
         }
     }
     (rivers, valley)
+}
+
+/// Smallest radius of a river bend, relative to the channel width (and at least this many
+/// cells), so the channel and its banks never fold over themselves.
+const MIN_BEND_RADIUS: f32 = 1.2;
+const MIN_BEND_RADIUS_CELLS: f32 = 1.5;
+
+/// Move points of a polyline (`(position, index into widths)`, in cells) towards their
+/// neighbours' midpoint wherever it turns more sharply than [`MIN_BEND_RADIUS`] allows (a
+/// curvature-limited Laplacian smoothing). The ends stay put; heights are unchanged.
+fn relax_bends(path: &mut [(Vec3, usize)], widths: &[f32]) {
+    let n = path.len();
+    if n < 3 {
+        return;
+    }
+    for _ in 0..200 {
+        let mut moved = false;
+        for i in 1..n - 1 {
+            let (a, b, c) = (path[i - 1].0.xz(), path[i].0.xz(), path[i + 1].0.xz());
+            let (ab, bc) = (b - a, c - b);
+            let (la, lc) = (ab.length(), bc.length());
+            if la < 1e-4 || lc < 1e-4 {
+                path[i].0 = ((a + c) / 2.).extend(path[i].0.y).xzy();
+                moved = true;
+                continue;
+            }
+            let turn = (ab / la).dot(bc / lc).clamp(-1., 1.).acos();
+            // Radius of the circle through the three points: chord / (2 sin(turn / 2)) ~
+            // mean segment length / turn.
+            let radius = (la + lc) / 2. / turn.max(1e-4);
+            let min_radius = (MIN_BEND_RADIUS * widths[path[i].1]).max(MIN_BEND_RADIUS_CELLS);
+            if radius < min_radius {
+                let target = (a + c) / 2.;
+                path[i].0 = b.lerp(target, 0.5).extend(path[i].0.y).xzy();
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
 }
 
 /// Cell center as (x, height, z), in cells.

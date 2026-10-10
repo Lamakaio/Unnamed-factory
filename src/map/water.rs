@@ -30,13 +30,17 @@ const RIVER_OFFSET: f32 = 0.02;
 const RIVER_TANGENT_SPAN: usize = 2;
 /// Rivers steeper than this (water line slope) run in steps: pools between small falls.
 const CASCADE_SLOPE: f32 = 0.18;
-/// Step height of cascades, relative to the channel depth (the pools stay above the bed).
+/// Step height of cascades, relative to the channel depth (the pools stay above the bed),
+/// varied by up to ±45% per step.
 const CASCADE_STEP: f32 = 0.45;
 /// Pools keep this fraction of the natural slope (centred on the natural water line, so the
-/// water never strays far from the carved channel); the falls take the rest.
-const POOL_TILT: f32 = 0.35;
-/// Horizontal extent of a fall, relative to its drop.
-const FALL_RUN: f32 = 0.3;
+/// water never strays far from the carved channel), varied per pool; the falls take the rest.
+const POOL_TILT: (f32, f32) = (0.15, 0.6);
+/// Share of cascade stretches left as sloping chutes (1 to 3 points) between the pools.
+const CHUTE_SHARE: f32 = 0.35;
+/// Horizontal extent of a fall, relative to its drop (from nearly vertical to a slanted
+/// chute, varied per fall).
+const FALL_RUN: (f32, f32) = (0.2, 1.4);
 
 pub struct WaterPlugin;
 
@@ -249,11 +253,24 @@ struct ProfilePoint {
     level: f32,
     speed: f32,
     foam: f32,
-    /// Height of the fall right after this point (0 if none).
+    /// Height of the fall right after this point (0 if none), and its horizontal extent
+    /// relative to the drop.
     drop: f32,
+    fall_run: f32,
 }
 
-/// The water line of a river (in steps where steep, see [`POOL_TILT`]) and its flow.
+/// A deterministic pseudo-random value in 0..1 for a river point (and a salt).
+fn jitter(point: &RiverPoint, salt: u32) -> f32 {
+    let mut h = point.position.x.to_bits()
+        ^ point.position.z.to_bits().rotate_left(16)
+        ^ salt.wrapping_mul(0x9e37_79b9);
+    h = (h ^ (h >> 15)).wrapping_mul(0x85eb_ca6b);
+    h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
+    (h ^ (h >> 16)) as f32 / u32::MAX as f32
+}
+
+/// The water line of a river and its flow. Steep stretches run in irregular steps: pools (see
+/// [`POOL_TILT`]) between falls of varied height and slant, and sloping chutes.
 fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
     let n = points.len();
     // Slope of the natural water line, smoothed over a few points.
@@ -275,7 +292,12 @@ fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
             i += 1;
             continue;
         }
-        let step = CASCADE_STEP * points[i].depth;
+        if jitter(&points[i], 1) < CHUTE_SHARE {
+            i += 1 + (jitter(&points[i], 2) * 3.) as usize;
+            continue;
+        }
+        let step = CASCADE_STEP * points[i].depth * (0.55 + 0.9 * jitter(&points[i], 3));
+        let tilt = POOL_TILT.0 + (POOL_TILT.1 - POOL_TILT.0) * jitter(&points[i], 4);
         let top = points[i].position.y;
         let mut end = i;
         while end + 1 < n
@@ -291,7 +313,7 @@ fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
         }
         let mid = (top + points[end].position.y) / 2.;
         for (level, point) in levels[i..=end].iter_mut().zip(&points[i..=end]) {
-            *level = mid + POOL_TILT * (point.position.y - mid);
+            *level = mid + tilt * (point.position.y - mid);
         }
         if end + 1 < n {
             pool_ends.push(end);
@@ -322,6 +344,7 @@ fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
                 speed: (0.35 + 2.5 * slope[i].sqrt()).min(2.5) * narrow,
                 foam: rapids.max(below_fall),
                 drop: drops[i],
+                fall_run: FALL_RUN.0 + (FALL_RUN.1 - FALL_RUN.0) * jitter(&points[i], 5),
             }
         })
         .collect()
@@ -393,7 +416,7 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
             // A fall: a steep row a little downstream, at the next pool's level.
             if here.drop > 0. && i + 1 < points.len() {
                 let run = (points[i + 1].position - points[i].position).xz().length();
-                let t = (FALL_RUN * here.drop / run.max(1e-3)).min(0.45);
+                let t = (here.fall_run * here.drop / run.max(1e-3)).min(0.6);
                 let down = Vec3::Y * here.drop;
                 rows.push(Row {
                     left: lefts[i].lerp(lefts[i + 1], t).with_y(lefts[i].y) - down,
@@ -405,10 +428,26 @@ fn rivers_mesh(continent: &Continent) -> Mesh {
                 });
             }
         }
+        // Tributaries stop where they enter their parent's channel (overlapping translucent
+        // surfaces look darker).
+        let parent = match river.end {
+            RiverEnd::Junction(parent) => continent.rivers.get(parent),
+            _ => None,
+        };
+        let in_parent = |center: Vec3| {
+            parent.is_some_and(|parent| {
+                parent.points.iter().any(|p| {
+                    p.position.xz().distance(center.xz()) < p.width / 2. + RIVER_OVERLAP * 0.5
+                })
+            })
+        };
         for pair in rows.windows(2) {
             let center = (pair[1].left + pair[1].right) / 2.;
             let ground = continent.surface.bilinear(center.xz());
-            if center.y - RIVER_OFFSET <= end_level + margin || ground <= end_level {
+            if center.y - RIVER_OFFSET <= end_level + margin
+                || ground <= end_level
+                || in_parent(center)
+            {
                 break;
             }
             builder.ribbon_quad(&pair[0], &pair[1]);

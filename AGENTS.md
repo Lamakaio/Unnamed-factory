@@ -172,7 +172,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      their parent's polyline (`RiverEnd::Junction(parent)`, parent index < own index).
      Then Chaikin smoothing and resampling every 0.5 units. Width ∝ √discharge, depth
      ∝ discharge^0.4. Meanders where the valley is flat (wavelength ≈ 12 widths, amplitude in
-     widths × flatness, tapered at the ends). Water levels follow the terrain
+     widths × flatness, tapered at the ends); bends tighter than `MIN_BEND_RADIUS` widths
+     (where the meander offset would fold over, and at junction snaps) are relaxed
+     (`relax_bends`). Water levels follow the terrain
      (**breaching**, never filling), are never increasing downstream, and are finally clamped
      to the terrain under each point. Floodplains are flattened to water + 0.4 around
      meandering reaches (`lib.rs::flatten_floodplains`, soft edges). The final clamp
@@ -258,9 +260,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   translucent surfaces look darker). Ground under water is darkened at once (×0.6), so
   shallows don't read as dry sand. Water has `Pickable::IGNORE` and `NotShadowCaster`.
   - **River profile** (`river_profile`): where the water line is steeper than
-    `CASCADE_SLOPE` (0.18), it runs in steps: pools (keeping `POOL_TILT` of the slope,
-    centred on the natural line, at most `CASCADE_STEP` × depth high) with a steep fall row
-    between them. Single-point pools (very steep streams) stay ramps (continuous rapids).
+    `CASCADE_SLOPE` (0.18), it runs in irregular steps (per-point `jitter`): pools (keeping
+    a random `POOL_TILT` share of the slope, centred on the natural line, about
+    `CASCADE_STEP` × depth high) with a fall row between them (slant `FALL_RUN`), and
+    sloping chutes (`CHUTE_SHARE`). Single-point pools (very steep streams) stay ramps
+    (continuous rapids). Tributary ribbons stop inside their parent's channel.
     River vertices carry UV0 = (across, travel time of the water) and UV1 = (speed,
     whitewater: rapids and foam below falls).
   - **Sea field** (`map/sea.rs`, `Rgba16Float` per continent cell, binding 101–103): wave
