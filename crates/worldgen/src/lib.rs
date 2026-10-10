@@ -373,7 +373,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_of,
         &lake_levels,
     );
-    flatten_floodplains(size, &mut heights, &lake_of, &valley);
+    flatten_floodplains(size, &mut heights, &lake_of, &lake_levels, &valley);
     let (mouths, sediment, wetland) =
         mouths::shape_mouths(settings, noise, &shore, &mut heights, &mut rivers);
     // Deltas moved the shore.
@@ -487,14 +487,37 @@ fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
     }
 }
 
+/// Cells around a lake kept above its level by floodplain flattening.
+const LAKE_RIM: i64 = 2;
+
 /// Lower the valley floor to just above the water where rivers meander, so meanders have a
-/// flat floodplain to wind through.
+/// flat floodplain to wind through. Lake shores (within [`LAKE_RIM`] cells) stay above their
+/// lake's level, or the lake would spill (and its flat surface float over lower ground).
 fn flatten_floodplains(
     size: usize,
     heights: &mut [f32],
     lake_of: &[Option<u16>],
+    lake_levels: &[f32],
     valley: &[rivers::ValleyPoint],
 ) {
+    // Lowest height allowed per cell: the level of any lake nearby.
+    let mut floor = vec![f32::MIN; heights.len()];
+    for (i, lake) in lake_of.iter().enumerate() {
+        let Some(lake) = lake else {
+            continue;
+        };
+        let level = lake_levels[*lake as usize] + 0.05;
+        let (x, z) = ((i % size) as i64, (i / size) as i64);
+        for dz in -LAKE_RIM..=LAKE_RIM {
+            for dx in -LAKE_RIM..=LAKE_RIM {
+                let (nx, nz) = (x + dx, z + dz);
+                if nx >= 0 && nz >= 0 && nx < size as i64 && nz < size as i64 {
+                    let n = nz as usize * size + nx as usize;
+                    floor[n] = floor[n].max(level);
+                }
+            }
+        }
+    }
     for point in valley.iter().filter(|p| p.floodplain > 0.) {
         let radius = point.floodplain * 1.5 + 2.;
         let target = point.water_level + 0.4;
@@ -512,7 +535,8 @@ fn flatten_floodplains(
                 }
                 let distance = point.position.distance(Vec2::new(x as f32, z as f32));
                 let t = noise::smoothstep(radius * 0.4, radius, distance);
-                heights[i] = heights[i].min(target + (heights[i] - target) * t);
+                let lowered = target + (heights[i] - target) * t;
+                heights[i] = heights[i].min(lowered.max(floor[i]));
             }
         }
     }
