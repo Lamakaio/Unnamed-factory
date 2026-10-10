@@ -16,6 +16,11 @@ const MIN_BANK: f32 = 0.8;
 /// alias into a sawtooth on the mesh grid.
 const MAX_BANK_SLOPE: f32 = 0.8;
 const MAX_BANK: f32 = 3.;
+/// Mesh detail is needed from this far inside the channel edge (the bank's foot)...
+const BANK_INSET: f32 = 0.3;
+/// ...finest up to this far outside it, then at least this cell size on the rest of the bank.
+const WATER_LINE_BAND: f32 = 0.8;
+const OUTER_BANK_CELL: f32 = 0.2;
 /// Cell size of the segment lookup grid, in world units.
 const LOOKUP_CELL: f32 = 4.;
 
@@ -115,16 +120,42 @@ impl RiverLayer {
         wetness
     }
 
-    /// Mesh cell size wanted by the rivers overlapping `min..max`, if any.
+    /// Mesh cell size wanted by the rivers in `min..max`, if any: finest around the water line,
+    /// medium on the rest of the banks, coarser where the node only covers the channel bed
+    /// (under the water, a smooth bowl).
     pub fn detail_cell(&self, min: Vec2, max: Vec2) -> Option<f32> {
+        let center = (min + max) / 2.;
+        let radius = (max - min).length() / 2.;
         self.lookup
             .query_rect(min, max)
             .map(|id| &self.segments[id as usize])
-            .filter(|segment| {
+            .filter_map(|segment| {
                 let (s_min, s_max) = segment.bounds();
-                rects_overlap(min, max, s_min, s_max)
+                if !rects_overlap(min, max, s_min, s_max) {
+                    return None;
+                }
+                // Distance range from the river axis covered by the node.
+                let (a, b) = (segment.a.xz(), segment.b.xz());
+                let ab = b - a;
+                let u = ((center - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0., 1.);
+                let distance = center.distance(a + ab * u);
+                let (near, far) = ((distance - radius).max(0.), distance + radius);
+                let width = segment.width_a.lerp(segment.width_b, u);
+                let half = width / 2.;
+                if near > RiverSegment::reach(width) {
+                    return None;
+                }
+                // The water line and the foot of the bank (steepest) get the finest cells,
+                // the rest of the bank (easing into the terrain) medium ones.
+                let cell = if far > half - BANK_INSET && near < half + WATER_LINE_BAND {
+                    width / 6.
+                } else if far > half - BANK_INSET {
+                    (width / 3.).max(OUTER_BANK_CELL)
+                } else {
+                    width / 2.
+                };
+                Some(cell)
             })
-            .map(|segment| segment.width_a.min(segment.width_b) / 6.)
             .reduce(f32::min)
             .map(|cell| cell.max(MIN_CELL))
     }

@@ -226,8 +226,6 @@ fn fragment(
     fade = in.uv_b.y;
     let speed = max(length(velocity), 0.05);
     let dir = velocity / speed;
-    let side = vec2(-dir.y, dir.x);
-    let across = dot(p.xz, side);
     // Geometric slope of the surface: falls are steep.
     let face = normalize(cross(dpdx(p), dpdy(p)));
     let fall = smoothstep(0.35, 0.7, 1.0 - abs(face.y));
@@ -263,10 +261,15 @@ fn fragment(
     let froth = froth_sum * norm * 0.5 + 0.5;
     foam = crisp(1.0 - 0.55 * whitewater, froth);
     // Waterfalls: white falling streaks.
-    let falling = value_noise(vec2(across * 8.0, p.y * 3.0 + time * 5.0)) * 0.5 + 0.5;
-    let fall_streaks = crisp(0.6, falling);
+    // Streaks in world x and z both (no coordinates rotated with the flow: far from the origin
+    // they swing with small direction changes, striping the fall), so they are vertical
+    // whichever way the fall faces.
+    let falling = max(value_noise(vec2(p.x * 8.0, p.y * 3.0 + time * 5.0)),
+        value_noise(vec2(p.z * 8.0 + 31.0, p.y * 3.0 + time * 5.0))) * 0.5 + 0.5;
+    let fall_streaks = crisp(0.7, falling);
     // The lip and the foot of a fall are foamy.
-    let lip = crisp(0.85, fall) * crisp(0.5, value_noise(vec2(across * 6.0, time * 2.0)) * 0.5 + 0.5);
+    let lip = crisp(0.85, fall)
+        * crisp(0.5, value_noise(vec2(p.x + p.z, time * 0.4) * 6.0) * 0.5 + 0.5);
     foam = mix(foam, max(fall_streaks, lip), fall);
     crest = mix(crest, 1.0, fall);
     alpha = max(alpha, fall * 0.92);
