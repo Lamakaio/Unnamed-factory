@@ -139,6 +139,19 @@ impl TerrainHeights {
         water.max(edited)
     }
 
+    /// Height of the ground at `p` without river channels and springs carved (edits applied):
+    /// the surface lake levels are set on.
+    pub fn uncarved_height(&self, p: Vec2) -> f32 {
+        let mut height = self.base.surface.bicubic(p);
+        self.edits.apply(p, &mut height);
+        height
+    }
+
+    /// Lowest water level of the rivers whose channel or banks reach `p`, if any.
+    pub fn river_water(&self, p: Vec2) -> Option<f32> {
+        self.rivers.water_under(p)
+    }
+
     /// Whether an edit (a building foundation or a tool) changed the ground at `p`.
     pub fn edited(&self, p: Vec2) -> bool {
         self.edits.covers(p)

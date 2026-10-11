@@ -238,12 +238,16 @@ impl SurfaceBuilder {
 
 /// Lake surface grid step (world units).
 const LAKE_STEP: f32 = 0.25;
-/// Cells around a lake its surface may reach (over its shallow shore, and a little way into
-/// its inflows and outlet).
-const LAKE_REACH: i64 = 2;
+/// Cells around a lake its surface may reach (over its shallow shore and into its inflows; the
+/// basin's spill point bounds it anyway).
+const LAKE_REACH: i64 = 10;
+/// The lake floods the uncarved ground this much below its level (so it doesn't creep past its
+/// spill point), and river channels whose water is at most this much below it (inflows).
+const SPILL_MARGIN: f32 = 0.02;
+const INFLOW_DROP: f32 = 0.3;
 
-/// The lake surfaces, on a fine grid: from the lake's cells, the water floods the terrain as
-/// drawn (river channels carved) wherever it is below the level, without going further than
+/// The lake surfaces, on a fine grid: from the lake's cells, the water floods its basin (see
+/// `SPILL_MARGIN`, `INFLOW_DROP`), without going further than
 /// [`LAKE_REACH`] cells from the lake. Quads with a corner under water are drawn (the others
 /// are hidden under the shore anyway), so the shoreline follows the terrain closely and the
 /// water never spills over lower ground beyond the bank.
@@ -289,17 +293,26 @@ fn lakes_mesh(continent: &Continent, heights: &TerrainHeights) -> Mesh {
                     continue;
                 }
                 let p = at(x, z);
-                if heights.height(p) >= lake.level {
-                    continue;
-                }
-                wet[z * w + x] = true;
                 let g = c + lo;
-                if g.x >= 0
+                let in_lake = g.x >= 0
                     && g.y >= 0
                     && (g.x as i64) < size
                     && (g.y as i64) < size
-                    && continent.lake_of[g.y as usize * size as usize + g.x as usize] == Some(index)
-                {
+                    && continent.lake_of[g.y as usize * size as usize + g.x as usize] == Some(index);
+                // Under water: the ground without river channels below the level (the surface
+                // the level was set on, so the lake stops at its spill point), or a river
+                // channel at about the lake's level (inflows), not one past the spill point
+                // (outlets, left to the river's ribbon).
+                let basin = heights.uncarved_height(p) < lake.level - SPILL_MARGIN;
+                let inflow = heights.height(p) < lake.level
+                    && heights
+                        .river_water(p)
+                        .is_some_and(|water| water >= lake.level - INFLOW_DROP);
+                if !(in_lake && heights.height(p) < lake.level) && !basin && !inflow {
+                    continue;
+                }
+                wet[z * w + x] = true;
+                if in_lake {
                     seeds.push(z * w + x);
                 }
             }
@@ -728,12 +741,39 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
             RiverEnd::Lake(lake) => continent.lakes[lake].level,
             RiverEnd::Junction(_) => f32::MIN,
         };
-        let reached = rows.iter().position(|row| {
+        let mut rows = rows.to_vec();
+        // Outlets start in their lake (at its deepest point): invisible under the lake, fading
+        // in where they leave it.
+        let leave = rows
+            .iter()
+            .position(|row| {
+                !continent.world_to_cell(row.center().xz()).is_some_and(|(x, z)| {
+                    continent.lake_of[z * continent.size() + x].is_some()
+                })
+            })
+            .unwrap_or(0);
+        let mut rows_dropped = 0;
+        if leave > 0 {
+            let width = (rows[leave].left - rows[leave].right).length();
+            let length = RIVER_FADE.0 + RIVER_FADE.1 * width * 0.5;
+            let mut distance = 0.;
+            for k in (0..leave).rev() {
+                distance += rows[k].center().xz().distance(rows[k + 1].center().xz());
+                rows[k].fade = (1. - distance / length).max(0.);
+            }
+            // Drop the rows fully under the lake.
+            let first = (0..leave).rev().find(|&k| rows[k].fade <= 0.).unwrap_or(0);
+            rows_dropped = first;
+            rows.drain(..first);
+        }
+        let leave = leave.saturating_sub(rows_dropped);
+        // (Searched from where the river leaves its own lake: a lake's bed may lie below the
+        // water it flows on into.)
+        let reached = rows[leave..].iter().position(|row| {
             let bank = |p: Vec3| continent.surface.bilinear(p.xz()) <= end_level + 0.02;
             let deep = continent.surface.bilinear(row.center().xz()) < end_level - OPEN_WATER_DEPTH;
             (bank(row.left) && bank(row.right)) || deep
         });
-        let mut rows = rows.to_vec();
         // Never below the sea (delta branches carry on over the sea floor: no falls into it).
         if river.end == RiverEnd::Sea {
             let floor = end_level - 0.1 + RIVER_OFFSET;
@@ -743,7 +783,7 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
             }
         }
         if let Some(start) = reached {
-            fade_out(&mut rows, start);
+            fade_out(&mut rows, start + leave);
         }
         if rows.len() < 2 {
             continue;

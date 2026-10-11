@@ -5,10 +5,12 @@
 //! level), the lake has no outlet (endorheic): it shrinks to the size its inflow sustains,
 //! leaving a salt flat on the dry bed around it.
 
-use bevy_math::UVec2;
+use std::collections::VecDeque;
+
+use bevy_math::{UVec2, Vec2, Vec3};
 
 use crate::{
-    Lake,
+    Lake, River, RiverEnd, RiverPoint, WorldgenSettings,
     flow::{FlowGraph, neighbours, priority_flood},
 };
 
@@ -147,4 +149,99 @@ pub fn find_lakes(
         });
     }
     (lakes, lake_of, salt)
+}
+
+/// Spacing of river polyline points (world units), as in `rivers`.
+const SPACING: f32 = 0.5;
+
+/// Lead every lake's outlet river back through the lake to its deepest point (along lake
+/// cells), at the lake's level: its channel is then carved through the lake bed, so the outlet
+/// clearly leaves the lake rather than starting at its edge.
+pub fn extend_outlets(
+    settings: &WorldgenSettings,
+    heights: &[f32],
+    lakes: &[Lake],
+    lake_of: &[Option<u16>],
+    rivers: &mut [River],
+) {
+    let size = settings.size;
+    let half = (size / 2) as f32;
+    let to_world = |i: usize| (Vec2::new((i % size) as f32, (i / size) as f32) - half) * settings.cell_size;
+    for river in rivers.iter_mut() {
+        let Some(first) = river.points.first().copied() else {
+            continue;
+        };
+        let cell = (Vec2::new(first.position.x, first.position.z) / settings.cell_size + half).round();
+        if cell.x < 0. || cell.y < 0. || cell.x >= size as f32 || cell.y >= size as f32 {
+            continue;
+        }
+        let source = cell.y as usize * size + cell.x as usize;
+        // The lake right next to the source, if the river doesn't flow back into it.
+        let Some((entry, lake)) = std::iter::once((source, 0.))
+            .chain(neighbours(size, source))
+            .find_map(|(n, _)| lake_of[n].map(|lake| (n, lake as usize)))
+        else {
+            continue;
+        };
+        if river.end == RiverEnd::Lake(lake) || lakes[lake].endorheic {
+            continue;
+        }
+        // Path through the lake's cells from the entry to the deepest cell (breadth first).
+        let deepest = lakes[lake]
+            .cells
+            .iter()
+            .map(|c| c.y as usize * size + c.x as usize)
+            .min_by(|&a, &b| heights[a].total_cmp(&heights[b]))
+            .unwrap_or(entry);
+        let mut previous = vec![usize::MAX; 0];
+        previous.resize(heights.len(), usize::MAX);
+        let mut queue = VecDeque::from([entry]);
+        previous[entry] = entry;
+        while let Some(i) = queue.pop_front() {
+            if i == deepest {
+                break;
+            }
+            for (n, _) in neighbours(size, i) {
+                if previous[n] == usize::MAX && lake_of[n] == Some(lake as u16) {
+                    previous[n] = i;
+                    queue.push_back(n);
+                }
+            }
+        }
+        if previous[deepest] == usize::MAX {
+            continue;
+        }
+        // From the deepest cell to the entry, then on to the source.
+        let mut path = vec![to_world(deepest)];
+        let mut i = deepest;
+        while i != entry {
+            i = previous[i];
+            path.push(to_world(i));
+        }
+        path.push(Vec2::new(first.position.x, first.position.z));
+        // Smooth the cell staircase, keeping both ends.
+        for _ in 0..3 {
+            let mut smooth = path.clone();
+            for k in 1..path.len() - 1 {
+                smooth[k] = (path[k - 1] + path[k] * 2. + path[k + 1]) / 4.;
+            }
+            path = smooth;
+        }
+        // Resample, ending just before the source.
+        let mut points = Vec::new();
+        for pair in path.windows(2) {
+            let length = pair[0].distance(pair[1]);
+            let steps = (length / SPACING).ceil().max(1.) as usize;
+            for k in 0..steps {
+                let p = pair[0].lerp(pair[1], k as f32 / steps as f32);
+                points.push(RiverPoint {
+                    position: Vec3::new(p.x, first.position.y, p.y),
+                    width: first.width,
+                    depth: first.depth,
+                });
+            }
+        }
+        points.extend(river.points.iter().copied());
+        river.points = points;
+    }
 }

@@ -177,8 +177,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      lowers each level to its basin's spill point on the fine surface (Priority-Flood), and
      inflows / outlets meet it. Endorheic only if every cell within `DRY_RADIUS` is dry, the
      inflow is low, and the basin is deep (`ENDORHEIC_BARRIER`) or near sea level (rare).
-     Lake surfaces (`water.rs::lakes_mesh`) are a 0.25 grid flood-filled from the lake's
-     cells over the drawn terrain below the level, within `LAKE_REACH` cells.
+     Outlets are led back through their lake to its deepest point (`extend_outlets`), so
+     their channel is carved through the bed; drawn, they fade in where they leave the lake.
+     River levels in lakes clamp to the lake surface, not the bed. Lake surfaces
+     (`water.rs::lakes_mesh`) are a 0.25 grid flood-filled from the lake's cells: over the
+     uncarved ground below the level (it stops at the spill point) and over river channels at
+     about the lake's level (inflows), not down outlets.
   4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
      ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
      lake) upstream, the main stem following the largest donor, and tributaries end exactly on

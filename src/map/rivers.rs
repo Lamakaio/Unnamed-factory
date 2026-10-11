@@ -123,6 +123,23 @@ impl RiverLayer {
         wetness
     }
 
+    /// Lowest water level of the rivers whose channel or banks reach `p`, if any.
+    pub fn water_under(&self, p: Vec2) -> Option<f32> {
+        let mut lowest: Option<f32> = None;
+        for &id in self.lookup.query_point(p) {
+            let segment = &self.segments[id as usize];
+            let (a, b) = (segment.a.xz(), segment.b.xz());
+            let ab = b - a;
+            let u = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0., 1.);
+            let width = segment.width_a.lerp(segment.width_b, u);
+            if p.distance(a + ab * u) < RiverSegment::reach(width) {
+                let water = segment.a.y.lerp(segment.b.y, u);
+                lowest = Some(lowest.map_or(water, |l| l.min(water)));
+            }
+        }
+        lowest
+    }
+
     /// How close `p` is to a river's water: 1 at the channel edge (and inside), 0 from
     /// `margin` beyond it.
     pub fn near_water(&self, p: Vec2, margin: f32) -> f32 {

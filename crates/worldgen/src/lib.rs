@@ -382,6 +382,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_of,
         &lake_levels,
     );
+    lakes::extend_outlets(settings, &heights, &lakes, &lake_of, &mut rivers);
     flatten_floodplains(size, &mut heights, &lake_of, &lake_levels, &valley);
     let (mouths, sediment, wetland) =
         mouths::shape_mouths(settings, noise, &shore, &mut heights, &mut rivers);
@@ -419,7 +420,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &grid(calm),
     );
     settle_lakes(settings, &surface, &mut lakes, &lake_of, &mut rivers);
-    clamp_rivers_to_terrain(&surface, &mut rivers);
+    clamp_rivers_to_terrain(settings, &surface, &lakes, &lake_of, &mut rivers);
     lap("detail", &mut timings);
 
     Continent {
@@ -477,8 +478,24 @@ fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16
 
 /// Keep every river's water line at or below the surface under it, across the whole channel
 /// width (smoothing and meanders can move points over lower ground, and coasts are low), and
-/// never flowing uphill.
-fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
+/// never flowing uphill. In lakes, the lake surface stands for the terrain (outlets run
+/// through their lake to its deepest point).
+fn clamp_rivers_to_terrain(
+    settings: &WorldgenSettings,
+    surface: &Heightmap,
+    lakes: &[Lake],
+    lake_of: &[Option<u16>],
+    rivers: &mut [River],
+) {
+    let size = settings.size;
+    let half = (size / 2) as f32;
+    let lake_level = |p: Vec2| {
+        let c = (p / settings.cell_size + half).round();
+        (c.x >= 0. && c.y >= 0. && c.x < size as f32 && c.y < size as f32)
+            .then(|| lake_of[c.y as usize * size + c.x as usize])
+            .flatten()
+            .map(|lake| lakes[lake as usize].level)
+    };
     for river in rivers {
         let mut previous = f32::MAX;
         for i in 0..river.points.len() {
@@ -491,6 +508,7 @@ fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
                 .map(|side| surface.bilinear(center + across * side * points[i].width))
                 .into_iter()
                 .fold(f32::MAX, f32::min);
+            let terrain = lake_level(center).map_or(terrain, |level| terrain.max(level));
             let point = &mut river.points[i];
             point.position.y = point.position.y.min(terrain).min(previous);
             previous = point.position.y;
