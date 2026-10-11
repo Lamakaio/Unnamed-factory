@@ -218,9 +218,8 @@ pub struct Continent {
     pub heights: Vec<f32>,
     /// Fine terrain surface (with gullies): what the game renders.
     pub surface: Heightmap,
-    /// Water level of the basins of `surface` filled to their spill point (Priority-Flood):
-    /// where it stands above the ground at a lake's level, that ground is under the lake.
-    pub water: Heightmap,
+    /// Which lake covers each sample of `surface` (see [`LakeMask`]).
+    pub lake_mask: LakeMask,
     /// Upstream drainage area of each cell, in cells.
     pub drainage: Vec<f32>,
     /// Lake of each cell, as an index in `lakes`.
@@ -280,16 +279,9 @@ pub struct RiverPoint {
 }
 
 impl Continent {
-    /// The level of the lake whose water covers `p`, if any (see [`under_lake`]).
+    /// The level of the lake whose water covers `p`, if any (see [`LakeMask`]).
     pub fn lake_over(&self, p: Vec2) -> Option<f32> {
-        under_lake(
-            &self.settings,
-            &self.surface,
-            &self.water,
-            &self.lakes,
-            &self.lake_of,
-            p,
-        )
+        self.lake_mask.at(p).map(|lake| self.lakes[lake].level)
     }
 
     pub fn size(&self) -> usize {
@@ -428,21 +420,21 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         values,
     };
     let calm = calm_map(settings, &rivers, &lake_of);
-    let mut surface = detail::refine(
+    let surface = detail::refine(
         settings,
         &grid(heights.clone()),
         &grid(ruggedness.clone()),
         &grid(calm),
     );
-    let water = settle_lakes(settings, &mut surface, &mut lakes, &lake_of, &mut rivers);
-    clamp_rivers_to_terrain(settings, &surface, &water, &lakes, &lake_of, &mut rivers);
+    let lake_mask = settle_lakes(settings, &surface, &mut lakes, &lake_of, &mut rivers);
+    clamp_rivers_to_terrain(&surface, &lake_mask, &lakes, &mut rivers);
     lap("detail", &mut timings);
 
     Continent {
         settings: settings.clone(),
         heights,
         surface,
-        water,
+        lake_mask,
         drainage,
         lake_of,
         salt_flat,
@@ -492,49 +484,11 @@ fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16
     calm
 }
 
-/// Lake beds stay at least this far below their lake's level on the fine surface.
-const LAKE_BED_MARGIN: f32 = 0.05;
-/// Cells around a point searched for the lake whose water covers it.
-const LAKE_SEARCH: i64 = 10;
-
-/// The level of the lake covering `p`, if any: the basins' `water` stands above the ground
-/// there, at the level of a lake nearby (the lake's flooded basin, not just its cells).
-fn under_lake(
-    settings: &WorldgenSettings,
-    surface: &Heightmap,
-    water: &Heightmap,
-    lakes: &[Lake],
-    lake_of: &[Option<u16>],
-    p: Vec2,
-) -> Option<f32> {
-    let level = water.bilinear(p);
-    if level <= surface.bilinear(p) + 1e-3 {
-        return None;
-    }
-    let size = settings.size as i64;
-    let c = (p / settings.cell_size + (settings.size / 2) as f32).round();
-    let (x, z) = (c.x as i64, c.y as i64);
-    for r in 0..=LAKE_SEARCH {
-        for dz in -r..=r {
-            for dx in -r..=r {
-                if dx.abs().max(dz.abs()) != r {
-                    continue;
-                }
-                let (nx, nz) = (x + dx, z + dz);
-                if nx < 0 || nz < 0 || nx >= size || nz >= size {
-                    continue;
-                }
-                if let Some(lake) = lake_of[(nz * size + nx) as usize] {
-                    let lake = &lakes[lake as usize];
-                    if (lake.level - level).abs() < 0.02 {
-                        return Some(lake.level);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
+/// Water shallower than this doesn't count as under a lake (as for the lake surfaces drawn: a
+/// flat valley a hair below the level would otherwise belong to the lake far beyond its shore).
+pub const LAKE_MIN_DEPTH: f32 = 0.02;
+/// A lake flooding more than this many times its cells' area on the fine surface leaked.
+const MAX_LAKE_GROWTH: f32 = 4.;
 
 /// Keep every river's water line at or below the surface under it, across the whole channel
 /// width (smoothing and meanders can move points over lower ground, and coasts are low), and
@@ -542,14 +496,12 @@ fn under_lake(
 /// nearby lake's level), rivers are at the lake's surface (outlets run through their lake to
 /// its deepest point, and leave it at its level).
 fn clamp_rivers_to_terrain(
-    settings: &WorldgenSettings,
     surface: &Heightmap,
-    water: &Heightmap,
+    lake_mask: &LakeMask,
     lakes: &[Lake],
-    lake_of: &[Option<u16>],
     rivers: &mut [River],
 ) {
-    let lake_level = |p: Vec2| under_lake(settings, surface, water, lakes, lake_of, p);
+    let lake_level = |p: Vec2| lake_mask.at(p).map(|lake| lakes[lake].level);
     for river in rivers {
         let mut previous = f32::MAX;
         // An outlet leaves its lake at the lake's level, then follows the ground down (its
@@ -599,18 +551,40 @@ const MIN_LAKE_CELLS: usize = 20;
 /// Cells around a lake kept above its level by floodplain flattening.
 const LAKE_RIM: i64 = 3;
 
+/// Which lake covers each sample of the fine surface: the lake's extent, flooded from its cells
+/// over the ground at least [`LAKE_MIN_DEPTH`] below its level (bounded by its spill point). The
+/// one definition of "under a lake", for rivers and for drawing the lakes.
+pub struct LakeMask {
+    pub size: usize,
+    /// Sample spacing (world units), as for the fine surface.
+    pub cell: f32,
+    /// Lake index per sample (`u16::MAX`: none).
+    pub lakes: Vec<u16>,
+}
+
+impl LakeMask {
+    /// The lake covering the sample nearest to `p`, if any.
+    pub fn at(&self, p: Vec2) -> Option<usize> {
+        let g = (p / self.cell + (self.size / 2) as f32).round();
+        if g.x < 0. || g.y < 0. || g.x >= self.size as f32 || g.y >= self.size as f32 {
+            return None;
+        }
+        let lake = self.lakes[g.y as usize * self.size + g.x as usize];
+        (lake != u16::MAX).then_some(lake as usize)
+    }
+}
+
 /// The final shore of each lake: its level is the spill point of its basin on the fine surface
-/// (the detail added after lakes are found may have moved the banks; lakes found apart on the
-/// coarse grid that share a basin get its one level), and the rivers flowing into and out of
-/// it meet that level. Endorheic lakes keep their (lower) level. Returns the basins' water
-/// level.
+/// (the detail added after lakes are found may have moved the banks), its extent is flooded on
+/// the fine surface (see [`LakeMask`]), and the rivers flowing into and out of it meet that
+/// level. Endorheic lakes keep their (lower) level.
 fn settle_lakes(
     settings: &WorldgenSettings,
-    surface: &mut Heightmap,
+    surface: &Heightmap,
     lakes: &mut [Lake],
     lake_of: &[Option<u16>],
     rivers: &mut [River],
-) -> Heightmap {
+) -> LakeMask {
     let size = settings.size;
     let fine = surface.size;
     let lake_at = |x: usize, z: usize| {
@@ -621,35 +595,65 @@ fn settle_lakes(
         }
         lake_of[cell.y as usize * size + cell.x as usize]
     };
-    // The fine detail may have raised small ridges inside a lake, splitting it into basins at
-    // different levels: keep its bed under its (coarse) level, so it is one basin.
-    for z in 0..fine {
-        for x in 0..fine {
-            if let Some(lake) = lake_at(x, z) {
-                let value = &mut surface.values[z * fine + x];
-                *value = value.min(lakes[lake as usize].level - LAKE_BED_MARGIN);
-            }
-        }
-    }
     // Water surface of the fine surface's basins: each lake's highest is its spill point.
-    let sea: Vec<bool> = surface.values.iter().map(|&h| h <= 0.).collect();
-    let water = Heightmap {
-        size: fine,
-        cell: surface.cell,
-        values: flow::priority_flood(fine, &surface.values, &sea, 0.),
-    };
-    let mut spill = vec![f32::MIN; lakes.len()];
+    // The sea: below sea level and not in a lake (a lake's bed may lie below sea level, behind
+    // a barrier).
+    let sea: Vec<bool> = (0..fine * fine)
+        .map(|i| surface.values[i] <= 0. && lake_at(i % fine, i / fine).is_none())
+        .collect();
+    let water = flow::priority_flood(fine, &surface.values, &sea, 0.);
+    // The level: the water at the lake's deepest point (its basin's spill point).
+    let mut deepest = vec![(f32::MAX, f32::MIN); lakes.len()];
     for z in 0..fine {
         for x in 0..fine {
             if let Some(lake) = lake_at(x, z) {
-                let lake = lake as usize;
-                spill[lake] = spill[lake].max(water.values[z * fine + x]);
+                let i = z * fine + x;
+                let entry = &mut deepest[lake as usize];
+                if surface.values[i] < entry.0 {
+                    *entry = (surface.values[i], water[i]);
+                }
             }
         }
     }
-    for (lake, spill) in lakes.iter_mut().zip(spill) {
+    for (lake, (_, spill)) in lakes.iter_mut().zip(deepest) {
         if spill > f32::MIN && !lake.endorheic {
             lake.level = spill;
+        }
+    }
+    // Each lake's extent: flooded from its cells over the ground below its level.
+    let mut mask = vec![u16::MAX; fine * fine];
+    let mut stack = Vec::new();
+    let mut flooded = vec![0usize; lakes.len()];
+    let below = |i: usize, lake: usize| surface.values[i] < lakes[lake].level - LAKE_MIN_DEPTH;
+    for i in 0..fine * fine {
+        if let Some(lake) = lake_at(i % fine, i / fine)
+            && below(i, lake as usize)
+            && mask[i] == u16::MAX
+        {
+            mask[i] = lake;
+            stack.push(i);
+            while let Some(i) = stack.pop() {
+                flooded[lake as usize] += 1;
+                let (x, z) = (i % fine, i / fine);
+                for (nx, nz) in [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)] {
+                    let n = nz * fine + nx;
+                    if nx < fine && nz < fine && mask[n] == u16::MAX && below(n, lake as usize) {
+                        mask[n] = lake;
+                        stack.push(n);
+                    }
+                }
+            }
+        }
+    }
+    // The spill point bounds every flood: a lake much larger than its cells means it leaked.
+    let samples_per_cell = (settings.cell_size / surface.cell).powi(2);
+    for (index, lake) in lakes.iter().enumerate() {
+        let cells = lake.cells.len() as f32 * samples_per_cell;
+        if flooded[index] as f32 > cells * MAX_LAKE_GROWTH {
+            log::warn!(
+                "Lake {index} floods {:.0}× its cells on the fine surface: it leaked",
+                flooded[index] as f32 / cells
+            );
         }
     }
     // Rivers meet the lakes at their level.
@@ -679,7 +683,11 @@ fn settle_lakes(
             }
         }
     }
-    water
+    LakeMask {
+        size: fine,
+        cell: surface.cell,
+        lakes: mask,
+    }
 }
 
 /// Lower the valley floor to just above the water where rivers meander, so meanders have a

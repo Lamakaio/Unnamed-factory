@@ -179,13 +179,16 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      inflow is low, and the basin is deep (`ENDORHEIC_BARRIER`) or near sea level (rare).
      Rivers are led through their lake to its deepest point at the lake's level, outlets
      from it and inflows to it (`extend_through_lakes`), so their channels are carved
-     through the bed; drawn, they fade at the shore (`OUTLET_FADE`). Under a lake means
-     where `Continent::water` (the fine surface's basins filled by Priority-Flood, kept by
-     `settle_lakes`, which also keeps lake beds under their level so a lake is one basin)
-     stands over the ground at a nearby lake's level (`Continent::lake_over`): rivers there
-     are at the lake's level. Lake surfaces (`water.rs::lakes_mesh`) are a 0.25 grid
-     flood-filled from the lake's cells over the uncarved ground below the level; reaching
-     `LAKE_REACH` logs a warning (the spill point should stop the flood first).
+     through the bed; drawn, they stay visible ~1 unit past the shore, then fade
+     (`LAKE_FADE_INSIDE`, `OUTLET_FADE`), only at their own lakes. `settle_lakes` (after the
+     fine detail) sets each lake's level to the spill point of its deepest point's basin on
+     the fine surface (Priority-Flood; lake beds below sea level are not sea) and floods its
+     extent from its cells over the fine samples ≥ `LAKE_MIN_DEPTH` below the level:
+     `Continent::lake_mask` (`LakeMask`), the one definition of "under a lake"
+     (`Continent::lake_over`) for river levels (at the lake's level there, also across
+     their width), river fades and lake surfaces (`water.rs::lakes_mesh`: the mask widened
+     by `SHORE_MARGIN` samples, rounded). The terrain mesh is fine (`SHORE_CELL`) within
+     `SHORE_REACH` cells of lake edges.
    - **Limits that normal worlds should not hit log a warning** (lake flood reach, river bend
      relaxation rounds, tributaries that never cross their parent's edge, lab screenshot
      timeout). Treat such a warning as a bug to fix, not noise.

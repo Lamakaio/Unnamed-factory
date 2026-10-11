@@ -139,15 +139,6 @@ impl TerrainHeights {
         water.max(edited)
     }
 
-    /// Height of the ground at `p` without river channels and springs carved (edits applied):
-    /// the surface lake levels are set on.
-    pub fn uncarved_height(&self, p: Vec2) -> f32 {
-        let mut height = self.base.surface.bicubic(p);
-        self.edits.apply(p, &mut height);
-        height
-    }
-
-
     /// Whether an edit (a building foundation or a tool) changed the ground at `p`.
     pub fn edited(&self, p: Vec2) -> bool {
         self.edits.covers(p)
@@ -163,6 +154,7 @@ impl TerrainHeights {
             self.rivers.detail_cell(min, max),
             self.springs.detail_cell(min, max),
             self.edits.detail_cell(min, max),
+            self.base.has_shore(min, max).then_some(SHORE_CELL),
         ]
         .into_iter()
         .flatten()
@@ -188,6 +180,11 @@ fn gradient(p: Vec2, height: impl Fn(Vec2) -> f32) -> Vec2 {
     ) / (2. * NORMAL_EPSILON)
 }
 
+/// Cells around a lake's edge meshed finely (the shoreline is where the water meets the mesh),
+/// and the mesh cell size there.
+const SHORE_REACH: i64 = 2;
+const SHORE_CELL: f32 = 0.15;
+
 /// The continent's fine surface and lake mask, with a max-curvature pyramid used
 /// to decide the mesh resolution needed to approximate the surface.
 ///
@@ -196,6 +193,12 @@ struct BaseGrid {
     surface: Heightmap,
     /// 1 on lake cells, 0 elsewhere (per continent cell).
     lakes: Heightmap,
+    /// Lake shores: cells within [`SHORE_REACH`] of a lake's edge, as a summed-area table
+    /// (`(size + 1)²`, row-major) for counting them over any rectangle.
+    shore_sums: Vec<u32>,
+    /// Continent cells per side and cell size.
+    cells: usize,
+    cell_size: f32,
     /// `curvature[level]` has `size >> level` texels per side; each texel is the maximum
     /// absolute second difference (world units) over the surface samples it covers.
     curvature: Vec<Vec<f32>>,
@@ -240,11 +243,73 @@ impl BaseGrid {
             curvature.push(next);
         }
 
+        // Lake shores: lake cells next to land and land next to lakes, widened.
+        let n = continent.size();
+        let lake = |x: i64, z: i64| {
+            x >= 0
+                && z >= 0
+                && (x as usize) < n
+                && (z as usize) < n
+                && continent.lake_of[z as usize * n + x as usize].is_some()
+        };
+        let mut edge = vec![false; n * n];
+        for z in 0..n as i64 {
+            for x in 0..n as i64 {
+                let here = lake(x, z);
+                if (-1..=1).any(|dz| (-1..=1).any(|dx| lake(x + dx, z + dz) != here)) {
+                    edge[z as usize * n + x as usize] = true;
+                }
+            }
+        }
+        let mut shore = vec![false; n * n];
+        for z in 0..n as i64 {
+            for x in 0..n as i64 {
+                if !edge[z as usize * n + x as usize] {
+                    continue;
+                }
+                for dz in -SHORE_REACH..=SHORE_REACH {
+                    for dx in -SHORE_REACH..=SHORE_REACH {
+                        let (nx, nz) = (x + dx, z + dz);
+                        if nx >= 0 && nz >= 0 && (nx as usize) < n && (nz as usize) < n {
+                            shore[nz as usize * n + nx as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut shore_sums = vec![0u32; (n + 1) * (n + 1)];
+        for z in 0..n {
+            for x in 0..n {
+                shore_sums[(z + 1) * (n + 1) + x + 1] = shore[z * n + x] as u32
+                    + shore_sums[z * (n + 1) + x + 1]
+                    + shore_sums[(z + 1) * (n + 1) + x]
+                    - shore_sums[z * (n + 1) + x];
+            }
+        }
+
         Self {
             surface,
             lakes,
             curvature,
+            shore_sums,
+            cells: n,
+            cell_size: continent.settings.cell_size,
         }
+    }
+
+    /// Whether a lake shore overlaps `min..max`.
+    fn has_shore(&self, min: Vec2, max: Vec2) -> bool {
+        let n = self.cells as i64;
+        let to_cell = |p: Vec2| (p / self.cell_size + (n / 2) as f32).round().as_i64vec2();
+        let (lo, hi) = (
+            to_cell(min).max(bevy::math::I64Vec2::ZERO),
+            to_cell(max).min(bevy::math::I64Vec2::splat(n - 1)),
+        );
+        if lo.x > hi.x || lo.y > hi.y {
+            return false;
+        }
+        let at = |x: i64, z: i64| self.shore_sums[(z * (n + 1) + x) as usize];
+        at(hi.x + 1, hi.y + 1) + at(lo.x, lo.y) > at(lo.x, hi.y + 1) + at(hi.x + 1, lo.y)
     }
 
     fn max_curvature(&self, min: Vec2, max: Vec2) -> f32 {

@@ -17,6 +17,13 @@ fn main() {
         let size = c.size();
         let salt = c.salt_flat.iter().filter(|&&s| s).count();
         println!("seed {seed}: {} lakes, {salt} salt flat cells", c.lakes.len());
+        // How much of each lake's cells its fine extent covers, and how far beyond.
+        for (l, lake) in c.lakes.iter().enumerate() {
+            let covered = lake.cells.iter().filter(|cell| c.lake_mask.at(c.cell_to_world(cell.x as usize, cell.y as usize)) == Some(l)).count();
+            let extent = c.lake_mask.lakes.iter().filter(|&&m| m as usize == l).count() as f32
+                * (c.lake_mask.cell / c.settings.cell_size).powi(2);
+            println!("  lake {l}: extent {extent:.0} cells for {} cells ({covered} covered)", lake.cells.len());
+        }
         for (l, lake) in c.lakes.iter().enumerate() {
             let center = lake.cells.iter().map(|p| p.as_vec2()).sum::<Vec2>() / lake.cells.len() as f32;
             let i = center.y as usize * size + center.x as usize;
