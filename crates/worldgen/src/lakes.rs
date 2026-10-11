@@ -20,6 +20,8 @@ const MIN_DEPTH: f32 = 0.4;
 /// drier, none where it rains twice that): lakes whose inflow is less are endorheic.
 const EVAPORATION: f32 = 1.5;
 const DRY_RAIN: f32 = 0.6;
+/// Cells around a lake that must all be dry for it to lose its outlet.
+const DRY_RADIUS: i64 = 4;
 /// Smallest endorheic lake kept (cells); below, the basin is only a salt flat.
 const MIN_ENDORHEIC_CELLS: usize = 8;
 
@@ -79,8 +81,23 @@ pub fn find_lakes(
     for cells in regions {
         let spill = water[cells[0]];
         let inflow = cells.iter().map(|&i| area[i]).fold(0., f32::max);
-        let rain_here = cells.iter().map(|&i| rain[i]).sum::<f32>() / cells.len() as f32;
-        let evaporation = EVAPORATION * (2. - rain_here / DRY_RAIN).max(0.);
+        // Only where it is dry all around: the wettest cell near the lake decides.
+        let mut wettest: f32 = 0.;
+        for &i in &cells {
+            let (x, z) = ((i % size) as i64, (i / size) as i64);
+            for dz in -DRY_RADIUS..=DRY_RADIUS {
+                for dx in -DRY_RADIUS..=DRY_RADIUS {
+                    let (nx, nz) = (x + dx, z + dz);
+                    if nx >= 0 && nz >= 0 && nx < size as i64 && nz < size as i64 {
+                        let n = nz as usize * size + nx as usize;
+                        if !base_level[n] {
+                            wettest = wettest.max(rain[n]);
+                        }
+                    }
+                }
+            }
+        }
+        let evaporation = EVAPORATION * (2. - wettest / DRY_RAIN).max(0.);
         let sustained = (inflow / evaporation.max(1e-6)).min(usize::MAX as f32 / 2.) as usize;
         let (level, lake_cells, endorheic) = if sustained >= cells.len() {
             (spill, cells, false)

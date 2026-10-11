@@ -174,7 +174,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      where drier) are endorheic: they shrink to what they sustain, leave salt flats
      (`Continent::salt_flat`, ground_c.g), and are sinks for river routing. Floodplains keep
      lake shores above their level (`LAKE_RIM`); after the fine detail, `settle_lakes`
-     lowers each level to its lowest bank on the fine surface, and inflows / outlets meet it.
+     lowers each level to its basin's spill point on the fine surface (Priority-Flood), and
+     inflows / outlets meet it. Endorheic only if every cell within `DRY_RADIUS` is dry.
+     Lake surfaces (`water.rs::lakes_mesh`) are a 0.25 grid flood-filled from the lake's
+     cells over the drawn terrain below the level, within `LAKE_REACH` cells.
   4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
      ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
      lake) upstream, the main stem following the largest donor, and tributaries end exactly on

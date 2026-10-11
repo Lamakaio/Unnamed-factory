@@ -16,6 +16,7 @@ use worldgen::{Continent, River, RiverEnd, RiverPoint};
 
 use super::{
     Map,
+    heights::TerrainHeights,
     springs::{SPOUT_HEIGHT, Spring, SpringKind},
 };
 use crate::{
@@ -110,7 +111,7 @@ fn spawn_lakes_and_rivers(
     let continent = &map.continent;
     let springs = map.heights.springs();
     for (name, mesh) in [
-        ("Lakes", lakes_mesh(continent)),
+        ("Lakes", lakes_mesh(continent, &map.heights)),
         ("Ponds", ponds_mesh(springs)),
         ("Rivers", rivers_mesh(continent, springs)),
     ] {
@@ -235,43 +236,96 @@ impl SurfaceBuilder {
     }
 }
 
-/// One quad per lake cell, plus the shore cells around (above the water, so the surface reaches
-/// under the shore without floating over the outlet).
-fn lakes_mesh(continent: &Continent) -> Mesh {
-    let size = continent.size();
+/// Lake surface grid step (world units).
+const LAKE_STEP: f32 = 0.25;
+/// Cells around a lake its surface may reach (over its shallow shore, and a little way into
+/// its inflows and outlet).
+const LAKE_REACH: i64 = 2;
+
+/// The lake surfaces, on a fine grid: from the lake's cells, the water floods the terrain as
+/// drawn (river channels carved) wherever it is below the level, without going further than
+/// [`LAKE_REACH`] cells from the lake. Quads with a corner under water are drawn (the others
+/// are hidden under the shore anyway), so the shoreline follows the terrain closely and the
+/// water never spills over lower ground beyond the bank.
+fn lakes_mesh(continent: &Continent, heights: &TerrainHeights) -> Mesh {
+    let size = continent.size() as i64;
     let cell = continent.settings.cell_size;
-    let mut level = vec![None; size * size];
-    for lake in &continent.lakes {
+    let mut builder = SurfaceBuilder::default();
+    for (index, lake) in continent.lakes.iter().enumerate() {
+        let index = index as u16;
+        // Cells the surface may cover.
+        let (mut lo, mut hi) = (IVec2::MAX, IVec2::MIN);
         for c in &lake.cells {
-            for dz in -2..=2i32 {
-                for dx in -2..=2i32 {
-                    let (x, z) = (c.x as i32 + dx, c.y as i32 + dz);
-                    if x < 0 || z < 0 || x as usize >= size || z as usize >= size {
-                        continue;
-                    }
-                    let i = z as usize * size + x as usize;
-                    let is_lake = (dx, dz) == (0, 0);
-                    // Shore and shallow fringe, but not the outlet valley below the dam.
-                    if is_lake || continent.heights[i] > lake.level - 0.15 {
-                        level[i] = Some(lake.level);
-                    }
+            lo = lo.min(c.as_ivec2());
+            hi = hi.max(c.as_ivec2());
+        }
+        let (lo, hi) = (lo - LAKE_REACH as i32, hi + LAKE_REACH as i32);
+        let cells = (hi - lo + 1).as_uvec2();
+        let mut allowed = vec![false; (cells.x * cells.y) as usize];
+        for c in &lake.cells {
+            for dz in -LAKE_REACH..=LAKE_REACH {
+                for dx in -LAKE_REACH..=LAKE_REACH {
+                    let n = c.as_ivec2() + IVec2::new(dx as i32, dz as i32) - lo;
+                    allowed[(n.y as u32 * cells.x + n.x as u32) as usize] = true;
                 }
             }
         }
-    }
-    let mut builder = SurfaceBuilder::default();
-    for (i, level) in level.iter().enumerate() {
-        let Some(level) = *level else {
-            continue;
+        // Fine grid points over those cells.
+        let per_cell = (cell / LAKE_STEP).round() as i32;
+        let origin = continent.cell_to_world(0, 0) + (lo.as_vec2() - 0.5) * cell;
+        let points = cells.as_ivec2() * per_cell + 1;
+        let (w, h) = (points.x as usize, points.y as usize);
+        let at = |x: usize, z: usize| origin + Vec2::new(x as f32, z as f32) * (cell / per_cell as f32);
+        let cell_of = |x: usize, z: usize| {
+            let c = IVec2::new(x as i32, z as i32) / per_cell;
+            c.min(cells.as_ivec2() - 1)
         };
-        let center = continent.cell_to_world(i % size, i / size);
-        let h = cell / 2.;
-        builder.quad([
-            Vec3::new(center.x - h, level, center.y - h),
-            Vec3::new(center.x + h, level, center.y - h),
-            Vec3::new(center.x - h, level, center.y + h),
-            Vec3::new(center.x + h, level, center.y + h),
-        ]);
+        let mut wet = vec![false; w * h];
+        let mut seeds = Vec::new();
+        for z in 0..h {
+            for x in 0..w {
+                let c = cell_of(x, z);
+                if !allowed[(c.y as u32 * cells.x + c.x as u32) as usize] {
+                    continue;
+                }
+                let p = at(x, z);
+                if heights.height(p) >= lake.level {
+                    continue;
+                }
+                wet[z * w + x] = true;
+                let g = c + lo;
+                if g.x >= 0
+                    && g.y >= 0
+                    && (g.x as i64) < size
+                    && (g.y as i64) < size
+                    && continent.lake_of[g.y as usize * size as usize + g.x as usize] == Some(index)
+                {
+                    seeds.push(z * w + x);
+                }
+            }
+        }
+        // Flood from the lake's own cells.
+        let mut flooded = vec![false; w * h];
+        for &seed in &seeds {
+            flooded[seed] = true;
+        }
+        while let Some(i) = seeds.pop() {
+            let (x, z) = (i % w, i / w);
+            for (nx, nz) in [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)] {
+                if nx < w && nz < h && wet[nz * w + nx] && !flooded[nz * w + nx] {
+                    flooded[nz * w + nx] = true;
+                    seeds.push(nz * w + nx);
+                }
+            }
+        }
+        for z in 0..h - 1 {
+            for x in 0..w - 1 {
+                let corners = [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)];
+                if corners.iter().any(|&(x, z)| flooded[z * w + x]) {
+                    builder.quad(corners.map(|(x, z)| at(x, z).extend(lake.level).xzy()));
+                }
+            }
+        }
     }
     builder.build()
 }

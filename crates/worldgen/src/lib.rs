@@ -503,8 +503,8 @@ const MIN_LAKE_CELLS: usize = 20;
 /// Cells around a lake kept above its level by floodplain flattening.
 const LAKE_RIM: i64 = 3;
 
-/// The final shore of each lake: its level never above the lowest point of the fine surface
-/// around it (where the detail added after lakes are found might have cut the bank), and the
+/// The final shore of each lake: its level never above the spill point of its basin on the
+/// fine surface (the detail added after lakes are found may have cut the bank lower), and the
 /// rivers flowing into and out of it meet that level.
 fn settle_lakes(
     settings: &WorldgenSettings,
@@ -523,24 +523,21 @@ fn settle_lakes(
         }
         lake_of[cell.y as usize * size + cell.x as usize]
     };
-    let mut rim = vec![f32::MAX; lakes.len()];
-    for z in 1..fine - 1 {
-        for x in 1..fine - 1 {
-            if lake_at(x, z).is_some() {
-                continue;
-            }
-            for (dx, dz) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
-                let (nx, nz) = ((x as i64 + dx) as usize, (z as i64 + dz) as usize);
-                if let Some(lake) = lake_at(nx, nz) {
-                    let lake = lake as usize;
-                    rim[lake] = rim[lake].min(surface.values[z * fine + x]);
-                }
+    // Water surface of the fine surface's basins: each lake's highest is its spill point.
+    let sea: Vec<bool> = surface.values.iter().map(|&h| h <= 0.).collect();
+    let water = flow::priority_flood(fine, &surface.values, &sea, 0.);
+    let mut spill = vec![f32::MIN; lakes.len()];
+    for z in 0..fine {
+        for x in 0..fine {
+            if let Some(lake) = lake_at(x, z) {
+                let lake = lake as usize;
+                spill[lake] = spill[lake].max(water[z * fine + x]);
             }
         }
     }
-    for (lake, rim) in lakes.iter_mut().zip(rim) {
-        if !lake.endorheic {
-            lake.level = lake.level.min(rim);
+    for (lake, spill) in lakes.iter_mut().zip(spill) {
+        if spill > f32::MIN {
+            lake.level = lake.level.min(spill);
         }
     }
     // Rivers meet the lakes at their level.
