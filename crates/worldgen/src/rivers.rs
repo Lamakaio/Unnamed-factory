@@ -251,6 +251,8 @@ const JOIN_LEAD: usize = 2;
 /// cells), so the channel and its banks never fold over themselves.
 const MIN_BEND_RADIUS: f32 = 1.2;
 const MIN_BEND_RADIUS_CELLS: f32 = 1.5;
+/// Rounds of bend relaxation (converging long before, normally).
+const RELAX_ROUNDS: usize = 200;
 
 /// Move points of a polyline (`(position, index into widths)`, in cells) towards their
 /// neighbours' midpoint wherever it turns more sharply than [`MIN_BEND_RADIUS`] allows (a
@@ -260,7 +262,11 @@ fn relax_bends(path: &mut [(Vec3, usize)], widths: &[f32]) {
     if n < 3 {
         return;
     }
-    for _ in 0..200 {
+    for round in 0..=RELAX_ROUNDS {
+        if round == RELAX_ROUNDS {
+            log::warn!("River bends still too tight after {RELAX_ROUNDS} rounds of relaxing");
+            break;
+        }
         let mut moved = false;
         for i in 1..n - 1 {
             let (a, b, c) = (path[i - 1].0.xz(), path[i].0.xz(), path[i + 1].0.xz());

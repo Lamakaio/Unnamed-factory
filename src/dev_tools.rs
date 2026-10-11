@@ -285,6 +285,9 @@ fn lab_shots(
         lab.wait -= 1;
         return;
     }
+    if !settled {
+        warn!("Lab screenshot taken before the terrain was done meshing ({LAB_MAX_FRAMES} frames)");
+    }
     let file = lab.current.take().unwrap();
     let path = lab.dir.join(&file);
     info!("Lab screenshot {} ({:.0} fps)", path.display(), 1. / time.delta_secs());

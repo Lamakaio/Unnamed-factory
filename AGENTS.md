@@ -177,12 +177,18 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      lowers each level to its basin's spill point on the fine surface (Priority-Flood), and
      inflows / outlets meet it. Endorheic only if every cell within `DRY_RADIUS` is dry, the
      inflow is low, and the basin is deep (`ENDORHEIC_BARRIER`) or near sea level (rare).
-     Outlets are led back through their lake to its deepest point (`extend_outlets`), so
-     their channel is carved through the bed; drawn, they fade in where they leave the lake.
-     River levels in lakes clamp to the lake surface, not the bed. Lake surfaces
-     (`water.rs::lakes_mesh`) are a 0.25 grid flood-filled from the lake's cells: over the
-     uncarved ground below the level (it stops at the spill point) and over river channels at
-     about the lake's level (inflows), not down outlets.
+     Rivers are led through their lake to its deepest point at the lake's level, outlets
+     from it and inflows to it (`extend_through_lakes`), so their channels are carved
+     through the bed; drawn, they fade at the shore (`OUTLET_FADE`). Under a lake means
+     where `Continent::water` (the fine surface's basins filled by Priority-Flood, kept by
+     `settle_lakes`, which also keeps lake beds under their level so a lake is one basin)
+     stands over the ground at a nearby lake's level (`Continent::lake_over`): rivers there
+     are at the lake's level. Lake surfaces (`water.rs::lakes_mesh`) are a 0.25 grid
+     flood-filled from the lake's cells over the uncarved ground below the level; reaching
+     `LAKE_REACH` logs a warning (the spill point should stop the flood first).
+   - **Limits that normal worlds should not hit log a warning** (lake flood reach, river bend
+     relaxation rounds, tributaries that never cross their parent's edge, lab screenshot
+     timeout). Treat such a warning as a bug to fix, not noise.
   4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
      ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
      lake) upstream, the main stem following the largest donor, and tributaries end exactly on

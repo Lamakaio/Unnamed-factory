@@ -47,6 +47,16 @@ fn main() {
                         < 2.5
                 }) && r.end != RiverEnd::Lake(l)
             });
+            // The outlet's levels around where it leaves the lake.
+            for r in c.rivers.iter().filter(|r| r.end != RiverEnd::Lake(l)) {
+                let inside: Vec<bool> = r.points.iter().map(|p| c.lake_over(p.position.xz())
+                    .is_some_and(|level| (level - lake.level).abs() < 0.02)).collect();
+                if !inside[0] { continue; }
+                let leave = inside.iter().position(|&i| !i).unwrap_or(0);
+                let ys: Vec<String> = r.points[leave.saturating_sub(2)..(leave + 8).min(r.points.len())]
+                    .iter().map(|p| format!("{:.2}", p.position.y - lake.level)).collect();
+                println!("    lake {l} outlet leaves at {:?}: y - level {}", r.points[leave].position.xz(), ys.join(" "));
+            }
             println!(
                 "  lake {l}: {:4} cells at {:?}, level {:5.2}, depth {:4.2}, rim {:+.2}, {:?}{}, {inflows} in, outlet {outlet}",
                 lake.cells.len(),

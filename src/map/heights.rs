@@ -147,10 +147,6 @@ impl TerrainHeights {
         height
     }
 
-    /// Lowest water level of the rivers whose channel or banks reach `p`, if any.
-    pub fn river_water(&self, p: Vec2) -> Option<f32> {
-        self.rivers.water_under(p)
-    }
 
     /// Whether an edit (a building foundation or a tool) changed the ground at `p`.
     pub fn edited(&self, p: Vec2) -> bool {

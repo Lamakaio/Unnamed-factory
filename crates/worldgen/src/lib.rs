@@ -218,6 +218,9 @@ pub struct Continent {
     pub heights: Vec<f32>,
     /// Fine terrain surface (with gullies): what the game renders.
     pub surface: Heightmap,
+    /// Water level of the basins of `surface` filled to their spill point (Priority-Flood):
+    /// where it stands above the ground at a lake's level, that ground is under the lake.
+    pub water: Heightmap,
     /// Upstream drainage area of each cell, in cells.
     pub drainage: Vec<f32>,
     /// Lake of each cell, as an index in `lakes`.
@@ -277,6 +280,18 @@ pub struct RiverPoint {
 }
 
 impl Continent {
+    /// The level of the lake whose water covers `p`, if any (see [`under_lake`]).
+    pub fn lake_over(&self, p: Vec2) -> Option<f32> {
+        under_lake(
+            &self.settings,
+            &self.surface,
+            &self.water,
+            &self.lakes,
+            &self.lake_of,
+            p,
+        )
+    }
+
     pub fn size(&self) -> usize {
         self.settings.size
     }
@@ -382,7 +397,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &lake_of,
         &lake_levels,
     );
-    lakes::extend_outlets(settings, &heights, &lakes, &lake_of, &mut rivers);
+    lakes::extend_through_lakes(settings, &heights, &lakes, &lake_of, &mut rivers);
     flatten_floodplains(size, &mut heights, &lake_of, &lake_levels, &valley);
     let (mouths, sediment, wetland) =
         mouths::shape_mouths(settings, noise, &shore, &mut heights, &mut rivers);
@@ -413,20 +428,21 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         values,
     };
     let calm = calm_map(settings, &rivers, &lake_of);
-    let surface = detail::refine(
+    let mut surface = detail::refine(
         settings,
         &grid(heights.clone()),
         &grid(ruggedness.clone()),
         &grid(calm),
     );
-    settle_lakes(settings, &surface, &mut lakes, &lake_of, &mut rivers);
-    clamp_rivers_to_terrain(settings, &surface, &lakes, &lake_of, &mut rivers);
+    let water = settle_lakes(settings, &mut surface, &mut lakes, &lake_of, &mut rivers);
+    clamp_rivers_to_terrain(settings, &surface, &water, &lakes, &lake_of, &mut rivers);
     lap("detail", &mut timings);
 
     Continent {
         settings: settings.clone(),
         heights,
         surface,
+        water,
         drainage,
         lake_of,
         salt_flat,
@@ -476,41 +492,103 @@ fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16
     calm
 }
 
+/// Lake beds stay at least this far below their lake's level on the fine surface.
+const LAKE_BED_MARGIN: f32 = 0.05;
+/// Cells around a point searched for the lake whose water covers it.
+const LAKE_SEARCH: i64 = 10;
+
+/// The level of the lake covering `p`, if any: the basins' `water` stands above the ground
+/// there, at the level of a lake nearby (the lake's flooded basin, not just its cells).
+fn under_lake(
+    settings: &WorldgenSettings,
+    surface: &Heightmap,
+    water: &Heightmap,
+    lakes: &[Lake],
+    lake_of: &[Option<u16>],
+    p: Vec2,
+) -> Option<f32> {
+    let level = water.bilinear(p);
+    if level <= surface.bilinear(p) + 1e-3 {
+        return None;
+    }
+    let size = settings.size as i64;
+    let c = (p / settings.cell_size + (settings.size / 2) as f32).round();
+    let (x, z) = (c.x as i64, c.y as i64);
+    for r in 0..=LAKE_SEARCH {
+        for dz in -r..=r {
+            for dx in -r..=r {
+                if dx.abs().max(dz.abs()) != r {
+                    continue;
+                }
+                let (nx, nz) = (x + dx, z + dz);
+                if nx < 0 || nz < 0 || nx >= size || nz >= size {
+                    continue;
+                }
+                if let Some(lake) = lake_of[(nz * size + nx) as usize] {
+                    let lake = &lakes[lake as usize];
+                    if (lake.level - level).abs() < 0.02 {
+                        return Some(lake.level);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Keep every river's water line at or below the surface under it, across the whole channel
 /// width (smoothing and meanders can move points over lower ground, and coasts are low), and
-/// never flowing uphill. In lakes, the lake surface stands for the terrain (outlets run
-/// through their lake to its deepest point).
+/// never flowing uphill. Under lakes (where the basins' `water` stands over the ground at a
+/// nearby lake's level), rivers are at the lake's surface (outlets run through their lake to
+/// its deepest point, and leave it at its level).
 fn clamp_rivers_to_terrain(
     settings: &WorldgenSettings,
     surface: &Heightmap,
+    water: &Heightmap,
     lakes: &[Lake],
     lake_of: &[Option<u16>],
     rivers: &mut [River],
 ) {
-    let size = settings.size;
-    let half = (size / 2) as f32;
-    let lake_level = |p: Vec2| {
-        let c = (p / settings.cell_size + half).round();
-        (c.x >= 0. && c.y >= 0. && c.x < size as f32 && c.y < size as f32)
-            .then(|| lake_of[c.y as usize * size + c.x as usize])
-            .flatten()
-            .map(|lake| lakes[lake as usize].level)
-    };
+    let lake_level = |p: Vec2| under_lake(settings, surface, water, lakes, lake_of, p);
     for river in rivers {
         let mut previous = f32::MAX;
+        // An outlet leaves its lake at the lake's level, then follows the ground down (its
+        // original levels, below the spill point, take over once they are as high).
+        let mut leaving = river
+            .points
+            .first()
+            .is_some_and(|p| lake_level(Vec2::new(p.position.x, p.position.z)).is_some());
         for i in 0..river.points.len() {
             let points = &river.points;
             let center = points[i].position.truncate().with_y(points[i].position.z);
             let next = points[(i + 1).min(points.len() - 1)].position;
             let last = points[i.saturating_sub(1)].position;
             let across = (next - last).truncate().with_y(next.z - last.z).normalize_or_zero().perp();
+            // (Ground under a lake counts as its surface: a wide outlet's sides are still over
+            // the lake bed as it leaves.)
             let terrain = [-0.5, 0., 0.5]
-                .map(|side| surface.bilinear(center + across * side * points[i].width))
+                .map(|side| {
+                    let q = center + across * side * points[i].width;
+                    let ground = surface.bilinear(q);
+                    lake_level(q).map_or(ground, |level| ground.max(level))
+                })
                 .into_iter()
                 .fold(f32::MAX, f32::min);
-            let terrain = lake_level(center).map_or(terrain, |level| terrain.max(level));
             let point = &mut river.points[i];
-            point.position.y = point.position.y.min(terrain).min(previous);
+            point.position.y = match lake_level(center) {
+                // In a lake, rivers are at its surface.
+                Some(level) => level.min(previous),
+                None if leaving => {
+                    let ground = surface.bilinear(center).min(previous);
+                    if ground <= point.position.y {
+                        leaving = false;
+                        point.position.y.min(terrain).min(previous)
+                    } else {
+                        ground
+                    }
+                }
+                None => point.position.y.min(terrain).min(previous),
+            };
             previous = point.position.y;
         }
     }
@@ -521,16 +599,18 @@ const MIN_LAKE_CELLS: usize = 20;
 /// Cells around a lake kept above its level by floodplain flattening.
 const LAKE_RIM: i64 = 3;
 
-/// The final shore of each lake: its level never above the spill point of its basin on the
-/// fine surface (the detail added after lakes are found may have cut the bank lower), and the
-/// rivers flowing into and out of it meet that level.
+/// The final shore of each lake: its level is the spill point of its basin on the fine surface
+/// (the detail added after lakes are found may have moved the banks; lakes found apart on the
+/// coarse grid that share a basin get its one level), and the rivers flowing into and out of
+/// it meet that level. Endorheic lakes keep their (lower) level. Returns the basins' water
+/// level.
 fn settle_lakes(
     settings: &WorldgenSettings,
-    surface: &Heightmap,
+    surface: &mut Heightmap,
     lakes: &mut [Lake],
     lake_of: &[Option<u16>],
     rivers: &mut [River],
-) {
+) -> Heightmap {
     let size = settings.size;
     let fine = surface.size;
     let lake_at = |x: usize, z: usize| {
@@ -541,21 +621,35 @@ fn settle_lakes(
         }
         lake_of[cell.y as usize * size + cell.x as usize]
     };
+    // The fine detail may have raised small ridges inside a lake, splitting it into basins at
+    // different levels: keep its bed under its (coarse) level, so it is one basin.
+    for z in 0..fine {
+        for x in 0..fine {
+            if let Some(lake) = lake_at(x, z) {
+                let value = &mut surface.values[z * fine + x];
+                *value = value.min(lakes[lake as usize].level - LAKE_BED_MARGIN);
+            }
+        }
+    }
     // Water surface of the fine surface's basins: each lake's highest is its spill point.
     let sea: Vec<bool> = surface.values.iter().map(|&h| h <= 0.).collect();
-    let water = flow::priority_flood(fine, &surface.values, &sea, 0.);
+    let water = Heightmap {
+        size: fine,
+        cell: surface.cell,
+        values: flow::priority_flood(fine, &surface.values, &sea, 0.),
+    };
     let mut spill = vec![f32::MIN; lakes.len()];
     for z in 0..fine {
         for x in 0..fine {
             if let Some(lake) = lake_at(x, z) {
                 let lake = lake as usize;
-                spill[lake] = spill[lake].max(water[z * fine + x]);
+                spill[lake] = spill[lake].max(water.values[z * fine + x]);
             }
         }
     }
     for (lake, spill) in lakes.iter_mut().zip(spill) {
-        if spill > f32::MIN {
-            lake.level = lake.level.min(spill);
+        if spill > f32::MIN && !lake.endorheic {
+            lake.level = spill;
         }
     }
     // Rivers meet the lakes at their level.
@@ -585,6 +679,7 @@ fn settle_lakes(
             }
         }
     }
+    water
 }
 
 /// Lower the valley floor to just above the water where rivers meander, so meanders have a

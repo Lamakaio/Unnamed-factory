@@ -154,10 +154,10 @@ pub fn find_lakes(
 /// Spacing of river polyline points (world units), as in `rivers`.
 const SPACING: f32 = 0.5;
 
-/// Lead every lake's outlet river back through the lake to its deepest point (along lake
-/// cells), at the lake's level: its channel is then carved through the lake bed, so the outlet
-/// clearly leaves the lake rather than starting at its edge.
-pub fn extend_outlets(
+/// Lead every lake's rivers through it to its deepest point (along lake cells), at the lake's
+/// level: outlets from it, inflows to it. Their channels are then carved through the lake bed,
+/// so the rivers clearly join the lake rather than stopping at its edge.
+pub fn extend_through_lakes(
     settings: &WorldgenSettings,
     heights: &[f32],
     lakes: &[Lake],
@@ -166,82 +166,131 @@ pub fn extend_outlets(
 ) {
     let size = settings.size;
     let half = (size / 2) as f32;
-    let to_world = |i: usize| (Vec2::new((i % size) as f32, (i / size) as f32) - half) * settings.cell_size;
+    let to_world =
+        |i: usize| (Vec2::new((i % size) as f32, (i / size) as f32) - half) * settings.cell_size;
+    let cell_at = |p: Vec3| {
+        let c = (Vec2::new(p.x, p.z) / settings.cell_size + half).round();
+        (c.x >= 0. && c.y >= 0. && c.x < size as f32 && c.y < size as f32)
+            .then(|| c.y as usize * size + c.x as usize)
+    };
+    // The lake cell at or next to `cell`, of `lake` if given.
+    let lake_cell_near = |cell: usize, lake: Option<usize>| {
+        std::iter::once((cell, 0.))
+            .chain(neighbours(size, cell))
+            .find_map(|(n, _)| {
+                lake_of[n]
+                    .map(|l| l as usize)
+                    .filter(|&l| lake.is_none_or(|lake| lake == l))
+                    .map(|l| (n, l))
+            })
+    };
     for river in rivers.iter_mut() {
-        let Some(first) = river.points.first().copied() else {
-            continue;
-        };
-        let cell = (Vec2::new(first.position.x, first.position.z) / settings.cell_size + half).round();
-        if cell.x < 0. || cell.y < 0. || cell.x >= size as f32 || cell.y >= size as f32 {
-            continue;
-        }
-        let source = cell.y as usize * size + cell.x as usize;
-        // The lake right next to the source, if the river doesn't flow back into it.
-        let Some((entry, lake)) = std::iter::once((source, 0.))
-            .chain(neighbours(size, source))
-            .find_map(|(n, _)| lake_of[n].map(|lake| (n, lake as usize)))
+        let (Some(first), Some(last)) = (river.points.first().copied(), river.points.last().copied())
         else {
             continue;
         };
-        if river.end == RiverEnd::Lake(lake) || lakes[lake].endorheic {
-            continue;
+        // Into a lake: from its end on to the deepest point.
+        if let RiverEnd::Lake(lake) = river.end
+            && let Some((entry, _)) = cell_at(last.position).and_then(|c| lake_cell_near(c, Some(lake)))
+            && let Some(path) = path_to_deepest(size, heights, &lakes[lake], lake_of, lake, entry)
+        {
+            let level = lakes[lake].level.min(last.position.y);
+            let mut route = vec![Vec2::new(last.position.x, last.position.z)];
+            route.extend(path.iter().map(|&i| to_world(i)));
+            river.points.extend(resample(&smooth(route), last, level).into_iter().skip(1));
         }
-        // Path through the lake's cells from the entry to the deepest cell (breadth first).
-        let deepest = lakes[lake]
-            .cells
-            .iter()
-            .map(|c| c.y as usize * size + c.x as usize)
-            .min_by(|&a, &b| heights[a].total_cmp(&heights[b]))
-            .unwrap_or(entry);
-        let mut previous = vec![usize::MAX; 0];
-        previous.resize(heights.len(), usize::MAX);
-        let mut queue = VecDeque::from([entry]);
-        previous[entry] = entry;
-        while let Some(i) = queue.pop_front() {
-            if i == deepest {
-                break;
-            }
-            for (n, _) in neighbours(size, i) {
-                if previous[n] == usize::MAX && lake_of[n] == Some(lake as u16) {
-                    previous[n] = i;
-                    queue.push_back(n);
-                }
-            }
+        // Out of a lake (right next to the source, not the one it flows into): from its
+        // deepest point.
+        if let Some((entry, lake)) = cell_at(first.position).and_then(|c| lake_cell_near(c, None))
+            && river.end != RiverEnd::Lake(lake)
+            && !lakes[lake].endorheic
+        {
+            let Some(path) = path_to_deepest(size, heights, &lakes[lake], lake_of, lake, entry) else {
+                continue;
+            };
+            let mut route: Vec<Vec2> = path.iter().rev().map(|&i| to_world(i)).collect();
+            route.push(Vec2::new(first.position.x, first.position.z));
+            let mut points = resample(&smooth(route), first, lakes[lake].level);
+            points.pop();
+            points.extend(river.points.iter().copied());
+            river.points = points;
         }
-        if previous[deepest] == usize::MAX {
-            continue;
-        }
-        // From the deepest cell to the entry, then on to the source.
-        let mut path = vec![to_world(deepest)];
-        let mut i = deepest;
-        while i != entry {
-            i = previous[i];
-            path.push(to_world(i));
-        }
-        path.push(Vec2::new(first.position.x, first.position.z));
-        // Smooth the cell staircase, keeping both ends.
-        for _ in 0..3 {
-            let mut smooth = path.clone();
-            for k in 1..path.len() - 1 {
-                smooth[k] = (path[k - 1] + path[k] * 2. + path[k + 1]) / 4.;
-            }
-            path = smooth;
-        }
-        // Resample, ending just before the source.
-        let mut points = Vec::new();
-        for pair in path.windows(2) {
-            let length = pair[0].distance(pair[1]);
-            let steps = (length / SPACING).ceil().max(1.) as usize;
-            for k in 0..steps {
-                let p = pair[0].lerp(pair[1], k as f32 / steps as f32);
-                points.push(RiverPoint {
-                    position: Vec3::new(p.x, first.position.y, p.y),
-                    width: first.width,
-                    depth: first.depth,
-                });
-            }
-        }
-        points.extend(river.points.iter().copied());
-        river.points = points;
     }
+}
+
+/// Cells from `entry` to the deepest cell of `lake` through its cells (breadth first),
+/// `entry` first; `None` (with a warning) if the lake isn't connected.
+fn path_to_deepest(
+    size: usize,
+    heights: &[f32],
+    lake_data: &Lake,
+    lake_of: &[Option<u16>],
+    lake: usize,
+    entry: usize,
+) -> Option<Vec<usize>> {
+    let deepest = lake_data
+        .cells
+        .iter()
+        .map(|c| c.y as usize * size + c.x as usize)
+        .min_by(|&a, &b| heights[a].total_cmp(&heights[b]))?;
+    let mut previous = vec![usize::MAX; heights.len()];
+    let mut queue = VecDeque::from([entry]);
+    previous[entry] = entry;
+    while let Some(i) = queue.pop_front() {
+        if i == deepest {
+            break;
+        }
+        for (n, _) in neighbours(size, i) {
+            if previous[n] == usize::MAX && lake_of[n] == Some(lake as u16) {
+                previous[n] = i;
+                queue.push_back(n);
+            }
+        }
+    }
+    if previous[deepest] == usize::MAX {
+        log::warn!("Lake {lake}: no path through its cells to its deepest point");
+        return None;
+    }
+    let mut path = vec![deepest];
+    let mut i = deepest;
+    while i != entry {
+        i = previous[i];
+        path.push(i);
+    }
+    path.reverse();
+    Some(path)
+}
+
+/// Smooth a polyline's cell staircase, keeping both ends.
+fn smooth(mut path: Vec<Vec2>) -> Vec<Vec2> {
+    for _ in 0..3 {
+        let mut smooth = path.clone();
+        for k in 1..path.len().saturating_sub(1) {
+            smooth[k] = (path[k - 1] + path[k] * 2. + path[k + 1]) / 4.;
+        }
+        path = smooth;
+    }
+    path
+}
+
+/// River points along `path` every [`SPACING`] (both ends included), at height `level`, with
+/// the width and depth of `like`.
+fn resample(path: &[Vec2], like: RiverPoint, level: f32) -> Vec<RiverPoint> {
+    let mut points = Vec::new();
+    let point = |p: Vec2| RiverPoint {
+        position: Vec3::new(p.x, level, p.y),
+        width: like.width,
+        depth: like.depth,
+    };
+    for pair in path.windows(2) {
+        let length = pair[0].distance(pair[1]);
+        let steps = (length / SPACING).ceil().max(1.) as usize;
+        for k in 0..steps {
+            points.push(point(pair[0].lerp(pair[1], k as f32 / steps as f32)));
+        }
+    }
+    if let Some(&end) = path.last() {
+        points.push(point(end));
+    }
+    points
 }
