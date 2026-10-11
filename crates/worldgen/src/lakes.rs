@@ -198,14 +198,8 @@ fn distance_from_shore(size: usize, region: &[usize], in_region: &[bool]) -> Vec
 }
 
 /// Find the lakes of the final terrain: Priority-Flood without slope gives flat water surfaces;
-/// connected flooded areas big enough and deep enough somewhere are lakes. Their shallow
-/// fringe belongs to them: otherwise a shallow basin falls apart into several lakes at the same
-/// level, with the fringe between them traced as rivers running under the lake surface. Returns the lakes and each cell's
+/// connected flooded areas big and deep enough are lakes. Returns the lakes and each cell's
 /// lake index.
-/// Flooding depth from which a cell belongs to a lake, and depth a lake must reach somewhere.
-const MIN_FLOOD: f32 = 0.01;
-const MIN_LAKE_DEPTH: f32 = 0.3;
-
 pub fn find_lakes(
     size: usize,
     heights: &[f32],
@@ -214,7 +208,7 @@ pub fn find_lakes(
 ) -> (Vec<Lake>, Vec<Option<u16>>) {
     let water = priority_flood(size, heights, base_level, 0.);
     let flooded: Vec<bool> = (0..heights.len())
-        .map(|i| !base_level[i] && water[i] - heights[i] > MIN_FLOOD)
+        .map(|i| !base_level[i] && water[i] - heights[i] > 0.1)
         .collect();
     let mut lake_of = vec![None; heights.len()];
     let mut lakes = Vec::new();
@@ -236,11 +230,7 @@ pub fn find_lakes(
                 }
             }
         }
-        let deepest = cells
-            .iter()
-            .map(|&i| water[i] - heights[i])
-            .fold(0., f32::max);
-        if cells.len() < min_cells || deepest < MIN_LAKE_DEPTH {
+        if cells.len() < min_cells {
             continue;
         }
         let id = lakes.len() as u16;

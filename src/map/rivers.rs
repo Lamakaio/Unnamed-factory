@@ -21,6 +21,9 @@ const BANK_INSET: f32 = 0.3;
 /// ...finest up to this far outside it, then at least this cell size on the rest of the bank.
 const WATER_LINE_BAND: f32 = 0.8;
 const OUTER_BANK_CELL: f32 = 0.2;
+/// Largest cell size at the water line, however wide the river (the bank's foot meets the
+/// flat water there: coarse cells show as a sawtooth shore).
+const WATER_LINE_CELL: f32 = 0.15;
 /// Cell size of the segment lookup grid, in world units.
 const LOOKUP_CELL: f32 = 4.;
 
@@ -164,7 +167,7 @@ impl RiverLayer {
                 // The water line and the foot of the bank (steepest) get the finest cells,
                 // the rest of the bank (easing into the terrain) medium ones.
                 let cell = if far > half - BANK_INSET && near < half + WATER_LINE_BAND {
-                    width / 6.
+                    (width / 6.).min(WATER_LINE_CELL)
                 } else if far > half - BANK_INSET {
                     (width / 3.).max(OUTER_BANK_CELL)
                 } else {

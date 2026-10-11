@@ -9,7 +9,7 @@ fn main() {
     let seed = std::env::args().nth(1).map_or(1082, |s| s.parse().unwrap());
     let c = generate(&WorldgenSettings { seed, ..Default::default() });
     let size = c.size();
-    for r in [0usize; 0] {
+    for r in [6usize, 12, 1] {
         println!("river {r} end {:?}", c.rivers[r].end);
         for p in &c.rivers[r].points {
             let cell = c.world_to_cell(p.position.xz()).unwrap();
@@ -19,7 +19,7 @@ fn main() {
         }
     }
     for (l, lake) in c.lakes.iter().enumerate() {
-        if lake.cells.len() < 200 && l != 10 { continue; }
+        if lake.cells.len() < 200 { continue; }
         let center = lake.cells.iter().map(|p| p.as_vec2()).sum::<Vec2>() / lake.cells.len() as f32;
         // Rim: non-lake neighbours; lowest fine surface on the rim.
         let mut lowest = (f32::MAX, Vec2::ZERO);

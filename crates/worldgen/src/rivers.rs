@@ -119,14 +119,7 @@ pub fn extract_rivers(
             RiverEnd::Junction(_) => terrain[outlet],
         };
         path.push((cell_point(size, outlet, outlet_level), area[last]));
-        // A river rising right next to the lake it flows into carries the lake's own water
-        // (between parts of a lake joined at its exact level): not a river.
-        let into_itself = match river.end {
-            RiverEnd::Lake(lake) => crate::flow::neighbours(size, river.cells[0])
-                .any(|(n, _)| lake_of[n] == Some(lake as u16)),
-            _ => false,
-        };
-        if path.len() < 3 || into_itself {
+        if path.len() < 3 {
             output_index.push(None);
             continue;
         }
@@ -202,17 +195,13 @@ pub fn extract_rivers(
             .collect();
 
         // Tributaries end exactly on their parent's (final) polyline.
-        // A skipped parent: end where it ended.
-        let mut end = river.end;
-        while let RiverEnd::Junction(parent) = end {
-            match output_index[parent] {
-                Some(output) => {
-                    end = RiverEnd::Junction(output);
-                    break;
-                }
-                None => end = traced[parent].end,
-            }
-        }
+        let end = match river.end {
+            RiverEnd::Junction(parent) => match output_index[parent] {
+                Some(parent) => RiverEnd::Junction(parent),
+                None => RiverEnd::Sea,
+            },
+            end => end,
+        };
         if let RiverEnd::Junction(parent) = end
             && let Some(parent) = rivers.get(parent)
         {

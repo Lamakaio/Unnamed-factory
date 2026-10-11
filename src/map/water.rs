@@ -508,7 +508,18 @@ const CONFLUENCE_TURN_REACH: (f32, f32) = (1., 1.5);
 
 /// The cross-sections of a river ribbon, at its water line (see [`river_profile`]).
 fn river_rows(river: &River) -> Vec<Row> {
-    let points = &river.points;
+    // Rivers into the sea never go below it (delta branches run on over the sea floor): no
+    // falls, nor foam below them, out at sea.
+    let floor = if river.end == RiverEnd::Sea { -0.08 } else { f32::MIN };
+    let points: Vec<RiverPoint> = river
+        .points
+        .iter()
+        .map(|p| RiverPoint {
+            position: p.position.with_y(p.position.y.max(floor)),
+            ..*p
+        })
+        .collect();
+    let points = &points;
     let profile = river_profile(points);
     let tangents: Vec<Vec2> = (0..points.len())
         .map(|i| {

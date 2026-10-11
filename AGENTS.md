@@ -166,14 +166,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   3. **Lakes** (`lakes.rs`): valley sites (enough drainage, inland, spaced apart). A
      moraine-like dam disc 20–40 cells downstream is raised to the lake level, growing until it
      seals the valley; the valley is flooded upstream and the bed deepened. `find_lakes` then
-     finds lakes with a Priority-Flood without epsilon (flat surfaces, ≥ 20 cells, flooded by
-     more than 0.01 and 0.3 deep somewhere: the shallow fringe belongs to the lake, else a
-     shallow basin falls apart into several lakes linked by "rivers" under the surface).
+     finds lakes with a Priority-Flood without epsilon (flat surfaces, ≥ 20 cells).
   4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
      ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
      lake) upstream, the main stem following the largest donor, and tributaries end exactly on
      their parent's polyline (`RiverEnd::Junction(parent)`, parent index < own index).
-     Rivers rising right next to the lake they flow into are dropped (lake self-drainage).
      Then Chaikin smoothing and resampling every 0.5 units. Width ∝ √discharge, depth
      ∝ discharge^0.4. Meanders where the valley is flat (wavelength ≈ 12 widths, amplitude in
      widths × flatness, tapered at the ends); bends tighter than `MIN_BEND_RADIUS` widths
