@@ -49,7 +49,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var ground_a: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(105) var ground_b: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(106) var<uniform> ground_map: vec4<f32>;
-// Ground weights: (desert, -, -, -).
+// Ground weights: (desert, salt flat, -, -).
 @group(constants::MATERIAL_BIND_GROUP) @binding(107) var ground_c: texture_2d<f32>;
 
 // Prevailing wind direction (x, z), as in toon_sway.wesl and water.wesl.
@@ -327,6 +327,11 @@ fn ground(
     desert = mix(desert, clay, flats);
     let desertness = border(c.r, medium);
     color = mix(color, desert, desertness);
+
+    // Salt flats (dry beds of lakes without an outlet): a white crust in polygons.
+    let crust = patches(1.0 - abs(value_noise(xz * 1.6)), 0.9) * (1.0 - smoothstep(0.03, 0.08, footprint));
+    let salt = mix(srgb(0.93, 0.91, 0.86), srgb(0.80, 0.76, 0.68), crust);
+    color = mix(color, salt, border(c.g, medium));
 
     // Rock: rocky ground, and every steep slope (redder in deserts).
     let steep_value = steep + 0.06 * medium;

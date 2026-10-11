@@ -2,12 +2,16 @@
 //!
 //! Pipeline ([`generate`]):
 //! 1. **Shape** (A): tectonic plates; province interiors (plains, hill country, plateau),
-//!    mountain ranges along converging plate boundaries, rift basins along diverging ones,
-//!    warped coastline, orographic rain from a prevailing wind.
+//!    mountain ranges along converging plate boundaries, rift valleys along diverging ones
+//!    (sinking floors between escarpments), kettle hollows on plains, warped coastline,
+//!    orographic rain from a prevailing wind.
 //! 2. **Erosion** (B): stream-power law with an implicit solver plus hillslope diffusion, with
-//!    per-province rock hardness and diffusion; heights are then scaled to world units and
-//!    plateaus capped into tablelands.
-//! 3. **Lakes**: valley sites dammed at a level, found back with Priority-Flood.
+//!    per-province rock hardness and diffusion. Basins keep their lakes (filled only slowly
+//!    by sediment), glaciers overdeepen high valleys; heights are then scaled to world units
+//!    and plateaus capped into tablelands.
+//! 3. **Lakes**: the basins left by erosion, filled to their spill point (Priority-Flood);
+//!    lakes in dry basins have no outlet and shrink, leaving salt flats. After the fine detail,
+//!    each lake settles to its final shore (never above its lowest bank).
 //! 4. **Rivers** (C): cells draining a large area, traced into smoothed, meandering polylines
 //!    with a width and depth from their discharge; floodplains are flattened along them.
 //!    Some mouths on the sea become deltas or estuaries.
@@ -84,11 +88,6 @@ pub struct WorldgenSettings {
     pub land_evaporation: f32,
     /// Height (world units) where it gets cold enough for permanent snow.
     pub snow_line: f32,
-    pub lake_count: usize,
-    /// Drainage area (cells) a lake site needs.
-    pub lake_min_area: f32,
-    /// Minimum distance between lakes, in cells.
-    pub lake_spacing: f32,
     /// Drainage area (cells) where rivers start.
     pub river_min_area: f32,
     /// Width of a river where it starts, in cells (grows with the square root of discharge).
@@ -137,9 +136,6 @@ impl Default for WorldgenSettings {
             orographic_rain: 0.1,
             land_evaporation: 0.6,
             snow_line: 34.,
-            lake_count: 5,
-            lake_min_area: 300.,
-            lake_spacing: 60.,
             river_min_area: 400.,
             river_width: 0.5,
             river_depth: 0.4,
@@ -226,6 +222,8 @@ pub struct Continent {
     pub drainage: Vec<f32>,
     /// Lake of each cell, as an index in `lakes`.
     pub lake_of: Vec<Option<u16>>,
+    /// Dry beds of endorheic lakes.
+    pub salt_flat: Vec<bool>,
     pub lakes: Vec<Lake>,
     pub rivers: Vec<River>,
     /// Mouth of each river ending in the sea (river index, kind). Delta distributaries are
@@ -249,6 +247,8 @@ pub struct Lake {
     /// Water surface height.
     pub level: f32,
     pub cells: Vec<UVec2>,
+    /// No outlet: the lake loses its water to evaporation (salt flats around it).
+    pub endorheic: bool,
 }
 
 /// Where a river ends.
@@ -359,27 +359,36 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     terrain::limit_slopes(settings, &shape, &mut heights);
     lap("erosion", &mut timings);
 
-    lakes::carve_lakes(settings, &mut heights, &shape.base_level, &shape.land, &mut rng);
-    let (lakes, lake_of) = lakes::find_lakes(size, &heights, &shape.base_level, 20);
+    // Rain on the eroded terrain (as for the climate), which decides which lakes overflow.
+    let rain = terrain::rain_from(settings, &heights, &shape.base_level, 1.);
+    let (mut lakes, lake_of, salt_flat) =
+        lakes::find_lakes(size, &mut heights, &shape.base_level, &rain, MIN_LAKE_CELLS);
     lap("lakes", &mut timings);
 
-    let routing = flow::priority_flood(size, &heights, &shape.base_level, 1e-4);
+    // Water ends in the sea and in lakes without an outlet.
+    let sinks: Vec<bool> = (0..size * size)
+        .map(|i| {
+            shape.base_level[i]
+                || lake_of[i].is_some_and(|lake| lakes[lake as usize].endorheic)
+        })
+        .collect();
+    let routing = flow::priority_flood(size, &heights, &sinks, 1e-4);
     let lake_levels: Vec<f32> = lakes.iter().map(|lake| lake.level).collect();
     let (mut rivers, valley) = rivers::extract_rivers(
         settings,
         &heights,
         &routing,
-        &shape.base_level,
+        &sinks,
         &lake_of,
         &lake_levels,
     );
-    flatten_floodplains(size, &mut heights, &lake_of, &valley);
+    flatten_floodplains(size, &mut heights, &lake_of, &lake_levels, &valley);
     let (mouths, sediment, wetland) =
         mouths::shape_mouths(settings, noise, &shore, &mut heights, &mut rivers);
     // Deltas moved the shore.
     let sea: Vec<bool> = heights.iter().map(|&h| h <= 0.).collect();
     let shore = terrain::shore_distance(size, &sea);
-    let drainage = flow::FlowGraph::new(size, &routing, &shape.base_level).accumulate(|_| 1.);
+    let drainage = flow::FlowGraph::new(size, &routing, &sinks).accumulate(|_| 1.);
     lap("rivers", &mut timings);
 
     let climate = climate::climate(
@@ -409,6 +418,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         &grid(ruggedness.clone()),
         &grid(calm),
     );
+    settle_lakes(settings, &surface, &mut lakes, &lake_of, &mut rivers);
     clamp_rivers_to_terrain(&surface, &mut rivers);
     lap("detail", &mut timings);
 
@@ -418,6 +428,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
         surface,
         drainage,
         lake_of,
+        salt_flat,
         lakes,
         rivers,
         mouths,
@@ -487,14 +498,108 @@ fn clamp_rivers_to_terrain(surface: &Heightmap, rivers: &mut [River]) {
     }
 }
 
+/// Smallest lake, in cells.
+const MIN_LAKE_CELLS: usize = 20;
+/// Cells around a lake kept above its level by floodplain flattening.
+const LAKE_RIM: i64 = 3;
+
+/// The final shore of each lake: its level never above the lowest point of the fine surface
+/// around it (where the detail added after lakes are found might have cut the bank), and the
+/// rivers flowing into and out of it meet that level.
+fn settle_lakes(
+    settings: &WorldgenSettings,
+    surface: &Heightmap,
+    lakes: &mut [Lake],
+    lake_of: &[Option<u16>],
+    rivers: &mut [River],
+) {
+    let size = settings.size;
+    let fine = surface.size;
+    let lake_at = |x: usize, z: usize| {
+        let world = (Vec2::new(x as f32, z as f32) - (fine / 2) as f32) * surface.cell;
+        let cell = (world / settings.cell_size + (size / 2) as f32).round();
+        if cell.x < 0. || cell.y < 0. || cell.x >= size as f32 || cell.y >= size as f32 {
+            return None;
+        }
+        lake_of[cell.y as usize * size + cell.x as usize]
+    };
+    let mut rim = vec![f32::MAX; lakes.len()];
+    for z in 1..fine - 1 {
+        for x in 1..fine - 1 {
+            if lake_at(x, z).is_some() {
+                continue;
+            }
+            for (dx, dz) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, nz) = ((x as i64 + dx) as usize, (z as i64 + dz) as usize);
+                if let Some(lake) = lake_at(nx, nz) {
+                    let lake = lake as usize;
+                    rim[lake] = rim[lake].min(surface.values[z * fine + x]);
+                }
+            }
+        }
+    }
+    for (lake, rim) in lakes.iter_mut().zip(rim) {
+        if !lake.endorheic {
+            lake.level = lake.level.min(rim);
+        }
+    }
+    // Rivers meet the lakes at their level.
+    let lake_near = |p: Vec3| {
+        let cell = (Vec2::new(p.x, p.z) / settings.cell_size + (size / 2) as f32).round();
+        let (x, z) = (cell.x as i64, cell.y as i64);
+        (-1..=1i64).flat_map(|dz| (-1..=1i64).map(move |dx| (dx, dz))).find_map(|(dx, dz)| {
+            let (x, z) = (x + dx, z + dz);
+            (x >= 0 && z >= 0 && x < size as i64 && z < size as i64)
+                .then(|| lake_of[z as usize * size + x as usize])
+                .flatten()
+        })
+    };
+    for river in rivers {
+        if let RiverEnd::Lake(lake) = river.end
+            && let Some(last) = river.points.last_mut()
+        {
+            last.position.y = last.position.y.min(lakes[lake].level);
+        }
+        // An outlet starts at the lake's level.
+        if let Some(lake) = river.points.first().and_then(|p| lake_near(p.position))
+            && river.end != RiverEnd::Lake(lake as usize)
+        {
+            let level = lakes[lake as usize].level;
+            for point in &mut river.points {
+                point.position.y = point.position.y.min(level);
+            }
+        }
+    }
+}
+
 /// Lower the valley floor to just above the water where rivers meander, so meanders have a
-/// flat floodplain to wind through.
+/// flat floodplain to wind through. Lake shores (within [`LAKE_RIM`] cells) stay above their
+/// lake's level, or the lake would spill.
 fn flatten_floodplains(
     size: usize,
     heights: &mut [f32],
     lake_of: &[Option<u16>],
+    lake_levels: &[f32],
     valley: &[rivers::ValleyPoint],
 ) {
+    // Lowest height allowed per cell: the level of any lake nearby.
+    let mut floor = vec![f32::MIN; heights.len()];
+    for (i, lake) in lake_of.iter().enumerate() {
+        let Some(lake) = lake else {
+            continue;
+        };
+        let level = lake_levels[*lake as usize] + 0.05;
+        let (x, z) = ((i % size) as i64, (i / size) as i64);
+        for dz in -LAKE_RIM..=LAKE_RIM {
+            for dx in -LAKE_RIM..=LAKE_RIM {
+                let (nx, nz) = (x + dx, z + dz);
+                if nx >= 0 && nz >= 0 && nx < size as i64 && nz < size as i64 {
+                    let n = nz as usize * size + nx as usize;
+                    floor[n] = floor[n].max(level);
+                }
+            }
+        }
+    }
     for point in valley.iter().filter(|p| p.floodplain > 0.) {
         let radius = point.floodplain * 1.5 + 2.;
         let target = point.water_level + 0.4;
@@ -512,7 +617,8 @@ fn flatten_floodplains(
                 }
                 let distance = point.position.distance(Vec2::new(x as f32, z as f32));
                 let t = noise::smoothstep(radius * 0.4, radius, distance);
-                heights[i] = heights[i].min(target + (heights[i] - target) * t);
+                let lowered = target + (heights[i] - target) * t;
+                heights[i] = heights[i].min(lowered.max(floor[i]));
             }
         }
     }
@@ -526,7 +632,6 @@ mod tests {
         generate(&WorldgenSettings {
             size: 192,
             erosion_steps: 20,
-            lake_spacing: 30.,
             river_min_area: 150.,
             detail_resolution: 2,
             ..WorldgenSettings::default()

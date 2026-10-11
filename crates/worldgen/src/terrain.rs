@@ -3,9 +3,15 @@
 //!
 //! The continent is split into tectonic plates (warped Voronoi cells). Each plate interior is a
 //! [`Landform`] province (plains, hill country or plateau). Mountain ranges rise along the
-//! boundaries where plates converge, and rift basins open where they diverge. Provinces set
+//! boundaries where plates converge, and rift valleys open where they diverge: the floor sinks
+//! (in segments, holding chains of lakes) between raised shoulders (escarpments). Provinces set
 //! the erosion parameters, so the same physics produces floodplains, rounded hills, canyon-cut
 //! tablelands and sharp ranges.
+//!
+//! Lakes come out of erosion itself: basins sink (rifts, kettle hollows on plains) or are
+//! overdeepened by glaciers (high mountain valleys), and erosion routes water across them to
+//! their outlet but fills them only slowly with sediment, so a basin holds a lake where it is
+//! sinking or being dug faster than it fills.
 
 use bevy_math::Vec2;
 use rand::{Rng, RngExt};
@@ -39,6 +45,12 @@ pub struct Shape {
     pub range: Vec<f32>,
     /// Cap level (world units) of the plateau the cell belongs to.
     pub plateau_cap: Vec<f32>,
+    /// Subsidence rate (relative, like `uplift`): rift floors and kettle hollows.
+    pub subsidence: Vec<f32>,
+    /// Rift valley floor (0..1), for lake classification.
+    pub rift: Vec<f32>,
+    /// Overdeepening of glacial valleys along their course (0.4..1.6, per cell).
+    pub glacial_noise: Vec<f32>,
 }
 
 impl Shape {
@@ -101,7 +113,11 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
         provinces: vec![[0.; 3]; n],
         range: vec![0.; n],
         plateau_cap: vec![0.; n],
+        subsidence: vec![0.; n],
+        rift: vec![0.; n],
+        glacial_noise: vec![1.; n],
     };
+    let basins = noise.layer(7);
 
     for i in 0..n {
         let (x, z) = (i % size, i / size);
@@ -146,6 +162,7 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
         // changes.
         let width = settings.range_width * (0.8 + 0.45 * peaks.layer(1).fbm(w / 120., 2));
         let (mut belt, mut foothills, mut rift, mut across) = (0f32, 0f32, 0f32, 0f32);
+        let (mut rift_floor, mut shoulders) = (0f32, 0f32);
         for &(dk, k) in &distances[1..4] {
             let x = (dk - d1) / 2.;
             let axis = (plates[k].center - plates[a].center).normalize_or_zero();
@@ -158,9 +175,12 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
             }
             foothills = foothills.max(collision * smoothstep(2.2, 0.6, x / width));
             // ...and rift basins along diverging ones.
-            rift = rift.max(
-                smoothstep(-0.2, -0.8, convergence) * (-(x / (width * 0.6)).powi(2)).exp(),
-            );
+            let divergence = smoothstep(-0.2, -0.8, convergence);
+            rift = rift.max(divergence * (-(x / (width * 0.6)).powi(2)).exp());
+            // The rift floor (a narrow graben) sinks; its shoulders rise into escarpments.
+            rift_floor = rift_floor.max(divergence * (-(x / (width * RIFT_FLOOR)).powi(2)).exp());
+            shoulders = shoulders
+                .max(divergence * (-((x - width * RIFT_SHOULDER) / (width * 0.25)).powi(2)).exp());
         }
         // ...made of several parallel ridges (crests every `ridge_spacing` cells across the
         // belt, wavy), broken into peaks and passes along them.
@@ -179,9 +199,21 @@ pub fn shape(settings: &WorldgenSettings, noise: Noise, rng: &mut impl Rng) -> S
         let interior = plains * 0.2 * undulation + hills * 0.9 * rolling + plateau * 1.0;
         let uplift = (interior * (1. - 0.85 * rift) * (1. - belt * 0.5)
             + range * 1.1
-            + foothills * 0.22)
+            + foothills * 0.22
+            + shoulders * RIFT_SHOULDER_UPLIFT)
             * land.powf(1.5);
         shape.uplift[i] = uplift;
+        // Rift floors sink in segments along the axis (a chain of basins), plains in scattered
+        // kettle hollows.
+        let segments = smoothstep(-0.1, 0.35, basins.fbm(w / 45., 2));
+        let kettles = plains
+            * (1. - belt)
+            * smoothstep(KETTLE_THRESHOLD, KETTLE_THRESHOLD + 0.12, basins.layer(1).fbm(w / 9., 2))
+            * smoothstep(0.3, 0.6, basins.layer(2).fbm(w / 120., 2) + 0.5);
+        shape.subsidence[i] =
+            (rift_floor * segments * RIFT_SUBSIDENCE + kettles * KETTLE_SUBSIDENCE) * land;
+        shape.rift[i] = rift_floor;
+        shape.glacial_noise[i] = 1. + 0.6 * basins.layer(3).fbm(w / 14., 2);
         shape.erodibility[i] = plains * 1.2 + hills * 1.3 + plateau * 0.12;
         shape.erodibility[i] = shape.erodibility[i] * (1. - belt) + 0.75 * belt;
         shape.diffusion[i] = settings.diffusion
@@ -297,6 +329,24 @@ fn rainfall(settings: &WorldgenSettings, shape: &Shape, noise: Noise) -> Vec<f32
         .collect()
 }
 
+/// Rift valleys: floor width and shoulder position (fractions of the range belt width), shoulder
+/// uplift and floor subsidence (relative, like uplift).
+const RIFT_FLOOR: f32 = 0.35;
+const RIFT_SHOULDER: f32 = 0.8;
+const RIFT_SHOULDER_UPLIFT: f32 = 0.35;
+const RIFT_SUBSIDENCE: f32 = 0.5;
+/// Kettle hollows on plains: noise threshold (higher: fewer) and subsidence.
+const KETTLE_THRESHOLD: f32 = 0.42;
+const KETTLE_SUBSIDENCE: f32 = 0.12;
+/// Share of its depth a lake fills with sediment per erosion step.
+const LAKE_FILL: f32 = 0.05;
+/// Glaciers: the last steps of erosion, where they flow (relative height above the 75th
+/// percentile of land, upstream area in cells), and how fast they dig.
+const GLACIAL_STEPS: usize = 12;
+const GLACIAL_HEIGHT: (f32, f32) = (0.0, 0.25);
+const GLACIAL_AREA: (f32, f32) = (40., 250.);
+const GLACIAL_RATE: f32 = 0.06;
+
 /// Largest explicit diffusion step: the cell-sized checker mode is multiplied by `1 - 8k`
 /// per step, so it is damped quickly below ~0.12.
 const MAX_DIFFUSION_STEP: f32 = 0.1;
@@ -304,19 +354,24 @@ const MAX_DIFFUSION_STEP: f32 = 0.1;
 /// Stage B: stream-power-law erosion with an implicit solver (Braun & Willett 2013) and hillslope
 /// diffusion. Returns heights in the simulation's relative units (scaled later).
 ///
-/// Every step: depressions are filled (sediment), flow is routed by steepest descent with
-/// random slope weights (stochastic D8), drainage accumulated from the rain, then
-/// `dh/dt = U - K A^m S` is solved implicitly from the outlets upstream, and `D ∇²h` smooths
-/// hillslopes.
+/// Every step: flow is routed on the water surface (depressions filled up to their spill
+/// point, Priority-Flood) by steepest descent with random slope weights (stochastic D8),
+/// drainage accumulated from the rain, then `dh/dt = U - K A^m S` is solved implicitly from the
+/// outlets upstream (rivers flowing into a lake erode down to its surface), and `D ∇²h` smooths
+/// hillslopes. Depressions are lakes: no incision under them, and sediment fills a share of
+/// their depth each step, so only basins that keep sinking (or are dug by glaciers) hold one.
+/// Glaciers overdeepen high valleys during the last steps.
+///
+/// Returns heights in the simulation's relative units (scaled later), with their lake basins.
 pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
     let size = settings.size;
     let mut heights = shape.heights.clone();
     let dt = settings.erosion_dt;
     for step in 0..settings.erosion_steps {
-        heights = priority_flood(size, &heights, &shape.base_level, 1e-4);
+        let water = priority_flood(size, &heights, &shape.base_level, 1e-4);
         let seed = hash(settings.seed as u32, step as u32, 0x51ED);
         let jitter = settings.routing_jitter;
-        let graph = FlowGraph::with_weights(size, &heights, &shape.base_level, |i, j| {
+        let graph = FlowGraph::with_weights(size, &water, &shape.base_level, |i, j| {
             1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
         });
         let area = graph.accumulate(|i| shape.rain[i]);
@@ -326,7 +381,13 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
                 continue;
             }
             let r = graph.receivers[i];
-            let uplifted = heights[i] + shape.uplift[i] * dt;
+            let uplifted = heights[i] + (shape.uplift[i] - shape.subsidence[i]) * dt;
+            // Under a lake: still water, sediment settling.
+            let depth = water[i] - uplifted;
+            if depth > 1e-3 {
+                heights[i] = uplifted + depth * LAKE_FILL;
+                continue;
+            }
             if r == i {
                 heights[i] = uplifted;
                 continue;
@@ -336,7 +397,33 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
                 * dt
                 * area[i].powf(settings.area_exponent)
                 / graph.receiver_distance[i];
-            heights[i] = (uplifted + f * heights[r]) / (1. + f);
+            heights[i] = (uplifted + f * water[r]) / (1. + f);
+        }
+
+        // Glaciers in the high valleys, digging unevenly along their course (overdeepening).
+        if step + GLACIAL_STEPS >= settings.erosion_steps {
+            let mut land: Vec<f32> = (0..heights.len())
+                .filter(|&i| !shape.base_level[i])
+                .map(|i| heights[i])
+                .collect();
+            land.sort_by(f32::total_cmp);
+            let high = land.get(land.len() * 3 / 4).copied().unwrap_or(0.);
+            let top = land.last().copied().unwrap_or(1.).max(high + 1e-3);
+            let ice: Vec<f32> = (0..heights.len())
+                .map(|i| {
+                    let height = (heights[i] - high) / (top - high);
+                    smoothstep(GLACIAL_HEIGHT.0, GLACIAL_HEIGHT.1, height)
+                        * smoothstep(GLACIAL_AREA.0, GLACIAL_AREA.1, area[i])
+                        * shape.range[i].min(1.)
+                })
+                .collect();
+            // Glaciers are wider than rivers: the trough spreads around the flow line.
+            let ice = blur(size, &ice, 1);
+            for (i, h) in heights.iter_mut().enumerate() {
+                if !shape.base_level[i] {
+                    *h -= ice[i] * GLACIAL_RATE * dt * shape.glacial_noise[i];
+                }
+            }
         }
 
         // Hillslope diffusion, explicit, in substeps of at most `MAX_DIFFUSION_STEP`: closer
@@ -363,7 +450,7 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
             }
         }
     }
-    priority_flood(size, &heights, &shape.base_level, 1e-4)
+    heights
 }
 
 /// Plateaus: cut the high ground of plateau provinces down to their cap level (a resistant

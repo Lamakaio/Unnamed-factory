@@ -4,7 +4,7 @@
 //! - `ground[0]`: sand, rock, snow, marsh weights.
 //! - `ground[1]`: dryness (0 lush .. 1 dry grass), deciduous forest floor, conifer forest floor,
 //!   alpine grass.
-//! - `ground[2]`: desert (the rest is free for later).
+//! - `ground[2]`: desert, salt flat (dry beds of endorheic lakes); the rest is free.
 //!
 //! Steep slopes, river beds and the sea floor are decided per pixel by the shader.
 
@@ -44,7 +44,8 @@ pub fn ground_textures(continent: &Continent) -> ([Image; 3], Vec4) {
         a.extend([sand, rock, snow, marsh].map(unorm));
         b.extend([dryness, deciduous, conifer, alpine].map(unorm));
         let desert = weights(&[(Biome::Desert, 1.)]);
-        c.extend([desert, 0., 0., 0.].map(unorm));
+        let salt = if continent.salt_flat[i] { 1. } else { 0. };
+        c.extend([desert, salt, 0., 0.].map(unorm));
     }
     let image = |data| {
         let mut image = Image::new(

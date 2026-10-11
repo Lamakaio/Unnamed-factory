@@ -1,217 +1,45 @@
-//! Lakes: valley sites dammed by a natural sill (like a moraine), and the final lake extraction
-//! with Priority-Flood.
+//! Lakes, read from the eroded terrain: its basins (rift floors, glacial troughs, kettle
+//! hollows, see `terrain`) filled to their spill point with Priority-Flood. Basins too small or
+//! too shallow to hold a lake are filled in (sediment). Where a basin's inflow can't make up for
+//! what its surface evaporates (dry, small catchments), the lake has no outlet (endorheic): it
+//! shrinks to the size its inflow sustains, leaving a salt flat on the dry bed around it.
 
-use std::collections::VecDeque;
-
-use bevy_math::{UVec2, Vec2};
-use rand::{Rng, RngExt};
+use bevy_math::UVec2;
 
 use crate::{
-    Lake, WorldgenSettings,
+    Lake,
     flow::{FlowGraph, neighbours, priority_flood},
-    noise::smoothstep,
 };
 
-/// Carve lakes into `heights` (world units): pick valley sites, flood them up to a level, dam
-/// the outflow at that level and deepen the bed.
-pub fn carve_lakes(
-    settings: &WorldgenSettings,
-    heights: &mut [f32],
-    base_level: &[bool],
-    land: &[f32],
-    rng: &mut impl Rng,
-) {
-    let size = settings.size;
-    let graph = FlowGraph::new(size, heights, base_level);
-    let area = graph.accumulate(|_| 1.);
+/// Flooding depth from which a cell belongs to a lake: the shallow fringe is part of it,
+/// otherwise a shallow basin falls apart into several lakes at the same level.
+const MIN_FLOOD: f32 = 0.01;
+/// Depth a lake must reach somewhere (world units).
+const MIN_DEPTH: f32 = 0.4;
+/// Water a lake cell evaporates, in cells of mean rain, where it rains `DRY_RAIN` (more where
+/// drier, none where it rains twice that): lakes whose inflow is less are endorheic.
+const EVAPORATION: f32 = 1.5;
+const DRY_RAIN: f32 = 0.6;
+/// Smallest endorheic lake kept (cells); below, the basin is only a salt flat.
+const MIN_ENDORHEIC_CELLS: usize = 8;
 
-    let mut candidates: Vec<usize> = (0..heights.len())
-        .filter(|&i| {
-            land[i] > 0.7
-                && heights[i] > 2.
-                && area[i] >= settings.lake_min_area
-                && area[i] <= settings.lake_min_area * 40.
-        })
-        .collect();
-    // Shuffle (Fisher-Yates) so sites spread over the continent.
-    for i in (1..candidates.len()).rev() {
-        candidates.swap(i, rng.random_range(0..=i));
-    }
-
-    let mut sites: Vec<Vec2> = Vec::new();
-    for site in candidates {
-        if sites.len() >= settings.lake_count {
-            break;
-        }
-        let position = cell_position(size, site);
-        if sites
-            .iter()
-            .any(|other| other.distance(position) < settings.lake_spacing)
-        {
-            continue;
-        }
-        let dam_distance = rng.random_range(20..40usize);
-        let dam_height = rng.random_range(2.0..6.0f32);
-        let max_cells = rng.random_range(150..2000usize);
-        if carve_lake(
-            size,
-            heights,
-            base_level,
-            &graph.receivers,
-            site,
-            dam_distance,
-            dam_height,
-            max_cells,
-        ) {
-            sites.push(position);
-        }
-    }
-}
-
-/// Try to make a lake upstream of a natural dam below `site`; returns whether it worked.
-///
-/// The dam sits `dam_distance` cells downstream of the site; a disc around it is raised to the
-/// lake level (growing until it seals the valley), then the valley is flooded upstream of it.
-#[expect(clippy::too_many_arguments, reason = "internal helper")]
-fn carve_lake(
-    size: usize,
-    heights: &mut [f32],
-    base_level: &[bool],
-    receivers: &[usize],
-    site: usize,
-    dam_distance: usize,
-    dam_height: f32,
-    max_cells: usize,
-) -> bool {
-    // Walk downstream to the dam.
-    let mut path = vec![site];
-    for _ in 0..dam_distance {
-        let current = *path.last().unwrap();
-        let next = receivers[current];
-        if next == current || base_level[next] {
-            return false;
-        }
-        path.push(next);
-    }
-    let dam = *path.last().unwrap();
-    let level = heights[dam] + dam_height;
-    let crest = level + 0.5;
-    let dam_position = cell_position(size, dam);
-
-    for radius in [4., 6., 9., 13., 18.] {
-        let mut dammed = heights.to_vec();
-        let reach = radius as usize + 1;
-        let (dx, dz) = (dam % size, dam / size);
-        for z in dz.saturating_sub(reach)..(dz + reach + 1).min(size) {
-            for x in dx.saturating_sub(reach)..(dx + reach + 1).min(size) {
-                let i = z * size + x;
-                // Moraine-like profile: flat crest in the middle, smooth flanks.
-                let d = cell_position(size, i).distance(dam_position);
-                let raise = 1. - smoothstep(radius * 0.5, radius, d);
-                dammed[i] = dammed[i].max(dammed[i] + (crest - dammed[i]) * raise);
-            }
-        }
-        // Flood from the first valley cell upstream of the dam.
-        let Some(&seed) = path
-            .iter()
-            .rev()
-            .find(|&&i| cell_position(size, i).distance(dam_position) > radius + 1.)
-        else {
-            return false;
-        };
-        if dammed[seed] >= level {
-            // The valley is already above the lake level there: too steep for this dam.
-            return false;
-        }
-        let Some(region) = flood_region(size, &dammed, base_level, seed, level, max_cells) else {
-            continue;
-        };
-        if region.len() < 30 {
-            return false;
-        }
-        heights.copy_from_slice(&dammed);
-        let mut in_region = vec![false; heights.len()];
-        for &i in &region {
-            in_region[i] = true;
-        }
-        // Deepen the bed towards the middle (distance from the shore, in cells).
-        let distance = distance_from_shore(size, &region, &in_region);
-        let max_distance = distance.iter().copied().fold(1., f32::max);
-        for (&i, &d) in region.iter().zip(&distance) {
-            let bed = level - 0.6 - dam_height * 0.8 * (d / max_distance).sqrt();
-            heights[i] = heights[i].min(bed);
-        }
-        return true;
-    }
-    false
-}
-
-/// Cells connected to `site` lower than `level`, or `None` if that region is too big or
-/// reaches the sea.
-fn flood_region(
-    size: usize,
-    heights: &[f32],
-    base_level: &[bool],
-    site: usize,
-    level: f32,
-    max_cells: usize,
-) -> Option<Vec<usize>> {
-    let mut visited = vec![false; heights.len()];
-    let mut region = vec![site];
-    let mut queue = VecDeque::from([site]);
-    visited[site] = true;
-    while let Some(i) = queue.pop_front() {
-        for (n, _) in neighbours(size, i) {
-            if visited[n] || heights[n] >= level {
-                continue;
-            }
-            if base_level[n] || region.len() >= max_cells {
-                return None;
-            }
-            visited[n] = true;
-            region.push(n);
-            queue.push_back(n);
-        }
-    }
-    Some(region)
-}
-
-/// Distance (in cells, 4-connected) of each region cell to the nearest cell outside.
-fn distance_from_shore(size: usize, region: &[usize], in_region: &[bool]) -> Vec<f32> {
-    let mut distance = vec![f32::MAX; in_region.len()];
-    let mut queue = VecDeque::new();
-    for &i in region {
-        if neighbours(size, i).any(|(n, _)| !in_region[n]) {
-            distance[i] = 1.;
-            queue.push_back(i);
-        }
-    }
-    while let Some(i) = queue.pop_front() {
-        for (n, d) in neighbours(size, i) {
-            if in_region[n] && d <= 1. && distance[n] > distance[i] + 1. {
-                distance[n] = distance[i] + 1.;
-                queue.push_back(n);
-            }
-        }
-    }
-    region.iter().map(|&i| distance[i]).collect()
-}
-
-/// Find the lakes of the final terrain: Priority-Flood without slope gives flat water surfaces;
-/// connected flooded areas big and deep enough are lakes. Returns the lakes and each cell's
-/// lake index.
+/// The lakes of `heights` (world units), each cell's lake, and the salt flats (dry beds of
+/// endorheic lakes). Fills basins that don't hold a lake into `heights`. `rain` is per cell
+/// (mean ~1 on land).
 pub fn find_lakes(
     size: usize,
-    heights: &[f32],
+    heights: &mut [f32],
     base_level: &[bool],
+    rain: &[f32],
     min_cells: usize,
-) -> (Vec<Lake>, Vec<Option<u16>>) {
+) -> (Vec<Lake>, Vec<Option<u16>>, Vec<bool>) {
     let water = priority_flood(size, heights, base_level, 0.);
     let flooded: Vec<bool> = (0..heights.len())
-        .map(|i| !base_level[i] && water[i] - heights[i] > 0.1)
+        .map(|i| !base_level[i] && water[i] - heights[i] > MIN_FLOOD)
         .collect();
-    let mut lake_of = vec![None; heights.len()];
-    let mut lakes = Vec::new();
+
+    // Connected flooded regions; those too small or shallow are filled.
+    let mut regions: Vec<Vec<usize>> = Vec::new();
     let mut seen = vec![false; heights.len()];
     for start in 0..heights.len() {
         if !flooded[start] || seen[start] {
@@ -230,24 +58,65 @@ pub fn find_lakes(
                 }
             }
         }
-        if cells.len() < min_cells {
+        let deepest = cells.iter().map(|&i| water[i] - heights[i]).fold(0., f32::max);
+        if cells.len() < min_cells || deepest < MIN_DEPTH {
+            for &i in &cells {
+                heights[i] = water[i];
+            }
+        } else {
+            regions.push(cells);
+        }
+    }
+
+    // Inflow of each basin: the drainage reaching its lowest outflow (in rain units).
+    let routing = priority_flood(size, heights, base_level, 1e-4);
+    let graph = FlowGraph::new(size, &routing, base_level);
+    let area = graph.accumulate(|i| rain[i]);
+
+    let mut lake_of = vec![None; heights.len()];
+    let mut salt = vec![false; heights.len()];
+    let mut lakes = Vec::new();
+    for cells in regions {
+        let spill = water[cells[0]];
+        let inflow = cells.iter().map(|&i| area[i]).fold(0., f32::max);
+        let rain_here = cells.iter().map(|&i| rain[i]).sum::<f32>() / cells.len() as f32;
+        let evaporation = EVAPORATION * (2. - rain_here / DRY_RAIN).max(0.);
+        let sustained = (inflow / evaporation.max(1e-6)).min(usize::MAX as f32 / 2.) as usize;
+        let (level, lake_cells, endorheic) = if sustained >= cells.len() {
+            (spill, cells, false)
+        } else {
+            // Endorheic: the water stands as high as it covers the cells it can sustain.
+            let mut beds: Vec<f32> = cells.iter().map(|&i| heights[i]).collect();
+            beds.sort_by(f32::total_cmp);
+            if sustained < MIN_ENDORHEIC_CELLS {
+                for &i in &cells {
+                    salt[i] = true;
+                }
+                continue;
+            }
+            let level = beds[sustained - 1] + MIN_FLOOD * 2.;
+            let (wet, dry): (Vec<usize>, Vec<usize>) =
+                cells.iter().partition(|&&i| heights[i] < level - MIN_FLOOD);
+            for i in dry {
+                salt[i] = true;
+            }
+            (level, wet, true)
+        };
+        if lake_cells.is_empty() {
             continue;
         }
         let id = lakes.len() as u16;
-        for &i in &cells {
+        for &i in &lake_cells {
             lake_of[i] = Some(id);
         }
         lakes.push(Lake {
-            level: water[start],
-            cells: cells
+            level,
+            cells: lake_cells
                 .iter()
                 .map(|&i| UVec2::new((i % size) as u32, (i / size) as u32))
                 .collect(),
+            endorheic,
         });
     }
-    (lakes, lake_of)
-}
-
-fn cell_position(size: usize, i: usize) -> Vec2 {
-    Vec2::new((i % size) as f32, (i / size) as f32)
+    (lakes, lake_of, salt)
 }

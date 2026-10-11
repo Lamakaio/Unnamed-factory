@@ -15,6 +15,16 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Priority-Flood** depression filling: R. Barnes, C. Lehman, D. Mulla, *Priority-flood: An
   optimal depression-filling and watershed-labeling algorithm for digital elevation models*,
   Computers & Geosciences 62, 2014. (`flow.rs`)
+- **Lakes in landscape evolution** (basins kept through erosion, filled by sediment, flow
+  routed across them to their outlet): after the depression handling of FastScape-type models,
+  G. Cordonnier, B. Bovy, J. Braun, *A versatile, linear complexity algorithm for flow routing
+  in topographies with depressions*, Earth Surface Dynamics 7, 2019. (`terrain.rs::erode`)
+- **Rift valleys** (sinking grabens between uplifted shoulders, holding chains of lakes, as in
+  the East African Rift) and **glacial overdeepening** (troughs dug unevenly, holding ribbon
+  lakes): S. J. Cook and D. A. Swift, *Subglacial basins: their origin and importance in
+  glacial systems and landscapes*, Earth-Science Reviews 115, 2012. **Endorheic lakes**: lake
+  area set by the balance of inflow and evaporation (closed-basin hydrology). (`terrain.rs`,
+  `lakes.rs`)
 - **Stochastic D8 flow routing** (against grid-aligned valleys): J. Fairfield and
   P. Leymarie, *Drainage networks from grid digital elevation models* (the Rho8 method),
   Water Resources Research 27(5), 1991.

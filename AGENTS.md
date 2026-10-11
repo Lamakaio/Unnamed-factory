@@ -163,10 +163,18 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      - `cap_plateaus`: plateau provinces are cut at their cap level (tablelands, escarpments);
      - `limit_slopes`: thermal erosion to a talus slope (~0.45–0.7 per cell, steeper on
        plateau edges), so nothing is abruptly steep.
-  3. **Lakes** (`lakes.rs`): valley sites (enough drainage, inland, spaced apart). A
-     moraine-like dam disc 20–40 cells downstream is raised to the lake level, growing until it
-     seals the valley; the valley is flooded upstream and the bed deepened. `find_lakes` then
-     finds lakes with a Priority-Flood without epsilon (flat surfaces, ≥ 20 cells).
+  3. **Lakes** come out of erosion: basins sink (`Shape::subsidence`: rift floors in segments
+     between raised shoulders, kettle hollows on plains) or are dug by glaciers (high valleys
+     with large drainage, the last `GLACIAL_STEPS` steps, uneven along their course).
+     `erode` routes flow on the water surface (Priority-Flood) but doesn't fill basins: no
+     incision under a lake, sediment fills `LAKE_FILL` of its depth per step. `find_lakes`
+     (`lakes.rs`) reads the basins of the final heights: flooded > 0.01 (the shallow fringe
+     belongs to the lake), ≥ 20 cells, ≥ 0.4 deep; smaller ones are filled in. Basins whose
+     inflow (rain on the terrain, as for the climate) can't match their evaporation (more
+     where drier) are endorheic: they shrink to what they sustain, leave salt flats
+     (`Continent::salt_flat`, ground_c.g), and are sinks for river routing. Floodplains keep
+     lake shores above their level (`LAKE_RIM`); after the fine detail, `settle_lakes`
+     lowers each level to its lowest bank on the fine surface, and inflows / outlets meet it.
   4. **Rivers** (`rivers.rs`): routing on the epsilon-filled surface; cells with drainage
      ≥ `river_min_area` are rivers, so they always merge. They are traced from mouths (sea or
      lake) upstream, the main stem following the largest donor, and tributaries end exactly on
