@@ -1,8 +1,9 @@
 //! Lakes, read from the eroded terrain: its basins (rift floors, glacial troughs, kettle
 //! hollows, see `terrain`) filled to their spill point with Priority-Flood. Basins too small or
 //! too shallow to hold a lake are filled in (sediment). Where a basin's inflow can't make up for
-//! what its surface evaporates (dry, small catchments), the lake has no outlet (endorheic): it
-//! shrinks to the size its inflow sustains, leaving a salt flat on the dry bed around it.
+//! what its surface evaporates (dry all around, little inflow, and a deep basin or one near sea
+//! level), the lake has no outlet (endorheic): it shrinks to the size its inflow sustains,
+//! leaving a salt flat on the dry bed around it.
 
 use bevy_math::UVec2;
 
@@ -20,6 +21,11 @@ const MIN_DEPTH: f32 = 0.4;
 /// drier, none where it rains twice that): lakes whose inflow is less are endorheic.
 const EVAPORATION: f32 = 1.5;
 const DRY_RAIN: f32 = 0.6;
+/// Endorheic lakes also need an inflow below this (rain units), and a basin at least this deep
+/// below its spill point, or a spill point at most this high (world units).
+const MAX_ENDORHEIC_INFLOW: f32 = 300.;
+const ENDORHEIC_BARRIER: f32 = 3.;
+const ENDORHEIC_SEA_LEVEL: f32 = 1.;
 /// Cells around a lake that must all be dry for it to lose its outlet.
 const DRY_RADIUS: i64 = 4;
 /// Smallest endorheic lake kept (cells); below, the basin is only a salt flat.
@@ -99,7 +105,12 @@ pub fn find_lakes(
         }
         let evaporation = EVAPORATION * (2. - wettest / DRY_RAIN).max(0.);
         let sustained = (inflow / evaporation.max(1e-6)).min(usize::MAX as f32 / 2.) as usize;
-        let (level, lake_cells, endorheic) = if sustained >= cells.len() {
+        // Closed basins also need little inflow, and either a high barrier to their outlet (a
+        // deep basin) or to lie near sea level; elsewhere the water finds its way out.
+        let bed = cells.iter().map(|&i| heights[i]).fold(f32::MAX, f32::min);
+        let closed = inflow < MAX_ENDORHEIC_INFLOW
+            && (spill - bed >= ENDORHEIC_BARRIER || spill <= ENDORHEIC_SEA_LEVEL);
+        let (level, lake_cells, endorheic) = if sustained >= cells.len() || !closed {
             (spill, cells, false)
         } else {
             // Endorheic: the water stands as high as it covers the cells it can sustain.
