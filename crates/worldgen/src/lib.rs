@@ -25,10 +25,13 @@
 mod climate;
 mod detail;
 mod flow;
+pub mod grid;
+pub mod sphere;
 mod heightmap;
 mod lakes;
 mod mouths;
 pub mod noise;
+pub mod planet;
 mod rivers;
 mod terrain;
 
@@ -37,6 +40,7 @@ use std::time::{Duration, Instant};
 use bevy_math::{UVec2, Vec2, Vec3};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
+use grid::PlaneGrid;
 pub use heightmap::Heightmap;
 pub use mouths::Mouth;
 
@@ -341,7 +345,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     let shape = terrain::shape(settings, noise, &mut rng);
     lap("shape", &mut timings);
 
-    let mut heights = terrain::erode(settings, &shape);
+    let mut heights = terrain::erode(&PlaneGrid::new(size), settings, &shape);
     // Erosion works in relative units: scale land to world units (drainage is preserved). The
     // mountain ranges set the scale, so each province keeps its own relief.
     let mut summits: Vec<f32> = (0..heights.len())
@@ -379,7 +383,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
                 || lake_of[i].is_some_and(|lake| lakes[lake as usize].endorheic)
         })
         .collect();
-    let routing = flow::priority_flood(size, &heights, &sinks, 1e-4);
+    let routing = flow::priority_flood(&PlaneGrid::new(size), &heights, &sinks, 1e-4);
     let lake_levels: Vec<f32> = lakes.iter().map(|lake| lake.level).collect();
     let (mut rivers, valley) = rivers::extract_rivers(
         settings,
@@ -396,7 +400,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     // Deltas moved the shore.
     let sea: Vec<bool> = heights.iter().map(|&h| h <= 0.).collect();
     let shore = terrain::shore_distance(size, &sea);
-    let drainage = flow::FlowGraph::new(size, &routing, &sinks).accumulate(|_| 1.);
+    let drainage = flow::FlowGraph::new(&PlaneGrid::new(size), &routing, &sinks).accumulate(|_| 1.);
     lap("rivers", &mut timings);
 
     let climate = climate::climate(
@@ -677,7 +681,7 @@ fn settle_lakes(
     let sea: Vec<bool> = (0..fine * fine)
         .map(|i| surface.values[i] <= 0. && lake_at(i % fine, i / fine).is_none())
         .collect();
-    let water = flow::priority_flood(fine, &surface.values, &sea, 0.);
+    let water = flow::priority_flood(&PlaneGrid::new(fine), &surface.values, &sea, 0.);
     // The level: the water at the lake's deepest point (its basin's spill point).
     let mut deepest = vec![(f32::MAX, f32::MIN); lakes.len()];
     for z in 0..fine {
@@ -890,8 +894,8 @@ mod tests {
             .map(|i| noise.fbm(Vec2::new((i % size) as f32, (i / size) as f32) / 10., 4) * 10.)
             .collect();
         let base_level: Vec<bool> = (0..size * size).map(|i| i % size == 0).collect();
-        let filled = flow::priority_flood(size, &heights, &base_level, 1e-3);
-        let graph = flow::FlowGraph::new(size, &filled, &base_level);
+        let filled = flow::priority_flood(&PlaneGrid::new(size), &heights, &base_level, 1e-3);
+        let graph = flow::FlowGraph::new(&PlaneGrid::new(size), &filled, &base_level);
         // Every cell reaches an outlet on the border.
         assert_eq!(graph.order.len(), size * size);
         for i in 0..size * size {

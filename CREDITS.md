@@ -51,6 +51,17 @@ someone else's work, add it here (and mention it in the code comment where it is
   and Modeling: A Procedural Approach*), domain warping (Inigo Quilez, *Domain warping*
   article). Integer hash finalizer constants from MurmurHash3 (Austin Appleby).
 - **Smooth minimum** (coast ramp): Inigo Quilez, *Smooth minimum* article.
+- **Equiangular cube-sphere** (the planet's grid): C. Ronchi, R. Iacono, P. S. Paolucci, *The
+  "Cubed Sphere": A New Method for the Solution of Partial Differential Equations in
+  Spherical Geometry*, Journal of Computational Physics 124, 1996. (`sphere.rs`)
+- **Solid angle of a spherical triangle** (cell areas): A. Van Oosterom, J. Strackee, *The
+  Solid Angle of a Plane Triangle*, IEEE Trans. Biomedical Engineering 30, 1983.
+- **3D gradient noise with cube-edge gradients**: K. Perlin, *Improving Noise*, SIGGRAPH 2002.
+  (`noise.rs::get3`)
+- **Planet design** (`docs/living-world.md`, `planet.rs`): rigid plates with Euler-pole
+  rotations and boundary classification after Y. Cortial, A. Peytavie, É. Galin, É. Guérin,
+  *Procedural Tectonic Planets*, Computer Graphics Forum 2019; tectonics.js (Carl Davidson);
+  Red Blob Games, *Planet generation*; World Orogen (R. Aguilar).
 
 ## Terrain rendering (`src/map`, `assets/shaders`)
 

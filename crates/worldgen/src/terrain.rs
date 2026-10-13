@@ -19,6 +19,7 @@ use rand::{Rng, RngExt};
 use crate::{
     Landform, WorldgenSettings,
     flow::{FlowGraph, neighbours, priority_flood},
+    grid::Grid,
     noise::{Noise, hash, smoothstep},
 };
 
@@ -363,15 +364,14 @@ const MAX_DIFFUSION_STEP: f32 = 0.1;
 /// Glaciers overdeepen high valleys during the last steps.
 ///
 /// Returns heights in the simulation's relative units (scaled later), with their lake basins.
-pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
-    let size = settings.size;
+pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
     let mut heights = shape.heights.clone();
     let dt = settings.erosion_dt;
     for step in 0..settings.erosion_steps {
-        let water = priority_flood(size, &heights, &shape.base_level, 1e-4);
+        let water = priority_flood(grid, &heights, &shape.base_level, 1e-4);
         let seed = hash(settings.seed as u32, step as u32, 0x51ED);
         let jitter = settings.routing_jitter;
-        let graph = FlowGraph::with_weights(size, &water, &shape.base_level, |i, j| {
+        let graph = FlowGraph::with_weights(grid, &water, &shape.base_level, |i, j| {
             1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
         });
         let area = graph.accumulate(|i| shape.rain[i]);
@@ -418,7 +418,7 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
                 })
                 .collect();
             // Glaciers are wider than rivers: the trough spreads around the flow line.
-            let ice = blur(size, &ice, 1);
+            let ice = grid.blur(&ice, 1);
             for (i, h) in heights.iter_mut().enumerate() {
                 if !shape.base_level[i] {
                     *h -= ice[i] * GLACIAL_RATE * dt * shape.glacial_noise[i];
@@ -440,8 +440,8 @@ pub fn erode(settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
                 let k = shape.diffusion[i] * dt / substeps;
                 let mut sum = 0.;
                 let mut count = 0.;
-                for (j, distance) in neighbours(size, i) {
-                    if distance <= 1. {
+                for (j, distance) in grid.neighbours(i) {
+                    if distance < 1.2 {
                         sum += previous[j];
                         count += 1.;
                     }

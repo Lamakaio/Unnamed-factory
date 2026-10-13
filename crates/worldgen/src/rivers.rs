@@ -6,7 +6,10 @@ use std::f32::consts::TAU;
 
 use bevy_math::{Vec2, Vec3, Vec3Swizzles};
 
-use crate::{River, RiverEnd, RiverPoint, WorldgenSettings, flow::FlowGraph, noise::smoothstep};
+use crate::{
+    River, RiverEnd, RiverPoint, WorldgenSettings, flow::FlowGraph, grid::PlaneGrid,
+    noise::smoothstep,
+};
 
 /// Spacing of the output polyline points, in cells.
 const SPACING: f32 = 0.5;
@@ -40,7 +43,7 @@ pub fn extract_rivers(
     lake_levels: &[f32],
 ) -> (Vec<River>, Vec<ValleyPoint>) {
     let size = settings.size;
-    let graph = FlowGraph::new(size, routing, base_level);
+    let graph = FlowGraph::new(&PlaneGrid::new(size), routing, base_level);
     let area = graph.accumulate(|_| 1.);
     let is_river =
         |i: usize| area[i] >= settings.river_min_area && !base_level[i] && lake_of[i].is_none();

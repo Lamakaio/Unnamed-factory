@@ -1,6 +1,7 @@
-//! Small, dependency-free 2D gradient noise and the usual combinators (fBm, ridged, warp).
+//! Small, dependency-free 2D and 3D gradient noise and the usual combinators (fBm, ridged,
+//! warp). The 3D versions sample the planet's surface by direction, with no seams.
 
-use bevy_math::Vec2;
+use bevy_math::{Vec2, Vec3};
 
 /// Seeded 2D gradient (Perlin-style) noise.
 #[derive(Clone, Copy)]
@@ -73,6 +74,85 @@ impl Noise {
         Vec2::new(
             self.layer(100).fbm(p, octaves),
             self.layer(200).fbm(p, octaves),
+        ) * strength
+    }
+}
+
+impl Noise {
+    /// Perlin's 12 cube-edge gradients, picked by hash.
+    fn gradient3(self, x: i32, y: i32, z: i32) -> Vec3 {
+        const GRADIENTS: [Vec3; 12] = [
+            Vec3::new(1., 1., 0.),
+            Vec3::new(-1., 1., 0.),
+            Vec3::new(1., -1., 0.),
+            Vec3::new(-1., -1., 0.),
+            Vec3::new(1., 0., 1.),
+            Vec3::new(-1., 0., 1.),
+            Vec3::new(1., 0., -1.),
+            Vec3::new(-1., 0., -1.),
+            Vec3::new(0., 1., 1.),
+            Vec3::new(0., -1., 1.),
+            Vec3::new(0., 1., -1.),
+            Vec3::new(0., -1., -1.),
+        ];
+        let h = hash(hash(self.seed, x as u32, y as u32), z as u32, 0x5BD1_E995);
+        GRADIENTS[(h % 12) as usize]
+    }
+
+    /// 3D gradient noise in about -1..1, with features about one unit apart.
+    pub fn get3(self, p: Vec3) -> f32 {
+        let cell = p.floor();
+        let (x, y, z) = (cell.x as i32, cell.y as i32, cell.z as i32);
+        let f = p - cell;
+        let dot = |dx: i32, dy: i32, dz: i32| {
+            self.gradient3(x + dx, y + dy, z + dz)
+                .dot(f - Vec3::new(dx as f32, dy as f32, dz as f32))
+        };
+        let u = f * f * f * (f * (f * 6. - 15.) + 10.);
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+        let face = |dz: i32| {
+            let bottom = lerp(dot(0, 0, dz), dot(1, 0, dz), u.x);
+            let top = lerp(dot(0, 1, dz), dot(1, 1, dz), u.x);
+            lerp(bottom, top, u.y)
+        };
+        // Perlin noise with edge gradients spans about ±1 in 3D.
+        lerp(face(0), face(1), u.z)
+    }
+
+    /// 3D fractal Brownian motion in about -1..1.
+    pub fn fbm3(self, p: Vec3, octaves: u32) -> f32 {
+        let (mut sum, mut amplitude, mut total, mut frequency) = (0., 1., 0., 1.);
+        for octave in 0..octaves {
+            sum += self.layer(octave).get3(p * frequency) * amplitude;
+            total += amplitude;
+            amplitude *= 0.5;
+            frequency *= 2.03;
+        }
+        sum / total
+    }
+
+    /// 3D ridged multifractal in 0..1.
+    pub fn ridged3(self, p: Vec3, octaves: u32) -> f32 {
+        let (mut sum, mut amplitude, mut total, mut frequency) = (0., 1., 0., 1.);
+        let mut weight = 1.;
+        for octave in 0..octaves {
+            let ridge = 1. - self.layer(octave).get3(p * frequency).abs().min(1.);
+            let ridge = ridge * ridge * weight;
+            weight = (ridge * 2.).clamp(0., 1.);
+            sum += ridge * amplitude;
+            total += amplitude;
+            amplitude *= 0.5;
+            frequency *= 2.03;
+        }
+        sum / total
+    }
+
+    /// 3D domain warp: an offset of up to about `strength` to apply to `p`.
+    pub fn warp3(self, p: Vec3, octaves: u32, strength: f32) -> Vec3 {
+        Vec3::new(
+            self.layer(100).fbm3(p, octaves),
+            self.layer(200).fbm3(p, octaves),
+            self.layer(300).fbm3(p, octaves),
         ) * strength
     }
 }

@@ -1,10 +1,12 @@
-//! Flow routing on a square grid: depression filling (Priority-Flood), steepest-descent
-//! receivers, upstream ordering and drainage accumulation.
+//! Flow routing on a grid of cells (see [`Grid`]): depression filling (Priority-Flood),
+//! steepest-descent receivers, upstream ordering and drainage accumulation.
 //!
-//! Cells are indexed `z * size + x`. "Base level" cells (the sea) are outlets: they never
-//! drain anywhere and anchor every flow path.
+//! "Base level" cells (the sea) are outlets: they never drain anywhere and anchor every flow
+//! path. On the flat map, its border cells are outlets too.
 
 use std::{cmp::Ordering, collections::BinaryHeap};
+
+use crate::grid::Grid;
 
 /// The 8 neighbour offsets, and their distances (in cells).
 pub const NEIGHBOURS: [(i32, i32, f32); 8] = [
@@ -18,7 +20,8 @@ pub const NEIGHBOURS: [(i32, i32, f32); 8] = [
     (1, 1, std::f32::consts::SQRT_2),
 ];
 
-/// Iterate over the in-bounds neighbours of cell `i` as `(index, distance)`.
+/// Iterate over the in-bounds neighbours of cell `i` of a square `size × size` grid (cells
+/// indexed `z * size + x`) as `(index, distance)`.
 pub fn neighbours(size: usize, i: usize) -> impl Iterator<Item = (usize, f32)> {
     let (x, z) = ((i % size) as i32, (i / size) as i32);
     NEIGHBOURS.iter().filter_map(move |&(dx, dz, distance)| {
@@ -51,19 +54,23 @@ impl Ord for Entry {
 ///
 /// With `epsilon > 0`, filled areas get a tiny slope towards their outlet, so steepest-descent
 /// routing works across them; with `epsilon == 0`, lakes come out perfectly flat.
-pub fn priority_flood(size: usize, heights: &[f32], base_level: &[bool], epsilon: f32) -> Vec<f32> {
+pub fn priority_flood(
+    grid: &impl Grid,
+    heights: &[f32],
+    base_level: &[bool],
+    epsilon: f32,
+) -> Vec<f32> {
     let mut filled = heights.to_vec();
     let mut closed = vec![false; heights.len()];
     let mut open = BinaryHeap::new();
     for i in 0..heights.len() {
-        let (x, z) = (i % size, i / size);
-        if base_level[i] || x == 0 || z == 0 || x == size - 1 || z == size - 1 {
+        if base_level[i] || grid.is_border(i) {
             closed[i] = true;
             open.push(Entry(filled[i], i));
         }
     }
     while let Some(Entry(height, i)) = open.pop() {
-        for (n, _) in neighbours(size, i) {
+        for (n, _) in grid.neighbours(i) {
             if closed[n] {
                 continue;
             }
@@ -87,15 +94,15 @@ pub struct FlowGraph {
 
 impl FlowGraph {
     /// Route flow on `heights`, which must have no depressions (see [`priority_flood`]).
-    pub fn new(size: usize, heights: &[f32], base_level: &[bool]) -> Self {
-        Self::with_weights(size, heights, base_level, |_, _| 1.)
+    pub fn new(grid: &impl Grid, heights: &[f32], base_level: &[bool]) -> Self {
+        Self::with_weights(grid, heights, base_level, |_, _| 1.)
     }
 
     /// Like [`FlowGraph::new`], with the slope towards neighbour `j` of cell `i` multiplied by
     /// `weight(i, j)` when choosing receivers. Random weights avoid the straight, grid-aligned
     /// valleys of pure steepest descent (stochastic D8).
     pub fn with_weights(
-        size: usize,
+        grid: &impl Grid,
         heights: &[f32],
         base_level: &[bool],
         weight: impl Fn(usize, usize) -> f32,
@@ -108,7 +115,7 @@ impl FlowGraph {
                 continue;
             }
             let mut best_slope = 0.;
-            for (j, distance) in neighbours(size, i) {
+            for (j, distance) in grid.neighbours(i) {
                 let slope = (heights[i] - heights[j]) / distance * weight(i, j);
                 if slope > best_slope {
                     best_slope = slope;

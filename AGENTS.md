@@ -80,7 +80,7 @@ src/dev_tools.rs        DevToolsPlugin: BRP remote, wireframe, debug gizmo group
 src/map/                MapPlugin, Map resource; heights.rs (height function), rivers.rs, edits.rs, mesh.rs (LOD), water.rs, spatial.rs, ground.rs (ground material textures), vegetation.rs (trees, rocks, LODs)
 tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
-crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
+crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; grid.rs/sphere.rs/planet.rs (the planet); examples/preview.rs, planet_preview.rs (PNG previews)
 src/shaders.rs          ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>, RON `.mapmat` loader
 src/ui.rs               UiPlugin: loading text (BSN), `label()` text scene, PointerOverUi system param
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
@@ -242,7 +242,28 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     `<seed>_detail.png` (a crop of the fine surface), and prints per-landform height / slope
     stats and timings. Use it to tune generation without the game. Don't pipe its output into
     `head`: the broken pipe kills it before it writes the images. Tests:
-    `cargo test -p worldgen --release`.
+    `cargo test -p worldgen --release`. `fingerprint` (`--example fingerprint -- [seeds]`)
+    prints a hash of the generated heights, surface, rivers and lakes: run it before and after
+    a refactor that must not change generation.
+- **Planet** (milestone 1 of `docs/living-world.md`, not in the game yet):
+  - `grid.rs`: the `Grid` trait (cells, neighbours with distances in cells, border, blur).
+    `flow.rs` (Priority-Flood, `FlowGraph`) and `terrain::erode` are generic over it; the flat
+    map passes a `PlaneGrid`, which gives exactly the old results.
+  - `sphere.rs`: `SphereGrid`, an equiangular cube-sphere of `6 n²` cells, indexed
+    `(face * n + z) * n + x`; `direction(i)`, `cell_at(direction)`, `face_coords`, `area(i)`
+    (relative to the mean). Neighbours across face edges are found by direction (at cube
+    corners a cell has 7). Tests: round trip, areas, mutual neighbours, everything drains.
+  - `noise.rs`: 3D noise (`get3`, `fbm3`, `ridged3`, `warp3`) to sample the sphere by direction.
+  - `planet.rs`: `generate_planet(&PlanetSettings) -> Planet`: continents from noise sized
+    relative to the radius (`CONTINENT_FREQUENCY`), rigid plates (Euler-pole rotations) whose
+    converging boundaries raise ridged mountain belts (as `terrain::shape` on the flat map),
+    then `terrain::erode` on the sphere, scaling to world units and a sea floor deepening away
+    from land; drainage. Landforms are sized in cells, so they match the flat map; the radius
+    is `2n/π` cells (n = 1024 is the target planet, 256 the fast default for previews).
+  - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
+    <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
+    `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png`. At n = 256 erosion
+    takes ~9 s (~2.4× the flat map's cost per cell: neighbours are found through directions).
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
   `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.

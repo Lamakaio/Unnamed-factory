@@ -12,6 +12,7 @@ use bevy_math::{UVec2, Vec2, Vec3};
 use crate::{
     Lake, River, RiverEnd, RiverPoint, WorldgenSettings,
     flow::{FlowGraph, neighbours, priority_flood},
+    grid::PlaneGrid,
 };
 
 /// Flooding depth from which a cell belongs to a lake: the shallow fringe is part of it,
@@ -43,7 +44,7 @@ pub fn find_lakes(
     rain: &[f32],
     min_cells: usize,
 ) -> (Vec<Lake>, Vec<Option<u16>>, Vec<bool>) {
-    let water = priority_flood(size, heights, base_level, 0.);
+    let water = priority_flood(&PlaneGrid::new(size), heights, base_level, 0.);
     let flooded: Vec<bool> = (0..heights.len())
         .map(|i| !base_level[i] && water[i] - heights[i] > MIN_FLOOD)
         .collect();
@@ -79,8 +80,8 @@ pub fn find_lakes(
     }
 
     // Inflow of each basin: the drainage reaching its lowest outflow (in rain units).
-    let routing = priority_flood(size, heights, base_level, 1e-4);
-    let graph = FlowGraph::new(size, &routing, base_level);
+    let routing = priority_flood(&PlaneGrid::new(size), heights, base_level, 1e-4);
+    let graph = FlowGraph::new(&PlaneGrid::new(size), &routing, base_level);
     let area = graph.accumulate(|i| rain[i]);
 
     let mut lake_of = vec![None; heights.len()];
