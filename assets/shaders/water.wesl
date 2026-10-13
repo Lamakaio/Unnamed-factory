@@ -55,6 +55,10 @@ const WAVE_PERIOD: f32 = 5.0;
 const SWELL_REACH: vec2<f32> = vec2(18.0, 34.0);
 // Swell breaks into foam in water shallower than this (on fully exposed shores).
 const BREAK_DEPTH: f32 = 1.5;
+// Shore foam: the water thickness is averaged over this world distance (about the terrain
+// mesh's cells near water), with this many taps around the pixel.
+const SHORE_SMOOTH: f32 = 0.18;
+const SHORE_TAPS: i32 = 8;
 // River flow map: seconds before the pattern resets (two phases, cross-faded).
 const FLOW_PERIOD: f32 = 1.6;
 // ...and only this close to the shore (travel time, deep-water world units).
@@ -82,6 +86,24 @@ fn value_noise(p: vec2<f32>) -> f32 {
 
 fn fbm2(p: vec2<f32>) -> f32 {
     return value_noise(p) * 0.65 + value_noise(p * 2.03 + vec2(17.3, 9.2)) * 0.35;
+}
+
+// Thickness of the water at `position` (fragment coordinates), averaged over a disc of `radius`
+// pixels: the shore foam then doesn't trace the triangles of the terrain mesh behind.
+@if(DEPTH_PREPASS)
+fn smoothed_thickness(position: vec4<f32>, surface_z: f32, radius: f32) -> f32 {
+    let size = view.viewport.zw - 1.0;
+    var total = 0.0;
+    for (var k = 0; k <= SHORE_TAPS; k++) {
+        var offset = vec2(0.0);
+        if k > 0 {
+            let angle = f32(k) * 6.2832 / f32(SHORE_TAPS) + 0.4;
+            offset = vec2(cos(angle), sin(angle)) * radius;
+        }
+        let at = vec4(clamp(position.xy + offset, vec2(0.0), size), position.zw);
+        total += max(surface_z - depth_ndc_to_view_z(prepass_depth(at, 0u)), 0.0);
+    }
+    return total / f32(SHORE_TAPS + 1);
 }
 
 // A crisp step, antialiased over about a pixel.
@@ -190,8 +212,13 @@ fn fragment(
     // and the depth under the surface it amounts to.
     let surface_z = depth_ndc_to_view_z(in.position.z);
     var thickness = 100.0;
-@if(DEPTH_PREPASS)
+    // For the shore foam: smoothed (see `smoothed_thickness`).
+    var shore_thickness = 100.0;
+@if(DEPTH_PREPASS) {
     thickness = max(surface_z - depth_ndc_to_view_z(prepass_depth(in.position, 0u)), 0.0);
+    let pixel = max(length(fwidth(in.world_position.xz)), 1e-4);
+    shore_thickness = smoothed_thickness(in.position, surface_z, clamp(SHORE_SMOOTH / pixel, 1.0, 12.0));
+}
     var depth = thickness * max(to_eye.y, 0.2);
     var sea: Sea;
     sea.depth = -1.0;
@@ -294,8 +321,11 @@ fn fragment(
     let glint = crisp(0.85, a * b + 0.4 * max(a, b)) * (1.0 - smoothstep(0.008, 0.025, footprint));
 
     // Shore foam: a band of shallow water along the shore, its edge wobbling.
-    let edge_wobble = value_noise(p.xz * 2.0 + vec2(time * 0.5, 0.0)) * 0.3;
-    let shore = 1.0 - smoothstep(swash * 0.8, swash, thickness * (1.0 + edge_wobble));
+    // Muddled: the foam's reach varies along the shore (two drifting noise layers), and its
+    // edge is broken up a little.
+    let reach = value_noise(p.xz * 2.0 + vec2(time * 0.5, 0.0)) * 0.35
+        + value_noise(p.xz * 6.5 - vec2(0.0, time * 0.7) + vec2(23.0, 5.0)) * 0.2;
+    let shore = 1.0 - smoothstep(swash * 0.75, swash, shore_thickness * (1.0 + reach));
 
     // Cel lighting from the sun.
     let sun = lights.directional_lights[0];

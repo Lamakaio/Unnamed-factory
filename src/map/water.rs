@@ -12,10 +12,11 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
-use worldgen::{Continent, River, RiverEnd, RiverPoint};
+use worldgen::{Continent, LAKE_MIN_DEPTH, River, RiverEnd, RiverPoint};
 
 use super::{
     Map,
+    heights::TerrainHeights,
     springs::{SPOUT_HEIGHT, Spring, SpringKind},
 };
 use crate::{
@@ -36,14 +37,27 @@ const CASCADE_SLOPE: f32 = 0.18;
 /// Step height of cascades, relative to the channel depth (the pools stay above the bed),
 /// varied by up to ±45% per step.
 const CASCADE_STEP: f32 = 0.45;
-/// Pools keep this fraction of the natural slope (centred on the natural water line, so the
-/// water never strays far from the carved channel), varied per pool; the falls take the rest.
+/// Pools keep this fraction of the natural slope (from their lowest point, so the water never
+/// stands above the natural water line, which the banks hold), varied per pool; the falls take
+/// the rest.
 const POOL_TILT: (f32, f32) = (0.15, 0.6);
 /// Share of cascade stretches left as sloping chutes (1 to 3 points) between the pools.
 const CHUTE_SHARE: f32 = 0.35;
 /// Horizontal extent of a fall, relative to its drop (from nearly vertical to a slanted
 /// chute, varied per fall).
 const FALL_RUN: (f32, f32) = (0.2, 1.4);
+/// Steep stretches (water line slope from the first to the second value) get volume: an oval
+/// cross-section (see [`Row::dome`]), the water bulging up in the middle and its edges sunk
+/// into the banks, which the ribbon cannot follow down steep slopes.
+const DOME_SLOPE: (f32, f32) = (0.2, 0.6);
+/// Height of the oval's top above the water line, and its edges' depth below it, relative to
+/// the ribbon's half-width.
+const DOME_SHAPE: (f32, f32) = (0.3, 1.);
+/// Domed stretches are also lowered by this much (relative to the half-width, like
+/// [`DOME_SHAPE`]): on the steepest slopes the terrain mesh lags under the carved channel.
+const DOME_DROP: f32 = 0.35;
+/// Segments across a domed cross-section.
+const DOME_SEGMENTS: usize = 8;
 
 pub struct WaterPlugin;
 
@@ -109,10 +123,11 @@ fn spawn_lakes_and_rivers(
 ) {
     let continent = &map.continent;
     let springs = map.heights.springs();
+    let (rivers, opaque) = rivers_mesh(continent, springs);
     for (name, mesh) in [
-        ("Lakes", lakes_mesh(continent)),
+        ("Lakes", lakes_mesh(continent, &map.heights, &opaque)),
         ("Ponds", ponds_mesh(springs)),
-        ("Rivers", rivers_mesh(continent, springs)),
+        ("Rivers", rivers),
     ] {
         commands.spawn((
             Name::new(name),
@@ -135,12 +150,49 @@ struct SurfaceBuilder {
 }
 
 impl SurfaceBuilder {
-    fn quad(&mut self, corners: [Vec3; 4]) {
+    /// A flat convex polygon (a fan), wound like the ribbons' triangles.
+    fn polygon(&mut self, vertices: &[Vec3]) {
+        if vertices.len() < 3 {
+            return;
+        }
+        // (Clockwise in xz: negative area.)
+        let area: f32 = (0..vertices.len())
+            .map(|k| vertices[k].xz().perp_dot(vertices[(k + 1) % vertices.len()].xz()))
+            .sum();
         let first = self.positions.len() as u32;
-        self.positions
-            .extend(corners.map(|corner| corner.to_array()));
-        self.indices
-            .extend([first, first + 2, first + 1, first + 1, first + 2, first + 3]);
+        self.positions.extend(vertices.iter().map(|v| v.to_array()));
+        let count = vertices.len() as u32;
+        for k in 1..count - 1 {
+            if area < 0. {
+                self.indices.extend([first, first + k, first + k + 1]);
+            } else {
+                self.indices.extend([first, first + k + 1, first + k]);
+            }
+        }
+    }
+
+    /// A strip between two domed river rows: across each, the top of an oval (see
+    /// [`Row::dome`]).
+    fn dome_strip(&mut self, a: &Row, b: &Row) {
+        let first = self.positions.len() as u32;
+        for row in [a, b] {
+            for k in 0..=DOME_SEGMENTS {
+                let angle = std::f32::consts::PI * k as f32 / DOME_SEGMENTS as f32;
+                let t = (1. - angle.cos()) / 2.;
+                let rise =
+                    row.dome * ((DOME_SHAPE.0 + DOME_SHAPE.1) * angle.sin() - DOME_SHAPE.1 - DOME_DROP);
+                let position = row.left.lerp(row.right, t) + Vec3::Y * rise;
+                self.positions.push(position.to_array());
+                self.flow.push(row.left_flow.lerp(row.right_flow, t).to_array());
+                self.flow_b.push([row.foam, row.fade]);
+            }
+        }
+        let columns = DOME_SEGMENTS as u32 + 1;
+        for k in 0..DOME_SEGMENTS as u32 {
+            let (a0, a1) = (first + k, first + k + 1);
+            let (b0, b1) = (a0 + columns, a1 + columns);
+            self.indices.extend([a0, b0, a1, a1, b0, b1]);
+        }
     }
 
     /// A ribbon quad between two river rows, split along the diagonal giving the better
@@ -178,6 +230,10 @@ impl SurfaceBuilder {
                     vertices[3],
                 ]);
             }
+            return;
+        }
+        if a.dome > 0. || b.dome > 0. {
+            self.dome_strip(a, b);
             return;
         }
         let corners = [a.left, a.right, b.left, b.right];
@@ -235,14 +291,42 @@ impl SurfaceBuilder {
     }
 }
 
-/// Samples (of the lake mask) the surface reaches past each lake's extent, under the shore.
-const SHORE_MARGIN: i64 = 3;
+/// Lake surfaces reach under the shore up to where the ground is this much above them.
+const SHORE_MARGIN: f32 = 0.03;
+/// Contour value in river channels outside a lake: just outside, so the outline reaches well
+/// into the channel (under the ribbon, which is then cut out exactly).
+const RIVER_EDGE: f32 = -0.01;
+/// Cell size of the lookup grid of river ribbon triangles cut out of the lakes.
+const CLIP_CELL: f32 = 2.;
+/// Lake surfaces are drawn this far under their level: where a river fades into or out of a
+/// lake, its ribbon (at the lake's level, plus [`RIVER_OFFSET`]) stays clearly above it.
+const LAKE_SINK: f32 = 0.01;
+/// Lake surfaces cover the shore up to this many samples from the water.
+const SHORE_STEPS: u8 = 3;
+/// Contour value of the samples a lake must not cover (low ground beyond its rim, or another
+/// lake's): strongly outside, so the outline keeps close to the last sample it covers.
+const OUTSIDE: f32 = -1.;
 
-/// The lake surfaces: over each lake's extent on the fine surface (`Continent::lake_mask`, the
-/// same one rivers use), reaching a little further under the shore (rounded), so the shoreline
-/// is where the water meets the ground.
-fn lakes_mesh(continent: &Continent) -> Mesh {
+/// The lake surfaces, outlined by the contour where the ground (as drawn, with the river
+/// channels) rises above them (marching squares on the lake mask's samples, interpolated: the
+/// outline follows the shore, not the grid). A lake covers its extent
+/// (`Continent::lake_mask`, the same one rivers use) and the ground around it below its level
+/// (plus [`SHORE_MARGIN`], under the shore); not lower ground beyond, which its rim holds back
+/// (where the outline crosses open ground, it hugs the extent).
+fn lakes_mesh(continent: &Continent, heights: &TerrainHeights, opaque: &[[Vec2; 3]]) -> Mesh {
     let mask = &continent.lake_mask;
+    // The opaque river ribbon triangles, by grid cell.
+    let cells_of = |min: Vec2, max: Vec2| {
+        let (min, max) = ((min / CLIP_CELL).floor().as_ivec2(), (max / CLIP_CELL).floor().as_ivec2());
+        (min.y..=max.y).flat_map(move |z| (min.x..=max.x).map(move |x| (x, z)))
+    };
+    let mut ribbons: std::collections::HashMap<(i32, i32), Vec<usize>> = default();
+    for (index, triangle) in opaque.iter().enumerate() {
+        let (min, max) = bounds_of(triangle);
+        for cell in cells_of(min, max) {
+            ribbons.entry(cell).or_default().push(index);
+        }
+    }
     let n = mask.size;
     let at = |x: usize, z: usize| (Vec2::new(x as f32, z as f32) - (n / 2) as f32) * mask.cell;
     // Each lake's samples, and their bounds.
@@ -256,46 +340,208 @@ fn lakes_mesh(continent: &Continent) -> Mesh {
         *b = (b.0.min(x), b.1.min(z), b.2.max(x), b.3.max(z));
     }
     let mut builder = SurfaceBuilder::default();
-    let r = SHORE_MARGIN;
     for (index, lake) in continent.lakes.iter().enumerate() {
         let (x0, z0, x1, z1) = bounds[index];
         if x0 == usize::MAX {
             continue;
         }
-        let (x0, z0) = (x0.saturating_sub(r as usize + 1), z0.saturating_sub(r as usize + 1));
-        let (x1, z1) = ((x1 + r as usize + 1).min(n - 1), (z1 + r as usize + 1).min(n - 1));
+        // (A margin of samples around: the shore lies beyond the extent.)
+        let r = 12;
+        let (x0, z0) = (x0.saturating_sub(r), z0.saturating_sub(r));
+        let (x1, z1) = ((x1 + r).min(n - 1), (z1 + r).min(n - 1));
         let (w, h) = (x1 - x0 + 1, z1 - z0 + 1);
-        let mut covered = vec![false; w * h];
-        for z in z0..=z1 {
-            for x in x0..=x1 {
-                if mask.lakes[z * n + x] as usize != index {
+        let level = lake.level;
+        // What each sample is to this lake.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Sample {
+            /// In its extent.
+            Lake,
+            /// Lower ground (left out of the extent as too thin, or beyond the rim).
+            Low,
+            /// Ground around its level: the shore.
+            Shore,
+            /// Never covered: another lake's.
+            Never,
+            /// In a river's channel outside the lake (the ribbon is the water there, at its
+            /// own level): the lake reaches into it (under the ribbon, which then cuts it out
+            /// exactly), but no further.
+            River,
+        }
+        let ground: Vec<f32> = (0..w * h)
+            .map(|k| heights.height(at(x0 + k % w, z0 + k / w)))
+            .collect();
+        let kind: Vec<Sample> = (0..w * h)
+            .map(|k| {
+                let (x, z) = (x0 + k % w, z0 + k / w);
+                let owner = mask.lakes[z * n + x];
+                if owner as usize == index {
+                    Sample::Lake
+                } else if owner != u16::MAX {
+                    Sample::Never
+                } else if heights.near_river(at(x, z), 1e-3, level) > 0. {
+                    Sample::River
+                } else if ground[k] < level - LAKE_MIN_DEPTH {
+                    Sample::Low
+                } else {
+                    Sample::Shore
+                }
+            })
+            .collect();
+        // Covered: grown from the extent over the lower ground connected to it (never across
+        // the shore: that is the rim), and up to `SHORE_STEPS` samples onto the shore.
+        let mut steps = vec![u8::MAX; w * h];
+        let mut queue = std::collections::VecDeque::new();
+        for k in (0..w * h).filter(|&k| kind[k] == Sample::Lake) {
+            steps[k] = 0;
+            queue.push_back(k);
+        }
+        while let Some(k) = queue.pop_front() {
+            let (x, z) = (k % w, k / w);
+            for (nx, nz) in [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)] {
+                if nx >= w || nz >= h {
                     continue;
                 }
-                for dz in -r..=r {
-                    for dx in -r..=r {
-                        let (nx, nz) = (x as i64 + dx, z as i64 + dz);
-                        if dx * dx + dz * dz <= r * r
-                            && nx >= x0 as i64
-                            && nz >= z0 as i64
-                            && nx <= x1 as i64
-                            && nz <= z1 as i64
-                        {
-                            covered[(nz as usize - z0) * w + nx as usize - x0] = true;
-                        }
-                    }
+                let m = nz * w + nx;
+                let step = match (kind[k], kind[m]) {
+                    (Sample::Lake | Sample::Low, Sample::Low) => 0,
+                    (_, Sample::Shore) if steps[k] < SHORE_STEPS => steps[k] + 1,
+                    _ => continue,
+                };
+                if step < steps[m] {
+                    steps[m] = step;
+                    queue.push_back(m);
                 }
             }
         }
+        // Contour field: positive under the lake.
+        let field: Vec<f32> = (0..w * h)
+            .map(|k| {
+                let water = level + SHORE_MARGIN - ground[k];
+                match kind[k] {
+                    Sample::River => RIVER_EDGE,
+                    _ if steps[k] == u8::MAX => OUTSIDE,
+                    Sample::Lake | Sample::Low => water.max(1e-3),
+                    _ => water,
+                }
+            })
+            .collect();
         for z in 0..h - 1 {
             for x in 0..w - 1 {
-                let corners = [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)];
-                if corners.iter().all(|&(x, z)| covered[z * w + x]) {
-                    builder.quad(corners.map(|(x, z)| at(x + x0, z + z0).extend(lake.level).xzy()));
+                let corners = [(x, z), (x + 1, z), (x + 1, z + 1), (x, z + 1)];
+                let values = corners.map(|(x, z)| field[z * w + x]);
+                if values.iter().all(|&v| v <= 0.) {
+                    continue;
+                }
+                let position = corners.map(|(x, z)| at(x + x0, z + z0));
+                for polygon in contour_cell(position, values) {
+                    // Less the opaque river ribbons over it.
+                    let (min, max) = bounds_of(&polygon);
+                    let mut near: Vec<usize> = cells_of(min, max)
+                        .filter_map(|cell| ribbons.get(&cell))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    near.sort_unstable();
+                    near.dedup();
+                    let mut pieces = vec![polygon];
+                    for &triangle in &near {
+                        pieces = pieces
+                            .into_iter()
+                            .flat_map(|piece| subtract_triangle(piece, &opaque[triangle]))
+                            .collect();
+                    }
+                    for piece in pieces {
+                        let piece: Vec<Vec3> =
+                            piece.iter().map(|p| p.extend(level - LAKE_SINK).xzy()).collect();
+                        builder.polygon(&piece);
+                    }
                 }
             }
         }
     }
     builder.build()
+}
+
+/// The part of a grid cell where `values` (at its corners, in order round it) are positive,
+/// cut along their linear interpolation (marching squares): one polygon, or two for a saddle
+/// whose center is outside.
+fn contour_cell(corners: [Vec2; 4], values: [f32; 4]) -> Vec<Vec<Vec2>> {
+    let cut = |a: usize, b: usize| {
+        let t = values[a] / (values[a] - values[b]);
+        corners[a].lerp(corners[b], t)
+    };
+    let inside = values.map(|v| v > 0.);
+    let saddle = inside[0] == inside[2] && inside[1] == inside[3] && inside[0] != inside[1];
+    if saddle && values.iter().sum::<f32>() <= 0. {
+        // Two separate corners.
+        return (0..4)
+            .filter(|&k| inside[k])
+            .map(|k| vec![cut(k, (k + 3) % 4), corners[k], cut(k, (k + 1) % 4)])
+            .collect();
+    }
+    let mut polygon = Vec::with_capacity(6);
+    for k in 0..4 {
+        let next = (k + 1) % 4;
+        if inside[k] {
+            polygon.push(corners[k]);
+        }
+        if inside[k] != inside[next] {
+            polygon.push(cut(k, next));
+        }
+    }
+    vec![polygon]
+}
+
+/// The bounds (min, max) of a polygon's vertices.
+fn bounds_of(polygon: &[Vec2]) -> (Vec2, Vec2) {
+    polygon.iter().fold((Vec2::MAX, Vec2::MIN), |(min, max), &p| (min.min(p), max.max(p)))
+}
+
+/// The part of a convex polygon where `sign * (b - a).perp_dot(p - a) > 0`, on one side of the
+/// line through `a` and `b` (Sutherland-Hodgman).
+fn clip_half_plane(polygon: &[Vec2], a: Vec2, b: Vec2, sign: f32) -> Vec<Vec2> {
+    let side = |p: Vec2| sign * (b - a).perp_dot(p - a);
+    let mut out = Vec::with_capacity(polygon.len() + 2);
+    for k in 0..polygon.len() {
+        let (p, q) = (polygon[k], polygon[(k + 1) % polygon.len()]);
+        let (sp, sq) = (side(p), side(q));
+        if sp > 0. {
+            out.push(p);
+        }
+        if (sp > 0.) != (sq > 0.) {
+            out.push(p.lerp(q, sp / (sp - sq)));
+        }
+    }
+    out
+}
+
+/// A convex polygon less a triangle: convex pieces (none if the triangle covers it).
+fn subtract_triangle(polygon: Vec<Vec2>, triangle: &[Vec2; 3]) -> Vec<Vec<Vec2>> {
+    let [a, b, c] = *triangle;
+    let orientation = (b - a).perp_dot(c - a);
+    if orientation.abs() < 1e-8 {
+        return vec![polygon];
+    }
+    let (min, max) = bounds_of(&polygon);
+    let (t_min, t_max) = bounds_of(triangle);
+    if min.x >= t_max.x || min.y >= t_max.y || max.x <= t_min.x || max.y <= t_min.y {
+        return vec![polygon];
+    }
+    // Outside each edge in turn, of what is inside the previous ones.
+    let sign = orientation.signum();
+    let mut pieces = Vec::new();
+    let mut rest = polygon;
+    for (p, q) in [(a, b), (b, c), (c, a)] {
+        let outside = clip_half_plane(&rest, p, q, -sign);
+        if outside.len() >= 3 {
+            pieces.push(outside);
+        }
+        rest = clip_half_plane(&rest, p, q, sign);
+        if rest.len() < 3 {
+            break;
+        }
+    }
+    pieces
 }
 
 /// Rivers fade in (outlets) or out (inflows) over this distance (world units), this far inside
@@ -395,6 +641,10 @@ struct Row {
     foam: f32,
     /// Opacity: rivers fade out into the sea or lake they flow into.
     fade: f32,
+    /// Steep stretches have volume: the cross-section is the top of an oval this high above
+    /// the water line in the middle, sinking at the edges under the banks (see
+    /// [`DOME_SHAPE`]); 0 for a flat ribbon.
+    dome: f32,
 }
 
 impl Row {
@@ -479,9 +729,9 @@ fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
             i += 1;
             continue;
         }
-        let mid = (top + points[end].position.y) / 2.;
+        let bottom = points[end].position.y;
         for (level, point) in levels[i..=end].iter_mut().zip(&points[i..=end]) {
-            *level = mid + tilt * (point.position.y - mid);
+            *level = bottom + tilt * (point.position.y - bottom);
         }
         if end + 1 < n {
             pool_ends.push(end);
@@ -533,20 +783,58 @@ const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
 const CONFLUENCE_TURN: f32 = 0.6;
 const CONFLUENCE_TURN_REACH: (f32, f32) = (1., 1.5);
 
-/// The cross-sections of a river ribbon, at its water line (see [`river_profile`]).
-fn river_rows(river: &River) -> Vec<Row> {
-    // Rivers into the sea never go below it (delta branches run on over the sea floor): no
-    // falls, nor foam below them, out at sea.
+/// A river's points, never below the sea if it flows into it (delta branches run on over the
+/// sea floor): no falls, nor foam below them, out at sea.
+fn floored_points(river: &River) -> Vec<RiverPoint> {
     let floor = if river.end == RiverEnd::Sea { -0.08 } else { f32::MIN };
-    let points: Vec<RiverPoint> = river
+    river
         .points
         .iter()
         .map(|p| RiverPoint {
             position: p.position.with_y(p.position.y.max(floor)),
             ..*p
         })
-        .collect();
-    let points = &points;
+        .collect()
+}
+
+/// Where the fall after point `i` reaches the next pool, as a fraction of the way to point
+/// `i + 1`.
+fn fall_split(points: &[RiverPoint], profile: &[ProfilePoint], i: usize) -> f32 {
+    let run = (points[i + 1].position - points[i].position).xz().length();
+    (profile[i].fall_run * profile[i].drop / run.max(1e-3)).min(0.6)
+}
+
+/// A river's water line as drawn (see [`river_profile`]): its points at the profile's levels,
+/// with a point where each fall reaches the next pool. The channels are carved along it, so
+/// the water never stands above its banks.
+pub(super) fn water_line(river: &River) -> Vec<RiverPoint> {
+    let points = floored_points(river);
+    if points.len() < 2 {
+        return points;
+    }
+    let profile = river_profile(&points);
+    let mut line = Vec::with_capacity(points.len() + 8);
+    for (i, (point, here)) in points.iter().zip(&profile).enumerate() {
+        line.push(RiverPoint {
+            position: point.position.with_y(here.level),
+            ..*point
+        });
+        if here.drop > 0. && i + 1 < points.len() {
+            let t = fall_split(&points, &profile, i);
+            let next = &points[i + 1];
+            line.push(RiverPoint {
+                position: point.position.lerp(next.position, t).with_y(here.level - here.drop),
+                width: point.width + (next.width - point.width) * t,
+                depth: point.depth + (next.depth - point.depth) * t,
+            });
+        }
+    }
+    line
+}
+
+/// The cross-sections of a river ribbon, at its water line (see [`river_profile`]).
+fn river_rows(river: &River) -> Vec<Row> {
+    let points = &floored_points(river);
     let profile = river_profile(points);
     let tangents: Vec<Vec2> = (0..points.len())
         .map(|i| {
@@ -586,11 +874,11 @@ fn river_rows(river: &River) -> Vec<Row> {
             right_flow: Vec2::ZERO,
             foam: here.foam,
             fade: 1.,
+            dome: 0.,
         });
         // A fall: a steep row a little downstream, at the next pool's level.
         if here.drop > 0. && i + 1 < points.len() {
-            let run = (points[i + 1].position - points[i].position).xz().length();
-            let t = (here.fall_run * here.drop / run.max(1e-3)).min(0.6);
+            let t = fall_split(points, &profile, i);
             let down = Vec3::Y * here.drop;
             rows.push(Row {
                 left: lefts[i].lerp(lefts[i + 1], t).with_y(lefts[i].y) - down,
@@ -599,6 +887,7 @@ fn river_rows(river: &River) -> Vec<Row> {
                 right_flow: Vec2::ZERO,
                 foam: 1.,
                 fade: 1.,
+                dome: 0.,
             });
         }
     }
@@ -611,6 +900,17 @@ fn river_rows(river: &River) -> Vec<Row> {
         let velocity = direction * row.left_flow.x;
         row.left_flow = velocity;
         row.right_flow = velocity;
+    }
+    // Volume on steep stretches (slope measured over a few rows).
+    let heights: Vec<f32> = rows.iter().map(|row| row.center().y).collect();
+    for k in 0..n {
+        let (a, b) = (k.saturating_sub(2), (k + 2).min(n - 1));
+        let run: f32 = (a..b).map(|j| centers[j].distance(centers[j + 1])).sum();
+        let slope = (heights[a] - heights[b]).max(0.) / run.max(1e-3);
+        let half = rows[k].left.xz().distance(rows[k].right.xz()) / 2.;
+        // (Flat at both ends, which join ponds, lakes and parent rivers along flat edges.)
+        let ends = (k.min(n - 1 - k) as f32 / 3.).min(1.);
+        rows[k].dome = half * smoothstep(DOME_SLOPE.0, DOME_SLOPE.1, slope) * ends;
     }
     rows
 }
@@ -642,8 +942,11 @@ fn inside_ribbon(river: &River, p: Vec2) -> f32 {
 /// A ribbon along each river, at its water line. Tributaries join their parent along its
 /// ribbon edge (clipped there, so the two surfaces neither overlap nor leave a gap), and the
 /// parent gets whitewater just below the confluence.
-fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
+///
+/// Also returns the triangles (xz) covered by opaque ribbon, which lake surfaces leave out.
+fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> (Mesh, Vec<[Vec2; 3]>) {
     let rivers = &continent.rivers;
+    let mut opaque = Vec::new();
     let mut all_rows: Vec<Vec<Row>> = rivers.iter().map(river_rows).collect();
     for river in rivers {
         let (RiverEnd::Junction(parent), Some(join)) = (river.end, river.points.last()) else {
@@ -776,6 +1079,13 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
         if rows.len() < 2 {
             continue;
         }
+        for pair in rows.windows(2) {
+            if pair[0].fade >= 1. && pair[1].fade >= 1. {
+                let (a, b) = (&pair[0], &pair[1]);
+                opaque.push([a.left.xz(), a.right.xz(), b.right.xz()]);
+                opaque.push([a.left.xz(), b.right.xz(), b.left.xz()]);
+            }
+        }
         match springs.iter().find(|spring| spring.river == river_index).map(|s| (s, &s.kind)) {
             // Out of a pond: the river starts on the pond's outline (sharing its vertices).
             Some((spring, SpringKind::Pond { outline, .. })) => {
@@ -807,6 +1117,7 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
                     right_flow: first.right_flow.normalize_or_zero() * 2.,
                     foam: 1.,
                     fade: 1.,
+                    dome: 0.,
                 };
                 rows.insert(0, spout);
             }
@@ -889,7 +1200,7 @@ fn rivers_mesh(continent: &Continent, springs: &[Spring]) -> Mesh {
             );
         }
     }
-    builder.build()
+    (builder.build(), opaque)
 }
 
 /// A vertex of a ribbon edge: position, flow velocity, whitewater.
@@ -981,8 +1292,35 @@ fn junction_cap(rows: &[Row], edge: &[EdgeVertex], closed: bool) -> Option<Junct
         }
         None
     };
-    let (left_row, left_hit, left_at) = hit(|row| (row.left, row.left_flow))?;
-    let (right_row, right_hit, right_at) = hit(|row| (row.right, row.right_flow))?;
+    // A tributary joining at a shallow angle, nearly as wide as its parent, may end with one
+    // edge still outside it (running alongside): that edge's last vertex is moved onto the
+    // parent's edge.
+    let snap = |side: fn(&Row) -> (Vec3, Vec2)| -> Option<(usize, EdgeVertex, f32)> {
+        let p = side(rows.last()?).0.xz();
+        let mut best: Option<(f32, EdgeVertex, f32)> = None;
+        for j in 1..edge.len() {
+            let (c, d) = (edge[j - 1], edge[j]);
+            let cd = (d.0 - c.0).xz();
+            let u = ((p - c.0.xz()).dot(cd) / cd.length_squared().max(1e-9)).clamp(0., 1.);
+            let distance = p.distance(c.0.xz() + cd * u);
+            if best.is_none_or(|b| distance < b.0) {
+                let vertex = (c.0.lerp(d.0, u), c.1.lerp(d.1, u), c.2 + (d.2 - c.2) * u);
+                best = Some((distance, vertex, (j - 1) as f32 + u));
+            }
+        }
+        best.map(|(_, vertex, at)| (rows.len() - 1, vertex, at))
+    };
+    let (left, right) = (
+        hit(|row| (row.left, row.left_flow)),
+        hit(|row| (row.right, row.right_flow)),
+    );
+    let (left, right) = match (left, right) {
+        (Some(left), Some(right)) => (left, right),
+        (Some(left), None) => (left, snap(|row| (row.right, row.right_flow))?),
+        (None, Some(right)) => (snap(|row| (row.left, row.left_flow))?, right),
+        (None, None) => return None,
+    };
+    let ((left_row, left_hit, left_at), (right_row, right_hit, right_at)) = (left, right);
     let full_rows = left_row.min(right_row);
     let mut outline = Vec::new();
     for row in &rows[full_rows - 1..left_row] {

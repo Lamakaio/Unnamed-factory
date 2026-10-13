@@ -48,7 +48,7 @@ impl TerrainHeights {
     pub fn new(continent: &Continent) -> Self {
         Self {
             base: Arc::new(BaseGrid::new(continent)),
-            rivers: Arc::new(RiverLayer::new(&continent.rivers)),
+            rivers: Arc::new(RiverLayer::new(continent)),
             springs: Arc::new(SpringLayer::new(find_springs(continent))),
             edits: default(),
         }
@@ -74,6 +74,12 @@ impl TerrainHeights {
         self.springs.carve(p, &mut height);
         self.edits.apply(p, &mut height);
         height
+    }
+
+    /// How close `p` is to a river's water: 1 at its channel's edge and inside, 0 from
+    /// `margin` beyond (leaving out the stretches at the water level `level`).
+    pub fn near_river(&self, p: Vec2, margin: f32, level: f32) -> f32 {
+        self.rivers.near_water_off(p, margin, level)
     }
 
     /// The river springs (ponds and hillside springs).

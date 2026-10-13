@@ -428,6 +428,7 @@ pub fn generate(settings: &WorldgenSettings) -> Continent {
     );
     let lake_mask = settle_lakes(settings, &surface, &mut lakes, &lake_of, &mut rivers);
     clamp_rivers_to_terrain(&surface, &lake_mask, &lakes, &mut rivers);
+    end_rivers_at_coast(&surface, &lake_mask, &mut rivers);
     lap("detail", &mut timings);
 
     Continent {
@@ -489,6 +490,81 @@ fn calm_map(settings: &WorldgenSettings, rivers: &[River], lake_of: &[Option<u16
 pub const LAKE_MIN_DEPTH: f32 = 0.02;
 /// A lake flooding more than this many times its cells' area on the fine surface leaked.
 const MAX_LAKE_GROWTH: f32 = 4.;
+/// Lakes with no outlet stand this far below their spill point.
+const NO_OUTLET_MARGIN: f32 = 0.03;
+/// Lake extents lose the strands narrower than about twice this many samples (see
+/// [`open_mask`]).
+const STRAND_RADIUS: i64 = 2;
+
+/// Morphological opening of each lake's samples in `mask` (`u16::MAX`: none) by a disk of
+/// `radius` samples: erode, then grow back within the original extent. Parts narrower than
+/// the disk go; the rest keeps its exact outline.
+fn open_mask(size: usize, mask: &mut [u16], radius: i64) {
+    let disk: Vec<(i64, i64)> = (-radius..=radius)
+        .flat_map(|dz| (-radius..=radius).map(move |dx| (dx, dz)))
+        .filter(|(dx, dz)| dx * dx + dz * dz <= radius * radius)
+        .collect();
+    let at = |x: i64, z: i64| {
+        (x >= 0 && z >= 0 && x < size as i64 && z < size as i64)
+            .then(|| mask[z as usize * size + x as usize])
+    };
+    // Eroded: every sample of the disk around is the same lake.
+    let core: Vec<bool> = (0..size * size)
+        .map(|i| {
+            let lake = mask[i];
+            let (x, z) = ((i % size) as i64, (i / size) as i64);
+            lake != u16::MAX && disk.iter().all(|&(dx, dz)| at(x + dx, z + dz) == Some(lake))
+        })
+        .collect();
+    // Grown back: within the disk of a core sample.
+    let mut kept = vec![false; size * size];
+    for i in (0..size * size).filter(|&i| core[i]) {
+        let (x, z) = ((i % size) as i64, (i / size) as i64);
+        for &(dx, dz) in &disk {
+            if let Some(lake) = at(x + dx, z + dz)
+                && lake == mask[i]
+            {
+                kept[(z + dz) as usize * size + (x + dx) as usize] = true;
+            }
+        }
+    }
+    // (A lake with no core at all keeps its samples: small lakes are not strands.)
+    let mut has_core = std::collections::HashSet::new();
+    for i in (0..size * size).filter(|&i| core[i]) {
+        has_core.insert(mask[i]);
+    }
+    for i in 0..size * size {
+        if mask[i] != u16::MAX && !kept[i] && has_core.contains(&mask[i]) {
+            mask[i] = u16::MAX;
+        }
+    }
+}
+
+/// Rivers end where they reach the sea: at their first point (outside lakes) over ground below
+/// sea level by [`SEA_REACHED`]. The coast is shaped after rivers are traced (land may end up
+/// just under water, in wide shallows), and rivers would run on over the sea floor; a tributary
+/// reaching the sea before its parent then flows into the sea, and a river rising in the
+/// shallows is reduced to its source point.
+fn end_rivers_at_coast(surface: &Heightmap, lake_mask: &LakeMask, rivers: &mut [River]) {
+    for river in rivers.iter_mut() {
+        if matches!(river.end, RiverEnd::Lake(_)) {
+            continue;
+        }
+        let reached = river.points.iter().position(|point| {
+            let p = Vec2::new(point.position.x, point.position.z);
+            surface.bilinear(p) < -SEA_REACHED && lake_mask.at(p).is_none()
+        });
+        if let Some(k) = reached {
+            // (A river rising in the shallows is no river: one point, nothing drawn.)
+            river.points.truncate(if k >= 2 { k + 1 } else { 1 });
+            river.end = RiverEnd::Sea;
+        }
+    }
+}
+
+
+/// Depth of the sea floor where a river has reached the sea.
+const SEA_REACHED: f32 = 0.05;
 
 /// Keep every river's water line at or below the surface under it, across the whole channel
 /// width (smoothing and meanders can move points over lower ground, and coasts are low), and
@@ -615,12 +691,35 @@ fn settle_lakes(
             }
         }
     }
-    for (lake, (_, spill)) in lakes.iter_mut().zip(deepest) {
-        if spill > f32::MIN && !lake.endorheic {
-            lake.level = spill;
+    // Lakes with no outlet stand a little below their spill point: their rim holds them all
+    // round (where an outlet leaves, its river carries the overflow).
+    let lake_near = |p: Vec3| {
+        let cell = (Vec2::new(p.x, p.z) / settings.cell_size + (size / 2) as f32).round();
+        let (x, z) = (cell.x as i64, cell.y as i64);
+        (-1..=1i64).flat_map(|dz| (-1..=1i64).map(move |dx| (dx, dz))).find_map(|(dx, dz)| {
+            let (x, z) = (x + dx, z + dz);
+            (x >= 0 && z >= 0 && x < size as i64 && z < size as i64)
+                .then(|| lake_of[z as usize * size + x as usize])
+                .flatten()
+        })
+    };
+    let mut has_outlet = vec![false; lakes.len()];
+    for river in rivers.iter() {
+        if let Some(lake) = river.points.first().and_then(|p| lake_near(p.position))
+            && river.end != RiverEnd::Lake(lake as usize)
+        {
+            has_outlet[lake as usize] = true;
         }
     }
-    // Each lake's extent: flooded from its cells over the ground below its level.
+    for ((lake, (_, spill)), outlet) in lakes.iter_mut().zip(deepest).zip(has_outlet) {
+        if spill > f32::MIN && !lake.endorheic {
+            lake.level = if outlet { spill } else { spill - NO_OUTLET_MARGIN };
+        }
+    }
+    // Each lake's extent: flooded from its cells over the ground below its level. Only from the
+    // samples of its own basin (whose water stands at least at its level): a coarse lake cell
+    // may hold samples of a neighbouring basin draining lower, from which the flood would spread
+    // over all the low ground around.
     let mut mask = vec![u16::MAX; fine * fine];
     let mut stack = Vec::new();
     let mut flooded = vec![0usize; lakes.len()];
@@ -628,6 +727,7 @@ fn settle_lakes(
     for i in 0..fine * fine {
         if let Some(lake) = lake_at(i % fine, i / fine)
             && below(i, lake as usize)
+            && water[i] >= lakes[lake as usize].level - 1e-3
             && mask[i] == u16::MAX
         {
             mask[i] = lake;
@@ -636,8 +736,11 @@ fn settle_lakes(
                 flooded[lake as usize] += 1;
                 let (x, z) = (i % fine, i / fine);
                 for (nx, nz) in [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)] {
+                    if nx >= fine || nz >= fine {
+                        continue;
+                    }
                     let n = nz * fine + nx;
-                    if nx < fine && nz < fine && mask[n] == u16::MAX && below(n, lake as usize) {
+                    if mask[n] == u16::MAX && below(n, lake as usize) {
                         mask[n] = lake;
                         stack.push(n);
                     }
@@ -645,6 +748,9 @@ fn settle_lakes(
             }
         }
     }
+    // Strands narrower than a few samples (a river's trench running out from the lake, a
+    // crack in the rim) are not lake: the river leaves the lake where its body ends.
+    open_mask(fine, &mut mask, STRAND_RADIUS);
     // The spill point bounds every flood: a lake much larger than its cells means it leaked.
     let samples_per_cell = (settings.cell_size / surface.cell).powi(2);
     for (index, lake) in lakes.iter().enumerate() {
@@ -657,16 +763,6 @@ fn settle_lakes(
         }
     }
     // Rivers meet the lakes at their level.
-    let lake_near = |p: Vec3| {
-        let cell = (Vec2::new(p.x, p.z) / settings.cell_size + (size / 2) as f32).round();
-        let (x, z) = (cell.x as i64, cell.y as i64);
-        (-1..=1i64).flat_map(|dz| (-1..=1i64).map(move |dx| (dx, dz))).find_map(|(dx, dz)| {
-            let (x, z) = (x + dx, z + dz);
-            (x >= 0 && z >= 0 && x < size as i64 && z < size as i64)
-                .then(|| lake_of[z as usize * size + x as usize])
-                .flatten()
-        })
-    };
     for river in rivers {
         if let RiverEnd::Lake(lake) = river.end
             && let Some(last) = river.points.last_mut()

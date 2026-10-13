@@ -64,6 +64,17 @@ fn main() {
         let ys: Vec<String> = river.points.iter().take(16).map(|p| format!("{:.3}", p.position.y)).collect();
         println!("  branch {r} ({} pts) width {:.2}: {}", river.points.len(), river.points[0].width, ys.join(" "));
     }
+    // Rivers whose polyline runs over the sea floor (below sea level) before its end.
+    for (r, river) in continent.rivers.iter().enumerate() {
+        let under: Vec<usize> = (0..river.points.len()).filter(|&k| continent.surface.bilinear(river.points[k].position.xz()) < -0.05 && continent.lake_over(river.points[k].position.xz()).is_none()).collect();
+        if let Some(&first) = under.first() {
+            let tail = river.points.len() - first;
+            if tail > 6 {
+                let p = river.points[first].position;
+                println!("  river {r} ({:?}) runs {tail} points ({:.1} units) under the sea from {:.1} {:.1}", river.end, tail as f32 * 0.5, p.x, p.z);
+            }
+        }
+    }
     let mut slopes = Vec::new();
     let mut steep = Vec::new();
     for (r, river) in continent.rivers.iter().enumerate() {

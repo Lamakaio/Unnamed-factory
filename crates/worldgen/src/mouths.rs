@@ -54,6 +54,21 @@ pub fn shape_mouths(
             Mouth::Plain => {}
             Mouth::Estuary => widen(&mut rivers[index]),
             Mouth::Delta => {
+                // The delta starts no earlier than the river's last confluence: its tributaries
+                // must still find it.
+                let last_join = (0..rivers.len())
+                    .filter(|&t| rivers[t].end == RiverEnd::Junction(index))
+                    .filter_map(|t| rivers[t].points.last())
+                    .filter_map(|end| {
+                        let river = &rivers[index].points;
+                        (0..river.len()).min_by(|&a, &b| {
+                            xz(river[a].position)
+                                .distance_squared(xz(end.position))
+                                .total_cmp(&xz(river[b].position).distance_squared(xz(end.position)))
+                        })
+                    })
+                    .max()
+                    .unwrap_or(0);
                 let distributaries = build_delta(
                     settings,
                     noise,
@@ -62,6 +77,7 @@ pub fn shape_mouths(
                     &mut wetland,
                     &mut rivers[index],
                     index,
+                    last_join,
                 );
                 rivers.extend(distributaries);
             }
@@ -155,7 +171,8 @@ fn widen(river: &mut River) {
 /// distributaries. Channels fork again and again, unevenly; each wanders out to sea and ends
 /// at its own distance. The delta land is built along the channels (natural levees), widest
 /// near the apex: the shoreline juts out at every channel mouth, with bays between them.
-/// Returns the distributaries.
+/// The apex is at least at point `last_join` (the river's last confluence). Returns the
+/// distributaries.
 fn build_delta(
     settings: &WorldgenSettings,
     noise: Noise,
@@ -164,6 +181,7 @@ fn build_delta(
     wetland: &mut [f32],
     river: &mut River,
     index: usize,
+    last_join: usize,
 ) -> Vec<River> {
     let points = &river.points;
     let count = points.len();
@@ -191,7 +209,8 @@ fn build_delta(
         .rev()
         .find(|&k| heights[index_of(settings, points[k].position)] > 0.)
         .unwrap_or(count - 1)
-        .max(1);
+        .max(last_join)
+        .clamp(1, count - 1);
     river.points.truncate(shore + 1);
     let apex = river.points[shore];
 

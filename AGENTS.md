@@ -182,12 +182,21 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
      through the bed; drawn, they stay visible ~1 unit past the shore, then fade
      (`LAKE_FADE_INSIDE`, `OUTLET_FADE`), only at their own lakes. `settle_lakes` (after the
      fine detail) sets each lake's level to the spill point of its deepest point's basin on
-     the fine surface (Priority-Flood; lake beds below sea level are not sea) and floods its
-     extent from its cells over the fine samples ≥ `LAKE_MIN_DEPTH` below the level:
+     the fine surface (Priority-Flood; lake beds below sea level are not sea; lakes with no
+     outlet `NO_OUTLET_MARGIN` below it) and floods its extent from the samples of its cells
+     in that basin over the fine samples ≥ `LAKE_MIN_DEPTH` below the level, then drops
+     strands narrower than ~2 × `STRAND_RADIUS` samples (`open_mask`, e.g. a river's trench
+     running out of the lake):
      `Continent::lake_mask` (`LakeMask`), the one definition of "under a lake"
      (`Continent::lake_over`) for river levels (at the lake's level there, also across
-     their width), river fades and lake surfaces (`water.rs::lakes_mesh`: the mask widened
-     by `SHORE_MARGIN` samples, rounded). The terrain mesh is fine (`SHORE_CELL`) within
+     their width), river fades and lake surfaces (`water.rs::lakes_mesh`: marching squares
+     on the drawn ground's samples: grown from the mask over lower ground connected to it
+     and up to `SHORE_STEPS` samples onto the shore, outlined where the ground rises
+     `SHORE_MARGIN` above the level, never across the rim; less the opaque river ribbons,
+     cut out exactly with `subtract_triangle`, so lakes and rivers meet edge to edge; drawn
+     `LAKE_SINK` under the level, below the ribbons fading in or out over them). River banks
+     never carve a lake's rim below its level within `RIM_HOLD` of it (`rivers.rs`,
+     `LakeRims`). The terrain mesh is fine (`SHORE_CELL`) within
      `SHORE_REACH` cells of lake edges.
    - **Limits that normal worlds should not hit log a warning** (lake flood reach, river bend
      relaxation rounds, tributaries that never cross their parent's edge, lab screenshot
@@ -282,16 +291,20 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   170k vertices per chunk on the eroded terrain.
 - **Water** (`map/water.rs`): one translucent, double-sided `WaterMaterial`
   (`ExtendedMaterial<StandardMaterial, WaterShader>`, `water.wesl`, see §3.4) for a sea plane
-  at 0, lake surfaces (lake cells plus shore cells above the water), and river ribbons at the
+  at 0, lake surfaces (contoured, see the Lakes step of world generation above), and river ribbons at the
   water line (width + 0.25 per side). Ribbons stop where the water reaches the sea (within 0.12: the
   sea plane covers the carved channel) or the lake the river flows into (overlapping
   translucent surfaces look darker). Ground under water is darkened at once (×0.6), so
   shallows don't read as dry sand. Water has `Pickable::IGNORE` and `NotShadowCaster`.
   - **River profile** (`river_profile`): where the water line is steeper than
     `CASCADE_SLOPE` (0.18), it runs in irregular steps (per-point `jitter`): pools (keeping
-    a random `POOL_TILT` share of the slope, centred on the natural line, about
-    `CASCADE_STEP` × depth high) with a fall row between them (slant `FALL_RUN`), and
-    sloping chutes (`CHUTE_SHARE`). Single-point pools (very steep streams) stay ramps
+    a random `POOL_TILT` share of the slope from their lowest point, never above the natural
+    line, about `CASCADE_STEP` × depth high) with a fall row between them (slant
+    `FALL_RUN`), and sloping chutes (`CHUTE_SHARE`). The channels are carved along this
+    drawn water line (`water_line`, falls included), so water never stands above its banks.
+    Steep stretches (`DOME_SLOPE`) get volume: the ribbon's cross-section becomes the top of
+    an oval (`Row::dome`, `DOME_SHAPE`), bulging in the middle with its edges sunk under the
+    banks, and lowered by `DOME_DROP` (the terrain mesh lags under steep channels), flat again over each river's first and last rows (ponds, lakes, junction caps). Single-point pools (very steep streams) stay ramps
     (continuous rapids). Tributary ribbons end on the parent's actual mesh edge: each
     tributary edge is cut where it crosses the parent's near edge, and the end is filled by a
     fan over an outline that runs along the parent's edge vertices (`junction_cap`), so the
