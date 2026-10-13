@@ -11,9 +11,7 @@ bevy = { version = "0.20", features = ["bevy_remote", "file_watcher", "pan_orbit
 ron = "0.12"
 serde = { version = "1.0.229", features = ["derive"] }
 anyhow = "1.0.104"
-kdtree-collisions = { git = "https://github.com/Lamakaio/kdtree-collisions.git" }
 rand = "0.10"
-rhai = { version = "1.26", features = ["sync", "metadata", "no_closure", "no_custom_syntax", "no_time", "only_i64"] }
 foldhash = "0.2"
 half = "2.7"
 worldgen = { path = "crates/worldgen" }

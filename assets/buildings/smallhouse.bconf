@@ -1,8 +1,0 @@
-BuildingFile (
-    name: "Small house", 
-    size: (10, 10), 
-    typ: Single (
-        model: "models/smallhouse.glb",
-        scale: 0.05
-    ), 
-)

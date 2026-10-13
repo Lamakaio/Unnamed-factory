@@ -1,16 +1,13 @@
-//! Unnamed Factory: a 3D city builder.
+//! Unnamed Factory: a living planet (see `docs/living-world.md`).
 
 // The `AsBindGroup` derive exceeds the default trait-solver depth on recent nightlies.
 #![recursion_limit = "256"]
 
-mod build;
-mod build_asset;
 mod camera;
 mod dev_tools;
 mod environment;
 mod map;
 mod shaders;
-mod sim;
 mod ui;
 
 use bevy::prelude::*;
@@ -42,10 +39,7 @@ fn main() {
             camera::CameraPlugin,
             map::MapPlugin { seed },
             shaders::ShadersPlugin,
-            build_asset::BuildAssetPlugin,
-            build::BuildPlugin,
             ui::UiPlugin,
-            sim::SimPlugin,
         ))
         .run();
 }
@@ -56,6 +50,6 @@ pub enum AppState {
     /// The world is being generated in the background.
     #[default]
     Loading,
-    /// The world is ready: terrain, camera control, placement and debug tools run.
+    /// The world is ready: terrain, camera control and debug tools run.
     InGame,
 }

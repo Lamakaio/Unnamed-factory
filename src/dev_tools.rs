@@ -1,6 +1,5 @@
 //! Debug tooling: remote inspector, wireframe and debug gizmos.
 //!
-//! - F2: building bounding boxes
 //! - F3: global wireframe
 //! - F4: river center lines
 //! - Clicking the terrain logs its generation data (height, gradient, hydrology).
@@ -14,8 +13,7 @@
 //! the screenshots are saved.
 
 use bevy::{
-    camera::primitives::Aabb,
-    color::palettes::css::{ORANGE_RED, RED},
+    color::palettes::css::RED,
     input::common_conditions::input_just_pressed,
     pbr::wireframe::{WireframeConfig, WireframePlugin},
     prelude::*,
@@ -27,7 +25,6 @@ use bevy::camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamer
 
 use crate::{
     AppState,
-    build::BuildId,
     map::{ChunkMeshTask, GroundMesh, Map},
 };
 
@@ -40,17 +37,14 @@ impl Plugin for DevToolsPlugin {
             RemotePlugin::default(),
             RemoteHttpPlugin::default(),
         ))
-        .init_gizmo_group::<AabbGizmos>()
         .init_gizmo_group::<RiverGizmos>()
         .add_systems(Startup, configure_gizmos)
         .add_observer(log_terrain_on_click)
         .add_systems(
             Update,
             (
-                toggle_gizmos::<AabbGizmos>.run_if(input_just_pressed(KeyCode::F2)),
                 toggle_wireframe.run_if(input_just_pressed(KeyCode::F3)),
                 toggle_gizmos::<RiverGizmos>.run_if(input_just_pressed(KeyCode::F4)),
-                draw_building_aabbs.run_if(gizmos_enabled::<AabbGizmos>),
                 draw_rivers
                     .run_if(gizmos_enabled::<RiverGizmos>)
                     .run_if(in_state(AppState::InGame)),
@@ -74,20 +68,15 @@ impl Plugin for DevToolsPlugin {
     }
 }
 
-/// Bounding boxes of buildings.
-#[derive(Default, Reflect, GizmoConfigGroup)]
-struct AabbGizmos;
-
 /// River paths and lakes computed by map generation.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct RiverGizmos;
 
 fn configure_gizmos(mut config_store: ResMut<GizmoConfigStore>) {
-    config_store.config_mut::<AabbGizmos>().0.enabled = false;
     config_store.config_mut::<RiverGizmos>().0.enabled = false;
 }
 
-/// Run condition: skip building gizmos for a disabled group.
+/// Run condition: skip gizmos of a disabled group.
 fn gizmos_enabled<T: GizmoConfigGroup>(config_store: Res<GizmoConfigStore>) -> bool {
     config_store.config::<T>().0.enabled
 }
@@ -99,25 +88,6 @@ fn toggle_gizmos<T: GizmoConfigGroup>(mut config_store: ResMut<GizmoConfigStore>
 
 fn toggle_wireframe(mut wireframe_config: ResMut<WireframeConfig>) {
     wireframe_config.global = !wireframe_config.global;
-}
-
-fn draw_building_aabbs(
-    aabbs: Query<(&Aabb, &GlobalTransform), With<BuildId>>,
-    mut gizmos: Gizmos<AabbGizmos>,
-) {
-    for (aabb, transform) in &aabbs {
-        gizmos.cube(
-            Transform::from_translation(
-                Vec3::from(aabb.center) * transform.scale() + transform.translation(),
-            )
-            .with_scale(
-                transform
-                    .rotation()
-                    .mul_vec3(Vec3::from(aabb.half_extents) * transform.scale() * 2.),
-            ),
-            ORANGE_RED,
-        );
-    }
 }
 
 fn draw_rivers(map: Res<Map>, mut gizmos: Gizmos<RiverGizmos>) {

@@ -11,9 +11,19 @@
 
 ## 1. What this project is
 
-A **3D city builder** written in Rust with Bevy. The crate is called `unnamed-factory`,
-but the design is a city builder, not a factory game. Setting: a "perfect world" (no
-crime, no war). The game is about **occupations, buildings, zones and resource flows**.
+**Since 2026-10-13: a life simulator on a living planet.** The game is turning into an
+evolution simulation over deep time on a small spherical planet whose tectonics, erosion and
+climate keep evolving. The design draft and all decisions are in
+[`docs/living-world.md`](docs/living-world.md) (small cube-sphere planet, R ≈ 650 units;
+two clocks: game time and deep time; evolution as the life simulation; sphere first). The
+city builder was **retired** (removed from the app, kept in git history before commit
+"Retire the city builder").
+
+### The former city-builder design (history)
+
+The crate is called `unnamed-factory`; it started as a **3D city builder** in Rust with
+Bevy. Setting: a "perfect world" (no crime, no war). The game was about **occupations,
+buildings, zones and resource flows**.
 
 Design source: [`notes.md`](notes.md) (preliminary, in English with some typos). Summary:
 
@@ -37,34 +47,32 @@ Design source: [`notes.md`](notes.md) (preliminary, in English with some typos).
   picks one at random. Overloaded links slow down. Cars exist but are nerfed.
 - **Migration** between cities depends on demand, happiness and distance.
 - **Implementation intent** (from the notes): put sim details in a **scripting language**
-  for fast iteration. Typed object tables (one per class), opaque integer handles, and
-  "links" between objects. Simple links are linear (`src * delta → dst growth rate`) and
-  are meant to batch into a matrix multiply. Advanced links are arbitrary functions.
-  *This handle/link design is **not** implemented yet.* The current Rhai scripts use one
-  nested map (see §3.5).
+  for fast iteration, with typed object tables and linear "links" batched into matrix
+  multiplies. A Rhai prototype existed; it was retired with the city builder.
 
 ### Assets & licensing
 - `assets/models/*.glb`, the fonts and some images come from **purchased asset packs**.
   The user has many more packs available.
 - `.gitignore` excludes `*.glb`, so models are **not in git**. Never commit or
   redistribute purchased assets.
-- Data-driven content lives in `assets/` as RON files with custom extensions (`.bconf`,
-  `.mapmat`) and Rhai scripts (`.rhai`).
+- Data-driven content lives in `assets/` as RON files with custom extensions (`.mapmat`).
+  The purchased building models (`assets/models/*.glb`) are unused since the city builder
+  was retired.
 
 ---
 
-## 2. Repo map (as of the `bevy-upgrade` branch, 2026-10-09)
+## 2. Repo map (as of the `bevy-upgrade` branch, 2026-10-13)
 
 ```
 Cargo.toml              bevy 0.20 (+ bevy_remote, file_watcher, pan_orbit_camera,
                         bevy_dev_tools, render_dev_tools), ron 0.12, serde, anyhow,
-                        kdtree-collisions (user's own git crate, no bevy dep), rand 0.10, rhai 1.26,
-                        foldhash 0.2, worldgen (path). Workspace with crates/worldgen. All versions pinned.
+                        rand 0.10, foldhash 0.2, half, worldgen (path). Workspace with crates/worldgen. All versions pinned.
                         Feature `tracy`: `cargo run --features tracy` for Tracy profiling.
 Cargo.lock              tracked
 rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers nightly.
 .cargo/config.toml      (git-ignored, local) rust-lld linker + `jobs = -4` to keep the PC usable while compiling
-notes.md                game design notes (see §1)
+notes.md                former city-builder design notes (see §1)
+docs/living-world.md    living planet design draft and decisions (the current direction)
 src/main.rs             assembles plugins; `AppState { Loading, InGame }`
 src/camera.rs           CameraPlugin: PanOrbitCamera + custom input mapping, arrow-key pan, keep above terrain
 src/environment.rs      EnvironmentPlugin: sun (F rotates it), atmosphere entity
@@ -73,14 +81,9 @@ src/map/                MapPlugin, Map resource; heights.rs (height function), r
 tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
 crates/worldgen/        world generation crate: noise, erosion, lakes, rivers; examples/preview.rs (PNG previews)
-src/build.rs            BuildPlugin: Building asset type, placement (StartPlacement event), picking selection, build grid
-src/build_asset.rs      BuildAssetPlugin: RON `.bconf` loader → Building asset
 src/shaders.rs          ShadersPlugin: MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>, RON `.mapmat` loader
-src/sim.rs              SimPlugin: Rhai script asset + loader, init/tick (FixedUpdate), stats screen (BSN)
-src/ui.rs               UiPlugin: build menu (BSN), `label()` text scene, PointerOverUi system param
-assets/buildings/*.bconf   BuildingFile RON (name, size, typ: Single{model,scale} | Zone{color} | Tool{op,color}, script)
+src/ui.rs               UiPlugin: loading text (BSN), `label()` text scene, PointerOverUi system param
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
-assets/scripts/init.rhai, run.rhai  sim data init + one sim tick
 assets/shaders/map_material.wesl   terrain fragment shader (WESL): toon ground colours + cel lighting, per-pixel normals
 assets/shaders/water.wesl          water fragment shader (WESL): toon water (depth bands, refracted swell and breakers, river flow and falls, glints)
 CREDITS.md              sources of every borrowed technique (papers, articles, shaders); keep it up to date
@@ -89,11 +92,7 @@ CREDITS.md              sources of every borrowed technique (papers, articles, s
 ### Controls
 Camera: right drag orbit · middle drag pan · wheel zoom (all anchored on the point under the
 cursor; nothing starts over UI) · arrows pan.
-Building: build menu button starts placing · left click places (drag resizes zones) ·
-Ctrl+click places and keeps placing · S cycles snapping · hover highlights a placed building ·
-click picks it up again.
-Sim: Enter (held) runs ticks at 20 Hz · R re-runs init · Tab stats screen.
-Debug: F rotate sun · F2 AABBs · F3 wireframe · F4 rivers/lakes · click terrain logs its data.
+Debug: F rotate sun · F3 wireframe · F4 rivers/lakes · click terrain logs its data.
 (Bevy's `RenderDebugOverlay` defaults to F1/F2 but is disabled by default.)
 
 ---
@@ -122,7 +121,7 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   25, max 600) with a 4096 shadow map, and an `Atmosphere` entity
   (`ScatteringMedium::default()`).
 - **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`, gizmo
-  config groups `AabbGizmos` / `RiverGizmos` toggled with run conditions. Setting
+  config group `RiverGizmos` toggled with a run condition. Setting
   `UF_SCREENSHOT=<png>` (and optionally `UF_SCREENSHOT_DELAY`, default 20 s) saves a
   screenshot and exits. `UF_LAB=<dir>` (lab mode) keeps the game running and takes
   screenshots on request (`<dir>/shots.txt`). See §6.
@@ -262,11 +261,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     wide and widened (up to 3) to keep its slope under 0.8: steep walls alias into a
     sawtooth on the mesh grid. It only ever lowers
     the terrain. The valleys themselves are baked by erosion. Wetness is 1 in the channel.
-  - **Edit layer** (`map/edits.rs`): `TerrainEdit::Flatten` (building foundations: flat over
-    the inner 60% of the radius, smootherstep blend outside) and `Raise` (tools: ±10 units,
-    smootherstep bell). Edits apply in insertion order and are found through a spatial grid.
-    `Map::add_edit` records the touched chunks for re-meshing. `PatchOp::Smooth` is not
-    supported yet (logs a warning).
+  - **Edit layer** (`map/edits.rs`): `TerrainEdit::Flatten` (flat over the inner 60% of
+    the radius, smootherstep blend outside) and `Raise` (smootherstep bell). Edits apply in
+    insertion order and are found through a spatial grid. `Map::add_edit` records the touched
+    chunks for re-meshing. Nothing makes edits since the city builder was retired; kept as the
+    path for runtime terrain changes.
 - **Meshing** (`map/mesh.rs`): each 64-unit chunk is a quadtree of 16×16-quad patches, meshed
   in 4×4 separate parts (`TerrainPart` child entities with `GroundMesh`, the picking target;
   `PART_DEPTH`), so rebuilds near the camera stay small. Cells
@@ -358,33 +357,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   Placement grids: 0.45 (large) and 0.28 (ground cover). Background tasks (placement, near
   meshes): 4 at once.
 
-### 3.3 Buildings (`build.rs`, `build_asset.rs`)
-- `Building` is an `Asset` loaded from `.bconf` RON. All of them are loaded at startup
-  through `load_folder("buildings")`, and the `Buildings` resource keeps the folder handle.
-  `BuildingType` is `Single { model: Handle<WorldAsset>, scale }`, `Zone { color }` or
-  `Tool { op: PatchOp, color }`. `size` and `script` exist but are unused.
-- **Placement:**
-  1. The build menu triggers `StartPlacement(handle)`. Its observer despawns whatever is
-     being placed and spawns the new building with `SelectedBuild` and its visuals:
-     `WorldAssetRoot` for models, a wireframe cuboid for zones, or a `ForwardDecal` for tools.
-  2. For models, an entity observer on `WorldInstanceReady` computes the root `Aabb` once,
-     from the mesh assets of the spawned glTF hierarchy.
-  3. `build_follow_cursor` raycasts (`MeshRayCast`, filtered to `IsGround` chunks), snaps
-     (`Snapping::spacing`), and records a left press made while placing and not over UI
-     (`PlacementPress`). Zones resize while dragging from that press.
-  4. `place_build` (chained after it) runs on release, **only if `PlacementPress` was set**.
-     That way the menu click doesn't place anything. It adds a `TerrainEdit` (a flatten
-     foundation, radius = 2× the footprint half-diagonal; or the tool's op, then despawns
-     the tool), inserts a `BuildingInstance`, and registers it in
-     `Map.entities`. With Ctrl held it triggers `StartPlacement` again.
-  5. While placing, the `InfiniteGrid` build grid is shown at cursor height + 0.5 with the
-     snapping spacing. It is a flat plane, so it disappears where the terrain rises above
-     it. Drawing grid lines in the terrain shader would be the proper solution.
-- **Selection** uses global picking observers: `PointerEnter` / `PointerLeave` on a
-  `BuildingInstance` root toggle `Highlighted`, and a primary `PointerClick` picks the
-  building up (removes `BuildingInstance`, inserts `SelectedBuild`). Nothing reacts while
-  placing. `On<Add/Remove<Highlighted>>` observers move a single `SpotLight` onto the
-  highlighted building.
+### 3.3 Buildings (retired)
+Removed on 2026-10-13 with the city builder (placement, zones, tools, selection, build grid).
+What remains: the terrain **edit layer** (`map/edits.rs`, `Map::add_edit`), which nothing
+uses now but is the path for runtime terrain changes (it re-meshes the touched chunks).
 
 ### 3.4 Rendering (`shaders.rs`, `assets/shaders`)
 `MapMaterial = ExtendedMaterial<StandardMaterial, TerrainShader>`, loaded from `.mapmat` RON
@@ -437,35 +413,22 @@ hot reload). The shader is WESL (`map_material.wesl`):
 - Tune colours in the shader (they are sRGB constants through `srgb()`); `tint` multiplies
   everything.
 
-### 3.5 Simulation (`sim.rs`, `assets/scripts`)
-- `RhaiScript` asset + loader. The `Sim` resource (`FromWorld` loads the scripts) holds the
-  `rhai::Engine`, a `Scope` with one `data` map, and the numeric values keyed by path hash.
-- `init.rhai` builds the nested `data` map: `job.<name>.{population, productivity, demand, ...}`,
-  `stat.*`, `resource.*`, `aggregates.*`, `building.*`, `aims.*`. `init_sim` runs it as soon
-  as it is loaded, and again on R. It then triggers `SimInitialized`.
-- `run.rhai` is one tick of the sim (food, materials, migration, natality, per-job growth,
-  demand, aggregates). `tick_sim` runs in **`FixedUpdate` at 20 Hz while Enter is held**.
-  Script errors are logged, not propagated, since system errors panic in 0.20.
-- The stats screen is built from the structure of `data` as nested `bsn!` scenes
-  (`Box<dyn SceneBox>` for the recursion) by the `SimInitialized` observer. `update_stats`
-  runs only when `Sim` changed.
-- Building scripts (`Building.script`) are loaded but never executed.
+### 3.5 Simulation
+The Rhai city simulation was retired with the city builder. The planet simulation is
+designed in `docs/living-world.md`.
 
 ### 3.6 UI (`ui.rs`)
-The build menu is a `bsn!` scene, spawned once all buildings are loaded, with buttons sorted by
-name. Buttons are `ui_widgets::Button` with an `on(start_placement)` observer on `Activate`,
-styled from `Hovered` / `Pressed`. `label(text)` is the shared text scene; the font is an
-asset path in the scene (`UI_FONT`). Scenes with assets are spawned with
-`queue_spawn_scene`, which waits for the font. `PointerOverUi` (a `SystemParam`) tells camera
-and placement code when the cursor is over UI. Mouse-wheel scrolling of `Overflow::scroll_y`
-nodes is still manual (`update_scroll_position`), as in Bevy's own example.
+Only the loading text remains ("Generating world...", a `bsn!` scene). `label(text)` is the
+shared text scene; the font is an asset path in the scene (`UI_FONT`), and scenes with assets
+are spawned with `queue_spawn_scene`, which waits for the font. `PointerOverUi` (a
+`SystemParam`) tells the camera when the cursor is over UI.
 
 ### 3.7 Known issues / smells (fix opportunistically)
 - `cargo check` passes with only dead-code warnings: unused data fields, `TestCurve`
   experiments, `ChunkMarker`.
-- `bevy_dev_tools` is enabled for the in-game build grid. Bevy says not to ship dev tools;
-  revisit (e.g. draw the grid in the terrain shader) before any release.
-- Tests exist only for `worldgen`. The sim maths is pure and easy to unit-test too.
+- `bevy_dev_tools` was enabled for the (retired) build grid; check whether anything else
+  still needs it. Bevy says not to ship dev tools.
+- Tests exist only for `worldgen`.
 - Lake dams are discs, so some show up as rounded hills next to their lake.
 - Plateau tops can hold small depression lakes (cap + slope limiting leave pits).
 
@@ -498,10 +461,8 @@ Gotchas hit during the upgrade:
 - `noiz` was used for noise until the world generation rework. It was dropped, together with
   the local Bevy 0.20 port it needed (`../noiz-bevy-0.20`, safe to delete). `worldgen` has its
   own small noise module.
-- `kdtree-collisions`: the user's own crate (github.com/Lamakaio/kdtree-collisions), 2018
-  edition, no deps. It's free to modify, or to replace with a simple uniform grid / a
-  maintained crate.
-- Latest versions (2026-10-09): `rhai 1.26`, `ron 0.12` (Bevy no longer re-exports ron),
+- `kdtree-collisions` (the user's own crate) and `rhai` were dropped with the city builder.
+- Latest versions (2026-10-09): `ron 0.12` (Bevy no longer re-exports ron),
   `rand 0.10` (`Rng`→`RngExt`, `RngCore`→`Rng`), `rand_distr 0.6`, `foldhash 0.2`,
   `fast_hilbert 2.1`, `thiserror 2` (Bevy examples use it for loader errors).
 - `trace_tracy` is now the opt-in `tracy` feature. Still possible: put `file_watcher` and
@@ -611,12 +572,10 @@ of the migration work.
   src/main.rs            App::new + top-level plugins only
   src/camera.rs          orbit/pan camera, CameraSettings
   src/environment.rs     sun, atmosphere, fog, ambient
-  src/dev_tools.rs       F-key debug toggles, gizmos (rivers, AABBs), wireframe, BRP — compiled only with `dev` feature
+  src/dev_tools.rs       F-key debug toggles, gizmos (rivers), wireframe, BRP — compiled only with `dev` feature
   src/terrain/{mod, chunk, material, streaming}.rs
   src/terrain/gen/{noise, hydrology, rivers}.rs   (pure Rust, unit-tested, no ECS)
-  src/building/{mod, asset, placement, selection}.rs
-  src/sim/{mod, script, ui}.rs
-  src/ui/{mod, build_menu, widgets}.rs
+  src/ui/{mod, widgets}.rs
   src/states.rs          AppState / Screen states
   ```
 - Keep **pure algorithms** (world generation, sim maths) free of ECS types so they can be
@@ -742,9 +701,8 @@ of the migration work.
    is 5% of it: a stale far anchor clips everything close), and waits until terrain chunks
    are done meshing. For close-ups, prefer a camera a little higher and angled down. `UF_CAMERA=x,z[,dx,dy,dz]`
    points the start view at world (x, z) from offset (dx, dy, dz). Also scan the log for
-   `ERROR` / `panicked`. To exercise interactive paths (placement, sim screen), apply a
-   *temporary* patch (e.g. a fake cursor at window centre, or trigger `StartPlacement` from
-   `auto_screenshot`), take the screenshot, then revert the patch. Never move the user's real
+   `ERROR` / `panicked`. To exercise interactive paths, apply a *temporary* patch (e.g. a
+   fake cursor at window centre), take the screenshot, then revert the patch. Never move the user's real
    mouse.
 7. Full rebuilds take 10–20 minutes. Don't run a blind `cargo update`; prefer targeted
    `cargo update -p <crate>`.

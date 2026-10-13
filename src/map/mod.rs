@@ -28,15 +28,13 @@ use bevy::{
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
-use kdtree_collisions::{KdTree, KdValue};
-use serde::Deserialize;
 
 pub use edits::TerrainEdit;
 pub use heights::TerrainSample;
 
 use worldgen::{Continent, WorldgenSettings};
 
-use crate::{AppState, build::Building, shaders::MapMaterial};
+use crate::{AppState, shaders::MapMaterial};
 use heights::TerrainHeights;
 
 /// Size of a heightmap cell, in world units.
@@ -85,7 +83,7 @@ impl Plugin for MapPlugin {
     }
 }
 
-/// The whole map: terrain heights, loaded chunks, and the placed buildings.
+/// The whole map: terrain heights and loaded chunks.
 #[derive(Resource)]
 pub struct Map {
     material: Handle<MapMaterial>,
@@ -96,7 +94,6 @@ pub struct Map {
     chunks: HashMap<I64Vec2, Entity>,
     /// Number of edits that touched each chunk, to know when to re-mesh it.
     chunk_edits: HashMap<I64Vec2, u64>,
-    pub entities: KdTree<BuildingInstance, 10>,
     pub continent: Continent,
 }
 
@@ -111,7 +108,9 @@ impl Map {
         self.heights.sample(pos.xz())
     }
 
-    /// Apply a terrain edit; the chunks it touches are re-meshed.
+    /// Apply a terrain edit; the chunks it touches are re-meshed. (Unused since the city
+    /// builder's tools were retired; kept as the path for runtime terrain changes.)
+    #[allow(dead_code)]
     pub fn add_edit(&mut self, edit: TerrainEdit) {
         let (min, max) = edit.bounds();
         self.heights.add_edit(edit);
@@ -131,45 +130,6 @@ impl Map {
 /// Chunk containing a world position.
 fn chunk_coords(p: Vec2) -> I64Vec2 {
     (p / CHUNK_SIZE).floor().as_i64vec2()
-}
-
-/// An instance of a specific building at a position
-/// Might contain other instance-specific stats in the future (damage, etc)
-#[derive(PartialEq, Clone, Component)]
-pub struct BuildingInstance {
-    pub building: Handle<Building>,
-    pub pos: Vec2,
-    pub half_extents: Vec2,
-    pub entity: Entity,
-}
-
-impl KdValue for BuildingInstance {
-    type Position = f32;
-
-    fn min_x(&self) -> Self::Position {
-        self.pos.x
-    }
-
-    fn min_y(&self) -> Self::Position {
-        self.pos.y
-    }
-
-    fn max_x(&self) -> Self::Position {
-        self.pos.x + self.half_extents.x
-    }
-
-    fn max_y(&self) -> Self::Position {
-        self.pos.y + self.half_extents.y
-    }
-}
-
-/// Terrain operation of a building or tool, see [`TerrainEdit::from_op`].
-#[derive(Clone, Copy, Debug, Deserialize)]
-pub enum PatchOp {
-    Up,
-    Down,
-    Flatten,
-    Smooth,
 }
 
 /// Textures of the terrain shader, with their mappings from world xz (`uv = xz * zw + xy`).
@@ -251,7 +211,6 @@ fn finish_generation(
         heights: world.heights,
         chunks: default(),
         chunk_edits: default(),
-        entities: KdTree::default(),
         continent: world.continent,
     });
     next_state.set(AppState::InGame);

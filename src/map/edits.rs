@@ -3,10 +3,8 @@
 
 use bevy::prelude::*;
 
-use super::{GRID_SQUARE_SIZE, MIN_CELL, PatchOp, spatial::SpatialGrid};
+use super::{GRID_SQUARE_SIZE, MIN_CELL, spatial::SpatialGrid};
 
-/// Height change of one raise / lower tool use, in world units.
-const RAISE_AMOUNT: f32 = 10.;
 /// Cell size of the edit lookup grid, in world units.
 const LOOKUP_CELL: f32 = 8.;
 /// Fraction of a flatten radius that is fully flat; the rest blends into the terrain.
@@ -15,6 +13,9 @@ const FLATTEN_PLATEAU: f32 = 0.6;
 const CELLS_PER_FALLOFF: f32 = 8.;
 
 /// One terrain modification, applied over a disc with a smooth falloff.
+// (Nothing makes edits since the city builder's tools were retired: kept as the path for
+// runtime terrain changes.)
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum TerrainEdit {
     /// Blend the terrain towards `height` (building foundations).
@@ -32,27 +33,6 @@ pub enum TerrainEdit {
 }
 
 impl TerrainEdit {
-    /// The edit made by a placement operation centered on `center` (world position).
-    pub fn from_op(op: PatchOp, center: Vec3, radius: f32) -> Option<Self> {
-        match op {
-            PatchOp::Flatten => Some(Self::Flatten {
-                center: center.xz(),
-                radius,
-                height: center.y,
-            }),
-            PatchOp::Up | PatchOp::Down => Some(Self::Raise {
-                center: center.xz(),
-                radius,
-                amount: if matches!(op, PatchOp::Down) {
-                    -RAISE_AMOUNT
-                } else {
-                    RAISE_AMOUNT
-                },
-            }),
-            PatchOp::Smooth => None,
-        }
-    }
-
     fn center_radius(&self) -> (Vec2, f32) {
         match *self {
             Self::Flatten { center, radius, .. } | Self::Raise { center, radius, .. } => {
