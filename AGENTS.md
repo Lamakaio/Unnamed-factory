@@ -255,10 +255,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     corners a cell has 7). Tests: round trip, areas, mutual neighbours, everything drains.
   - `noise.rs`: 3D noise (`get3`, `fbm3`, `ridged3`, `warp3`) to sample the sphere by direction.
   - `planet.rs`: `generate_planet(&PlanetSettings) -> Planet`: continents from noise sized
-    relative to the radius (`CONTINENT_FREQUENCY`), rigid plates (Euler-pole rotations) whose
-    converging boundaries raise ridged mountain belts (as `terrain::shape` on the flat map),
+    relative to the radius (`CONTINENT_FREQUENCY`), provinces (plains / broad rounded hills /
+    plateaus, `province_weights`, blended softly, plateaus capped with `cap_plateaus`), rigid
+    plates (Euler-pole rotations) whose fast-converging boundaries raise ridged mountain belts
+    (as `terrain::shape` on the flat map),
     then `terrain::erode` on the sphere, scaling to world units and a sea floor deepening away
-    from land; drainage. Landforms are sized in cells, so they match the flat map; the radius
+    from land (`distance_to`: exact distance to the nearest land cell, propagated, then
+    blurred); drainage. Landforms are sized in cells, so they match the flat map; the radius
     is `2n/π` cells (n = 1024 is the target planet, 256 the fast default for previews).
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),

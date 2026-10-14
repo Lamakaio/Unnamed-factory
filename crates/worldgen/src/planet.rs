@@ -33,6 +33,13 @@ pub struct PlanetSettings {
     pub land_fraction: f32,
     /// Number of tectonic plates.
     pub plate_count: usize,
+    /// Mean area of a province (cells), and the share of each province type
+    /// (`[plains, hills, plateau]`) and how softly they blend (cells), as on the flat map.
+    pub province_cells: f32,
+    pub province_weights: [f32; 3],
+    pub province_blend: f32,
+    /// Level of plateau caps (world units).
+    pub plateau_level: f32,
     /// Width of mountain belts and spacing of their parallel ridges (cells).
     pub range_width: f32,
     pub ridge_spacing: f32,
@@ -57,7 +64,11 @@ impl Default for PlanetSettings {
             seed: 1082,
             n: 256,
             land_fraction: 0.3,
-            plate_count: 14,
+            plate_count: 12,
+            province_cells: 26_000.,
+            province_weights: [0.3, 0.45, 0.25],
+            province_blend: flat.province_blend,
+            plateau_level: flat.plateau_level,
             range_width: flat.range_width,
             ridge_spacing: flat.ridge_spacing,
             max_height: flat.max_height,
@@ -95,6 +106,13 @@ impl Planet {
     pub fn radius(&self) -> f32 {
         2. * self.settings.n as f32 / std::f32::consts::PI
     }
+}
+
+/// A province: its centre, its type (plains, hills, plateau) and its plateau cap level.
+struct Province {
+    center: Vec3,
+    kind: usize,
+    cap: f32,
 }
 
 /// A rigid plate: its centre, and its rotation (axis × angular speed, in radians per unit
@@ -166,6 +184,26 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             rotation: random_direction(&mut rng) * rng.random_range(0.5..1.5),
         })
         .collect();
+    // Provinces: smaller cells than the plates, each plains, hills or a plateau (with its cap
+    // level), blended softly as on the flat map.
+    let province_count = ((cells as f32 / settings.province_cells) as usize).max(12);
+    let provinces: Vec<Province> = (0..province_count)
+        .map(|_| {
+            let roll = rng.random_range(0.0..1.0f32) * settings.province_weights.iter().sum::<f32>();
+            let [plains, hills, _] = settings.province_weights;
+            Province {
+                center: random_direction(&mut rng),
+                kind: if roll < plains {
+                    0
+                } else if roll < plains + hills {
+                    1
+                } else {
+                    2
+                },
+                cap: settings.plateau_level * rng.random_range(0.7..1.15f32),
+            }
+        })
+        .collect();
     let peaks = noise.layer(2);
     let hills = noise.layer(3);
     let warp = noise.layer(4);
@@ -207,7 +245,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             // Across the boundary, from plate a towards plate k, in the tangent plane.
             let axis = (plates[k].center - plates[a].center).reject_from(direction).normalize_or_zero();
             let convergence = (plates[a].velocity(direction) - plates[k].velocity(direction)).dot(axis);
-            let collision = smoothstep(0.45, 1.1, convergence);
+            // (Only fast collisions raise ranges: most land is hills, plains and plateaus.)
+            let collision = smoothstep(0.75, 1.4, convergence);
             let here = collision * smoothstep(1., 0.15, x / width);
             if here > belt {
                 (belt, across) = (here, x);
@@ -225,20 +264,39 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         let foothills = foothills * (0.5 + 0.5 * hills.layer(5).fbm3(p / 30., 3).abs());
         shape.range[i] = (belt + foothills * 0.4).min(1.);
 
-        // Interior provinces: rolling hills where the noise is high, plains elsewhere.
-        let hilly = smoothstep(-0.1, 0.35, hills.fbm3(p / 160., 3));
-        let rolling = 0.6 + 0.4 * hills.layer(1).fbm3(p / 55., 4);
+        // Interior provinces, blended from the nearest few (warped like the plates).
+        let w = (p + warp.layer(1).warp3(p / 160., 3, 70.) + warp.layer(2).warp3(p / 50., 2, 15.))
+            .normalize();
+        let mut nearest: Vec<(f32, usize)> = provinces
+            .iter()
+            .enumerate()
+            .map(|(k, province)| (province.center.angle_between(w) * radius, k))
+            .collect();
+        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut weights, mut cap, mut total) = ([0f32; 3], 0., 0.);
+        for &(d, k) in nearest.iter().take(4) {
+            let weight = (-(d - nearest[0].0) / settings.province_blend).exp();
+            weights[provinces[k].kind] += weight;
+            cap += provinces[k].cap * weight;
+            total += weight;
+        }
+        let [plains, hilly, plateau] = weights.map(|weight| weight / total);
+        shape.provinces[i] = [plains, hilly, plateau];
+        shape.plateau_cap[i] = cap / total;
+        // Hills are broad and rounded (high hillslope diffusion), plateaus hard rock.
+        let rolling = 0.6 + 0.4 * hills.layer(1).fbm3(p / 80., 4);
         let undulation = 0.5 + 0.5 * hills.layer(3).fbm3(p / 35., 3);
-        let interior = (1. - hilly) * 0.2 * undulation + hilly * 0.9 * rolling;
+        let interior = plains * 0.2 * undulation + hilly * 0.9 * rolling + plateau;
         let l = land[i];
         shape.uplift[i] = (interior * (1. - 0.85 * rift) * (1. - belt * 0.5)
             + range * 1.1
             + foothills * 0.22)
             * l.powf(1.5);
-        shape.provinces[i] = [1. - hilly, hilly, 0.];
-        shape.erodibility[i] = ((1. - hilly) * 1.2 + hilly * 1.3) * (1. - belt) + 0.75 * belt;
-        shape.diffusion[i] =
-            settings.diffusion * ((1. - hilly) * 0.6 + hilly * 2.5) * (1. - belt * 0.4);
+        shape.erodibility[i] =
+            (plains * 1.2 + hilly * 1.3 + plateau * 0.12) * (1. - belt) + 0.75 * belt;
+        shape.diffusion[i] = settings.diffusion
+            * (plains * 0.6 + hilly * 2.5 + plateau * 0.15)
+            * (1. - belt * 0.4);
         shape.glacial_noise[i] = 1. + 0.6 * hills.layer(7).fbm3(p / 14., 2);
         shape.heights[i] = if sea[i] { 0. } else { l * (0.5 + hills.layer(8).fbm3(p / 40., 4) * 0.3) };
     }
@@ -268,7 +326,15 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     summits.sort_by(f32::total_cmp);
     let reference = summits[(summits.len() - 1) * 99 / 100].max(1e-6);
-    let to_land = distance_to(&grid, &sea.iter().map(|s| !s).collect::<Vec<_>>());
+    // (Blurred: the distance field has creases halfway between coasts.)
+    let to_land = grid.blur(&distance_to(&grid, &sea.iter().map(|s| !s).collect::<Vec<_>>()), 6);
+    // Plateaus are cut at their cap level (tablelands with escarpments), as on the flat map.
+    for i in 0..cells {
+        if !sea[i] {
+            heights[i] *= settings.max_height / reference;
+        }
+    }
+    terrain::cap_plateaus(&shape, &mut heights);
     let floor = noise.layer(9);
     for i in 0..cells {
         heights[i] = if sea[i] {
@@ -276,7 +342,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             let depth = 0.3 + settings.sea_depth * smoothstep(0., 40., to_land[i]);
             -depth * (0.85 + 0.15 * floor.fbm3(p / 60., 3))
         } else {
-            heights[i] * settings.max_height / reference
+            heights[i]
         };
     }
     let filled = priority_flood(&grid, &heights, &sea, 1e-4);
@@ -295,26 +361,29 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
 }
 
-/// Distance (in cells, along neighbour steps) from each cell to the nearest cell of `mask`
-/// (Dijkstra).
-pub fn distance_to(grid: &impl Grid, mask: &[bool]) -> Vec<f32> {
+/// Distance (in cells) from each cell to the nearest cell of `mask`: each cell's nearest
+/// source is propagated from its neighbours and the distance measured to it directly
+/// (stepping along neighbours instead would draw star-shaped rays).
+pub fn distance_to(grid: &SphereGrid, mask: &[bool]) -> Vec<f32> {
     use std::{cmp::Reverse, collections::BinaryHeap};
     let mut distance = vec![f32::MAX; grid.len()];
+    let mut source = vec![usize::MAX; grid.len()];
     let mut open = BinaryHeap::new();
     for i in (0..grid.len()).filter(|&i| mask[i]) {
         distance[i] = 0.;
+        source[i] = i;
         open.push(Reverse((0u32, i)));
     }
     // (Distances as fixed point, so the heap orders integers.)
     while let Some(Reverse((d, i))) = open.pop() {
-        let d = d as f32 / 1024.;
-        if d > distance[i] {
+        if d as f32 / 1024. > distance[i] {
             continue;
         }
-        for (j, step) in grid.neighbours(i) {
-            let candidate = d + step;
+        for (j, _) in grid.neighbours(i) {
+            let candidate = grid.distance(j, source[i]);
             if candidate < distance[j] {
                 distance[j] = candidate;
+                source[j] = source[i];
                 open.push(Reverse(((candidate * 1024.) as u32, j)));
             }
         }
