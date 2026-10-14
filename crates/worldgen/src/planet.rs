@@ -25,6 +25,7 @@ use crate::{
     flow::{FlowGraph, priority_flood},
     grid::Grid,
     noise::{Noise, hash, smoothstep},
+    par,
     sphere::SphereGrid,
     terrain::{self, Shape},
 };
@@ -37,8 +38,10 @@ const CONTINENTAL_BIAS: f32 = 0.22;
 const RIFT_SUBSIDENCE: f32 = 0.3;
 /// Uplift of the low swells over all land (relative, like the provinces' uplift).
 const PLAIN_SWELLS: f32 = 0.08;
-/// Distances to the coast are only needed this far (cells): beyond, they are this value.
+/// Distances to the coast are only needed this far (cells) inland and out at sea: beyond,
+/// they are this value.
 const COAST_REACH: f32 = 64.;
+const SHORE_REACH: f32 = 8.;
 /// Distance over which the plates' crust bias blends across their boundaries (cells).
 const CRUST_BLEND: f32 = 25.;
 /// Crust value margin below the coast that is still continental (the shelf).
@@ -241,22 +244,6 @@ fn random_direction(rng: &mut StdRng) -> Vec3 {
     }
 }
 
-/// `f` over `0..len`, on all cores.
-fn par_map<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let chunk = len.div_ceil(threads).max(1);
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..len)
-            .step_by(chunk)
-            .map(|start| {
-                let f = &f;
-                scope.spawn(move || (start..(start + chunk).min(len)).map(f).collect::<Vec<T>>())
-            })
-            .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
-    })
-}
-
 /// The `K` nearest of some points (centre, id) to a direction: `(distance in cells, id)`,
 /// nearest first, and how many were found. Ranked by dot product; only the kept ones get an
 /// angle.
@@ -385,7 +372,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let shape_on = |grid: &SphereGrid, scale: f32| -> Shaped {
     let cells = grid.len();
     // Pass 1: plates, boundaries, crust.
-    let pass1: Vec<(u16, f32, Boundary)> = par_map(cells, |i| {
+    let pass1: Vec<(u16, f32, Boundary)> = par::map(cells, |i| {
         let direction = grid.direction(i);
         let p = direction * radius;
         let w = (p + warp.warp3(p / 180., 3, 45.)).normalize();
@@ -488,16 +475,31 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let coast = *sorted.select_nth_unstable_by(k, f32::total_cmp).1;
     let sea: Vec<bool> = crust.iter().map(|&c| c < coast).collect();
     let continental: Vec<bool> = crust.iter().map(|&c| c >= coast - SHELF_BAND).collect();
-    let to_sea: Vec<f32> = distance_to(grid, &sea, COAST_REACH / scale)
+    let to_sea: Vec<f32> = distance_to(grid, &sea, COAST_REACH / scale, SHORE_REACH / scale)
         .into_iter()
         .map(|d| d * scale)
         .collect();
 
     // Pass 2: landforms on land.
-    let pass2: Vec<Cell> = par_map(cells, |i| {
+    let pass2: Vec<Cell> = par::map(cells, |i| {
+        let b = pass1[i].2;
+        // (Erosion keeps the sea at its base level: none of this is used there.)
+        if sea[i] {
+            return Cell {
+                land: 0.,
+                uplift: 0.,
+                subsidence: 0.,
+                provinces: [1., 0., 0.],
+                plateau_cap: 0.,
+                range: b.belt.min(1.),
+                erodibility: 1.,
+                diffusion: 0.,
+                glacial_noise: 1.,
+                height: 0.,
+            };
+        }
         let direction = grid.direction(i);
         let p = direction * radius;
-        let b = pass1[i].2;
         let land = smoothstep(coast, coast + 0.06, crust[i]);
         // Young belts: parallel ridges, broken into peaks and passes.
         let phase = (b.across + 0.25 * settings.ridge_spacing * peaks.layer(2).fbm3(p / 50., 3))
@@ -787,21 +789,21 @@ struct Cell {
 }
 
 /// Distance (in cells) from each cell to the nearest cell on the other side of the `sea`
-/// mask: for land cells to the sea, for sea cells to land, up to `reach` (further cells get
-/// `reach`). Each cell's nearest source is propagated from its neighbours and the distance
+/// mask: for land cells to the sea, up to `land_reach`, for sea cells to land, up to
+/// `sea_reach` (further cells get the reach). Each cell's nearest source is propagated from its neighbours and the distance
 /// measured to it directly (stepping along neighbours instead would draw star-shaped rays).
-pub fn distance_to(grid: &SphereGrid, sea: &[bool], reach: f32) -> Vec<f32> {
+pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: f32) -> Vec<f32> {
     use std::{cmp::Reverse, collections::BinaryHeap};
-    let mut distance = vec![reach; grid.len()];
+    let reach = |i: usize| if sea[i] { sea_reach } else { land_reach };
+    let mut distance: Vec<f32> = (0..grid.len()).map(reach).collect();
     let mut source = vec![usize::MAX; grid.len()];
     let mut open = BinaryHeap::new();
-    // Sources: cells next to the other side.
-    for i in 0..grid.len() {
-        if grid.neighbours(i).any(|(j, _)| sea[j] != sea[i]) {
-            distance[i] = 0.5;
-            source[i] = i;
-            open.push(Reverse((512u32, i)));
-        }
+    // Sources: cells next to the other side (found on all cores).
+    let shore = par::map(grid.len(), |i| grid.neighbours(i).any(|(j, _)| sea[j] != sea[i]));
+    for i in (0..grid.len()).filter(|&i| shore[i]) {
+        distance[i] = 0.5;
+        source[i] = i;
+        open.push(Reverse((512u32, i)));
     }
     // (Distances as fixed point, so the heap orders integers.)
     while let Some(Reverse((d, i))) = open.pop() {
@@ -813,7 +815,7 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool], reach: f32) -> Vec<f32> {
                 continue;
             }
             let candidate = 0.5 + grid.distance(j, source[i]);
-            if candidate < distance[j] && candidate < reach {
+            if candidate < distance[j] && candidate < reach(j) {
                 distance[j] = candidate;
                 source[j] = source[i];
                 open.push(Reverse(((candidate * 1024.) as u32, j)));

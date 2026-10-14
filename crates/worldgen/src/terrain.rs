@@ -19,7 +19,7 @@ use bevy_math::Vec2;
 use rand::{Rng, RngExt};
 
 use crate::{
-    Landform, WorldgenSettings,
+    Landform, WorldgenSettings, par,
     flow::{FlowGraph, neighbours},
     grid::Grid,
     noise::{Noise, hash, smoothstep},
@@ -412,7 +412,6 @@ pub fn erode_timed(
     // (Lengths in cells of `cell_size`: the Laplacian divides by its square.)
     let max_k =
         shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt / settings.cell_size.powi(2);
-    let mut previous = heights.clone();
     for step in 0..settings.erosion_steps {
         let mut clock = Instant::now();
         let mut lap = |total: &mut Duration| {
@@ -469,14 +468,12 @@ pub fn erode_timed(
                 *land.select_nth_unstable_by(k, f32::total_cmp).1
             };
             let top = if land.is_empty() { 1. } else { top }.max(high + 1e-3);
-            let ice: Vec<f32> = (0..heights.len())
-                .map(|i| {
-                    let height = (heights[i] - high) / (top - high);
-                    smoothstep(GLACIAL_HEIGHT.0, GLACIAL_HEIGHT.1, height)
-                        * smoothstep(GLACIAL_AREA.0, GLACIAL_AREA.1, area[i])
-                        * shape.range[i].min(1.)
-                })
-                .collect();
+            let ice: Vec<f32> = par::map(heights.len(), |i| {
+                let height = (heights[i] - high) / (top - high);
+                smoothstep(GLACIAL_HEIGHT.0, GLACIAL_HEIGHT.1, height)
+                    * smoothstep(GLACIAL_AREA.0, GLACIAL_AREA.1, area[i])
+                    * shape.range[i].min(1.)
+            });
             // Glaciers are wider than rivers: the trough spreads around the flow line.
             let ice = grid.blur(&ice, 1);
             for (i, h) in heights.iter_mut().enumerate() {
@@ -492,14 +489,18 @@ pub fn erode_timed(
         // shows as stripes.
         let substeps = (max_k / MAX_DIFFUSION_STEP).ceil().max(1.);
         timings.diffusion_substeps = substeps as usize;
+        let mut updated = vec![0f32; diffusing.len()];
         for _ in 0..substeps as usize {
-            previous.copy_from_slice(&heights);
-            for (c, &i) in diffusing.iter().enumerate() {
-                let i = i as usize;
+            // (Each cell from the previous substep only: on all cores.)
+            par::for_each_mut(&mut updated, |c, new| {
+                let i = diffusing[c] as usize;
                 let k = shape.diffusion[i] * dt / substeps / settings.cell_size.powi(2);
                 let sides = &sides[side_start[c] as usize..side_start[c + 1] as usize];
-                let sum: f32 = sides.iter().map(|&j| previous[j as usize]).sum();
-                heights[i] += k * (sum - sides.len() as f32 * previous[i]);
+                let sum: f32 = sides.iter().map(|&j| heights[j as usize]).sum();
+                *new = heights[i] + k * (sum - sides.len() as f32 * heights[i]);
+            });
+            for (c, &i) in diffusing.iter().enumerate() {
+                heights[i as usize] = updated[c];
             }
         }
         lap(&mut timings.diffusion);

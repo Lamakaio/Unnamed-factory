@@ -31,6 +31,7 @@ mod heightmap;
 mod lakes;
 mod mouths;
 pub mod noise;
+mod par;
 pub mod planet;
 mod rivers;
 mod terrain;

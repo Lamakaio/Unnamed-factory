@@ -6,7 +6,7 @@
 
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use crate::grid::Grid;
+use crate::{grid::Grid, par};
 
 /// The 8 neighbour offsets, and their distances (in cells).
 pub const NEIGHBOURS: [(i32, i32, f32); 8] = [
@@ -117,14 +117,13 @@ fn steepest_receivers(
     grid: &impl Grid,
     heights: &[f32],
     base_level: &[bool],
-    weight: impl Fn(usize, usize) -> f32,
+    weight: impl Fn(usize, usize) -> f32 + Sync,
 ) -> (Vec<usize>, Vec<f32>) {
-    let n = heights.len();
-    let mut receivers: Vec<usize> = (0..n).collect();
-    let mut receiver_distance = vec![1.; n];
-    for i in 0..n {
+    // (Each cell on its own: on all cores.)
+    par::map(heights.len(), |i| {
+        let mut best = (i, 1.);
         if base_level[i] {
-            continue;
+            return best;
         }
         let mut best_slope = 0.;
         for (j, distance) in grid.neighbours(i) {
@@ -135,12 +134,13 @@ fn steepest_receivers(
             let slope = (heights[i] - heights[j]) / distance * weight(i, j);
             if slope > best_slope {
                 best_slope = slope;
-                receivers[i] = j;
-                receiver_distance[i] = distance;
+                best = (j, distance);
             }
         }
-    }
-    (receivers, receiver_distance)
+        best
+    })
+    .into_iter()
+    .unzip()
 }
 
 /// Flow graph: each cell's receiver (steepest descent neighbour, itself for outlets), and the
@@ -164,7 +164,7 @@ impl FlowGraph {
         grid: &impl Grid,
         heights: &[f32],
         base_level: &[bool],
-        weight: impl Fn(usize, usize) -> f32,
+        weight: impl Fn(usize, usize) -> f32 + Sync,
     ) -> Self {
         let (receivers, receiver_distance) = steepest_receivers(grid, heights, base_level, weight);
         Self::from_receivers(receivers, receiver_distance)
@@ -185,7 +185,7 @@ impl FlowGraph {
         grid: &impl Grid,
         heights: &[f32],
         base_level: &[bool],
-        weight: impl Fn(usize, usize) -> f32,
+        weight: impl Fn(usize, usize) -> f32 + Sync,
     ) -> (Self, Vec<f32>) {
         let n = heights.len();
         let (mut receivers, mut receiver_distance) =

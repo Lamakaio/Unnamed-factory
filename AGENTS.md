@@ -279,7 +279,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
     `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png` (continental plates
-    bright, oceanic dark). Whole planet at n = 1024: ~20 s (erosion ~13 s); n = 256: ~2 s.
+    bright, oceanic dark), with lakes. Whole planet at n = 1024: ~13 s (shape 3 s, erosion 8 s,
+    of which routing's sequential part is 5 s); n = 512: ~3 s. Per-cell passes run on all
+    cores through `par.rs` (scoped threads, results identical to sequential).
     In-face neighbour distances are precomputed per face position (`local_distance`).
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts

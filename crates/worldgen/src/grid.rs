@@ -23,18 +23,16 @@ pub trait Grid: Sync {
     fn blur(&self, values: &[f32], radius: usize) -> Vec<f32> {
         let mut values = values.to_vec();
         for _ in 0..radius {
-            values = (0..self.len())
-                .map(|i| {
-                    let (mut sum, mut count) = (values[i], 1.);
-                    for (j, distance) in self.neighbours(i) {
-                        if distance < 1.2 {
-                            sum += values[j];
-                            count += 1.;
-                        }
+            values = crate::par::map(self.len(), |i| {
+                let (mut sum, mut count) = (values[i], 1.);
+                for (j, distance) in self.neighbours(i) {
+                    if distance < 1.2 {
+                        sum += values[j];
+                        count += 1.;
                     }
-                    sum / count
-                })
-                .collect();
+                }
+                sum / count
+            });
         }
         values
     }
