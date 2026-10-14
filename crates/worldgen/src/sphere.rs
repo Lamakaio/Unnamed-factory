@@ -254,6 +254,31 @@ mod tests {
     }
 
     #[test]
+    fn every_cell_drains_through_depressions() {
+        // The same, routing through the pits without filling them: every cell reaches the
+        // sea, and the water surface is the filled one.
+        let grid = SphereGrid::new(16);
+        let heights: Vec<f32> = (0..grid.len())
+            .map(|i| crate::noise::hash(9, i as u32, 0) as f32 / u32::MAX as f32)
+            .collect();
+        let sea: Vec<bool> = (0..grid.len()).map(|i| grid.direction(i).y < -0.9).collect();
+        let (graph, water) = crate::flow::FlowGraph::with_depressions(&grid, &heights, &sea, |_, _| 1.);
+        let filled = crate::flow::priority_flood(&grid, &heights, &sea, 0.);
+        for i in 0..grid.len() {
+            assert!((water[i] - filled[i]).abs() < 1e-6, "cell {i}: {} vs {}", water[i], filled[i]);
+            let mut cell = i;
+            for _ in 0..grid.len() {
+                if graph.receivers[cell] == cell {
+                    break;
+                }
+                cell = graph.receivers[cell];
+            }
+            assert!(sea[cell], "cell {i} ends at {cell}, not the sea");
+        }
+        assert_eq!(graph.order.len(), grid.len());
+    }
+
+    #[test]
     fn every_cell_drains_to_the_sea() {
         // Random heights over a sea at one pole: after Priority-Flood every cell has a
         // downhill path to it.

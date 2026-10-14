@@ -593,7 +593,6 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let (mut heights, erosion_timings) = terrain::erode_timed(&grid, &erosion, &shape);
     lap("erosion", &mut timings);
     timings.extend([
-        ("  flood", erosion_timings.flood),
         ("  routing", erosion_timings.routing),
         ("  accumulation", erosion_timings.accumulation),
         ("  incision", erosion_timings.incision),

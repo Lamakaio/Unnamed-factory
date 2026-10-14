@@ -20,7 +20,7 @@ use rand::{Rng, RngExt};
 
 use crate::{
     Landform, WorldgenSettings,
-    flow::{FlowGraph, flood_seeds, neighbours, priority_flood_from},
+    flow::{FlowGraph, neighbours},
     grid::Grid,
     noise::{Noise, hash, smoothstep},
 };
@@ -357,8 +357,9 @@ const MAX_DIFFUSION_STEP: f32 = 0.1;
 /// Stage B: stream-power-law erosion with an implicit solver (Braun & Willett 2013) and hillslope
 /// diffusion. Returns heights in the simulation's relative units (scaled later).
 ///
-/// Every step: flow is routed on the water surface (depressions filled up to their spill
-/// point, Priority-Flood) by steepest descent with random slope weights (stochastic D8),
+/// Every step: flow is routed through the depressions without filling them (basin graph,
+/// [`FlowGraph::with_depressions`]) by steepest descent with random slope weights (stochastic
+/// D8), the water surface standing at each basin's spill point,
 /// drainage accumulated from the rain, then `dh/dt = U - K A^m S` is solved implicitly from the
 /// outlets upstream (rivers flowing into a lake erode down to its surface), and `D ∇²h` smooths
 /// hillslopes. Depressions are lakes: no incision under them, and sediment fills a share of
@@ -373,7 +374,7 @@ pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Ve
 /// Time spent in each part of [`erode`], summed over its steps.
 #[derive(Default, Debug)]
 pub struct ErosionTimings {
-    pub flood: Duration,
+    /// Routing through depressions ([`FlowGraph::with_depressions`]).
     pub routing: Duration,
     pub accumulation: Duration,
     pub incision: Duration,
@@ -408,7 +409,6 @@ pub fn erode_timed(
         );
         side_start.push(sides.len() as u32);
     }
-    let seeds = flood_seeds(grid, &shape.base_level);
     let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt;
     let mut previous = heights.clone();
     for step in 0..settings.erosion_steps {
@@ -417,11 +417,10 @@ pub fn erode_timed(
             *total += clock.elapsed();
             clock = Instant::now();
         };
-        let water = priority_flood_from(grid, &heights, &shape.base_level, &seeds, 1e-4);
-        lap(&mut timings.flood);
+        // Routing through the depressions (lakes) without filling them first.
         let seed = hash(settings.seed as u32, step as u32, 0x51ED);
         let jitter = settings.routing_jitter;
-        let graph = FlowGraph::with_weights(grid, &water, &shape.base_level, |i, j| {
+        let (graph, water) = FlowGraph::with_depressions(grid, &heights, &shape.base_level, |i, j| {
             1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
         });
         lap(&mut timings.routing);

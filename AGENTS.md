@@ -248,7 +248,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
 - **Planet** (milestone 1 of `docs/living-world.md`, not in the game yet):
   - `grid.rs`: the `Grid` trait (cells, neighbours with distances in cells, border, blur).
     `flow.rs` (Priority-Flood, `FlowGraph`) and `terrain::erode` are generic over it; the flat
-    map passes a `PlaneGrid`, which gives exactly the old results.
+    map passes a `PlaneGrid`. Erosion routes with `FlowGraph::with_depressions` (Cordonnier et
+    al. 2019 basin graph: steepest descent, pits' basins linked through their lowest passes,
+    minimum spanning tree to the outlets, pits carved out over their pass; also returns the
+    water surface, equal to Priority-Flood without epsilon), not a Priority-Flood per step.
+    `erode_timed` reports the time of each part.
   - `sphere.rs`: `SphereGrid`, an equiangular cube-sphere of `6 n²` cells, indexed
     `(face * n + z) * n + x`; `direction(i)`, `cell_at(direction)`, `face_coords`, `area(i)`
     (relative to the mean). Neighbours across face edges are found by direction (at cube

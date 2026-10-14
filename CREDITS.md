@@ -18,7 +18,9 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Lakes in landscape evolution** (basins kept through erosion, filled by sediment, flow
   routed across them to their outlet): after the depression handling of FastScape-type models,
   G. Cordonnier, B. Bovy, J. Braun, *A versatile, linear complexity algorithm for flow routing
-  in topographies with depressions*, Earth Surface Dynamics 7, 2019. (`terrain.rs::erode`)
+  in topographies with depressions*, Earth Surface Dynamics 7, 2019: basin graph, minimum
+  spanning tree over the passes and carving, used directly for erosion's routing
+  (`flow.rs::FlowGraph::with_depressions`, `terrain.rs::erode`).
 - **Rift valleys** (sinking grabens between uplifted shoulders, holding chains of lakes, as in
   the East African Rift) and **glacial overdeepening** (troughs dug unevenly, holding ribbon
   lakes): S. J. Cook and D. A. Swift, *Subglacial basins: their origin and importance in

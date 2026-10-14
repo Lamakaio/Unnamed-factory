@@ -111,6 +111,38 @@ pub fn priority_flood_from(
     filled
 }
 
+/// Each cell's steepest-descent receiver (itself for base level cells and pits) and the
+/// distance to it, with the slope towards neighbour `j` of cell `i` weighted by `weight(i, j)`.
+fn steepest_receivers(
+    grid: &impl Grid,
+    heights: &[f32],
+    base_level: &[bool],
+    weight: impl Fn(usize, usize) -> f32,
+) -> (Vec<usize>, Vec<f32>) {
+    let n = heights.len();
+    let mut receivers: Vec<usize> = (0..n).collect();
+    let mut receiver_distance = vec![1.; n];
+    for i in 0..n {
+        if base_level[i] {
+            continue;
+        }
+        let mut best_slope = 0.;
+        for (j, distance) in grid.neighbours(i) {
+            // (Only downhill neighbours can be receivers: skip weighing the others.)
+            if heights[j] >= heights[i] {
+                continue;
+            }
+            let slope = (heights[i] - heights[j]) / distance * weight(i, j);
+            if slope > best_slope {
+                best_slope = slope;
+                receivers[i] = j;
+                receiver_distance[i] = distance;
+            }
+        }
+    }
+    (receivers, receiver_distance)
+}
+
 /// Flow graph: each cell's receiver (steepest descent neighbour, itself for outlets), and the
 /// cells ordered from outlets upstream (each cell comes after its receiver).
 pub struct FlowGraph {
@@ -134,28 +166,153 @@ impl FlowGraph {
         base_level: &[bool],
         weight: impl Fn(usize, usize) -> f32,
     ) -> Self {
+        let (receivers, receiver_distance) = steepest_receivers(grid, heights, base_level, weight);
+        Self::from_receivers(receivers, receiver_distance)
+    }
+
+    /// Route flow on `heights`, depressions included, without filling them (Cordonnier, Bovy
+    /// & Braun 2019, "A versatile, linear complexity algorithm for flow routing in topographies
+    /// with depressions"): steepest descent (weighted as in [`FlowGraph::with_weights`]) leaves
+    /// pits, each the bottom of a basin; basins are linked through their lowest passes, and
+    /// the minimum spanning tree of those links, rooted at the outlets (base level and map
+    /// border), says where each basin spills. Each pit is then routed out over its pass by
+    /// reversing the flow path from the pass down to the pit ("carving"), so the outflow
+    /// crosses the basin's sill as it would over a filled lake.
+    ///
+    /// Also returns the water surface: the heights, raised inside each basin to the level it
+    /// spills at (the same as [`priority_flood`] without epsilon).
+    pub fn with_depressions(
+        grid: &impl Grid,
+        heights: &[f32],
+        base_level: &[bool],
+        weight: impl Fn(usize, usize) -> f32,
+    ) -> (Self, Vec<f32>) {
         let n = heights.len();
-        let mut receivers: Vec<usize> = (0..n).collect();
-        let mut receiver_distance = vec![1.; n];
-        for i in 0..n {
-            if base_level[i] {
-                continue;
+        let (mut receivers, mut receiver_distance) =
+            steepest_receivers(grid, heights, base_level, weight);
+        // Basin of each cell (0: the outlets), by following receivers down to their root.
+        const UNSET: u32 = u32::MAX;
+        let mut basin = vec![UNSET; n];
+        let mut pits = vec![usize::MAX];
+        let mut path = Vec::new();
+        for start in 0..n {
+            let mut i = start;
+            while basin[i] == UNSET && receivers[i] != i {
+                path.push(i);
+                i = receivers[i];
             }
-            let mut best_slope = 0.;
-            for (j, distance) in grid.neighbours(i) {
-                // (Only downhill neighbours can be receivers: skip weighing the others.)
-                if heights[j] >= heights[i] {
+            if basin[i] == UNSET {
+                basin[i] = if base_level[i] || grid.is_border(i) {
+                    0
+                } else {
+                    pits.push(i);
+                    (pits.len() - 1) as u32
+                };
+            }
+            let b = basin[i];
+            for k in path.drain(..) {
+                basin[k] = b;
+            }
+        }
+        let mut water = heights.to_vec();
+        if pits.len() > 1 {
+            // Lowest pass between each pair of neighbouring basins: (height, cell on each side).
+            let mut passes: std::collections::HashMap<(u32, u32), (f32, u32, u32)> = Default::default();
+            for i in 0..n {
+                let bi = basin[i];
+                if bi == 0 {
                     continue;
                 }
-                let slope = (heights[i] - heights[j]) / distance * weight(i, j);
-                if slope > best_slope {
-                    best_slope = slope;
-                    receivers[i] = j;
-                    receiver_distance[i] = distance;
+                for (j, _) in grid.neighbours(i) {
+                    let bj = basin[j];
+                    if bj == bi {
+                        continue;
+                    }
+                    let height = heights[i].max(heights[j]);
+                    let key = (bi.min(bj), bi.max(bj));
+                    let (a, b) = if bi < bj { (i, j) } else { (j, i) };
+                    let entry = passes.entry(key).or_insert((f32::MAX, 0, 0));
+                    if height < entry.0 {
+                        *entry = (height, a as u32, b as u32);
+                    }
+                }
+            }
+            // Minimum spanning tree (Kruskal).
+            let mut links: Vec<((u32, u32), (f32, u32, u32))> = passes.into_iter().collect();
+            links.sort_by(|a, b| a.1.0.total_cmp(&b.1.0).then(a.0.cmp(&b.0)));
+            let mut parent: Vec<u32> = (0..pits.len() as u32).collect();
+            fn find(parent: &mut [u32], mut x: u32) -> u32 {
+                while parent[x as usize] != x {
+                    parent[x as usize] = parent[parent[x as usize] as usize];
+                    x = parent[x as usize];
+                }
+                x
+            }
+            let mut tree: Vec<Vec<(u32, f32, u32, u32)>> = vec![Vec::new(); pits.len()];
+            for ((ba, bb), (height, a, b)) in links {
+                let (ra, rb) = (find(&mut parent, ba), find(&mut parent, bb));
+                if ra == rb {
+                    continue;
+                }
+                parent[ra as usize] = rb;
+                // (Cell `a` is in basin `ba`, cell `b` in basin `bb`.)
+                tree[ba as usize].push((bb, height, a, b));
+                tree[bb as usize].push((ba, height, b, a));
+            }
+            // Rooted at the outlets: each basin spills over the link to its parent, at the
+            // pass height or its parent's level, whichever is higher.
+            let mut level = vec![f32::MIN; pits.len()];
+            let mut visited = vec![false; pits.len()];
+            visited[0] = true;
+            let mut queue = std::collections::VecDeque::from([0u32]);
+            let mut spills = Vec::new();
+            while let Some(b) = queue.pop_front() {
+                for &(child, height, here, there) in &tree[b as usize] {
+                    if visited[child as usize] {
+                        continue;
+                    }
+                    visited[child as usize] = true;
+                    level[child as usize] = height.max(level[b as usize]);
+                    // (`there` is the pass cell in the child basin, `here` in the parent.)
+                    spills.push((child, there as usize, here as usize));
+                    queue.push_back(child);
+                }
+            }
+            for i in 0..n {
+                let b = basin[i] as usize;
+                if b != 0 {
+                    water[i] = water[i].max(level[b]);
+                }
+            }
+            // Carve: reverse the receivers from the pass cell down to the pit, so the pit
+            // drains through the pass into the downstream basin.
+            for (child, inside, outside) in spills {
+                let pit = pits[child as usize];
+                let mut previous = outside;
+                let mut previous_distance = grid
+                    .neighbours(inside)
+                    .find(|&(j, _)| j == outside)
+                    .map_or(1., |(_, d)| d);
+                let mut cell = inside;
+                loop {
+                    let next = receivers[cell];
+                    let next_distance = receiver_distance[cell];
+                    receivers[cell] = previous;
+                    receiver_distance[cell] = previous_distance;
+                    if cell == pit {
+                        break;
+                    }
+                    (previous, previous_distance, cell) = (cell, next_distance, next);
                 }
             }
         }
+        (Self::from_receivers(receivers, receiver_distance), water)
+    }
 
+    /// The flow graph of given receivers: donor lists, then the cells ordered from the
+    /// outlets upstream.
+    fn from_receivers(receivers: Vec<usize>, receiver_distance: Vec<f32>) -> Self {
+        let n = receivers.len();
         // Donor lists in compressed form, then a stack from the outlets upstream.
         let mut donor_count = vec![0u32; n + 1];
         for i in 0..n {
