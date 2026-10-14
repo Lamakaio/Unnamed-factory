@@ -107,6 +107,14 @@ impl SphereGrid {
         u * l.x + v * l.y + normal * l.z
     }
 
+    /// The unit direction of continuous cell coordinates `p` of `face` (cell centres at whole
+    /// numbers; coordinates past the face's edges continue its projection).
+    pub fn direction_at(&self, face: usize, p: Vec2) -> Vec3 {
+        let (normal, u, v) = FACE_AXES[face];
+        let l = local_direction(self.n, p.x, p.y);
+        u * l.x + v * l.y + normal * l.z
+    }
+
     /// Area of cell `i`, relative to the mean cell area.
     pub fn area(&self, i: usize) -> f32 {
         let (_, x, z) = self.coords(i);

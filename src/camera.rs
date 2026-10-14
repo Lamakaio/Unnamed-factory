@@ -53,13 +53,23 @@ impl Plugin for CameraPlugin {
                     .after(PickingSystems::Last)
                     .before(SyncCameraPosition),
             )
-            .add_systems(OnEnter(AppState::InGame), look_at_start)
-            .add_systems(Update, keyboard_pan.run_if(in_state(AppState::InGame)))
+            // (The flat map's: the planet places its camera itself.)
+            .add_systems(
+                OnEnter(AppState::InGame),
+                look_at_start.run_if(resource_exists::<Map>),
+            )
+            .add_systems(
+                Update,
+                keyboard_pan
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<Map>),
+            )
             .add_systems(
                 PostUpdate,
                 keep_above_terrain
                     .before(TransformSystems::Propagate)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<Map>),
             );
     }
 }

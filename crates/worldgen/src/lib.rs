@@ -27,6 +27,7 @@ mod detail;
 mod flow;
 pub mod grid;
 pub mod sphere;
+pub mod surface;
 mod heightmap;
 mod lakes;
 mod mouths;

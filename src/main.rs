@@ -7,6 +7,7 @@ mod camera;
 mod dev_tools;
 mod environment;
 mod map;
+mod planet;
 mod shaders;
 mod ui;
 
@@ -14,6 +15,18 @@ use bevy::prelude::*;
 
 /// Default world generation seed.
 const SEED: u128 = 1082;
+
+/// Cells along a cube face edge of the planet (`--n <cells>`), see `planet`.
+const PLANET_CELLS: usize = 1024;
+
+/// The value following `flag` on the command line, if any.
+fn argument<T: std::str::FromStr>(flag: &str) -> Option<T> {
+    let args: Vec<String> = std::env::args().collect();
+    args.iter()
+        .position(|arg| arg == flag)
+        .and_then(|i| args.get(i + 1))
+        .map(|value| value.parse().unwrap_or_else(|_| panic!("{flag}: bad value {value}")))
+}
 
 /// The world seed: `--seed <n>` on the command line, else [`SEED`].
 fn seed() -> u128 {
@@ -27,7 +40,10 @@ fn seed() -> u128 {
 
 fn main() {
     let seed = seed();
-    App::new()
+    // `--planet`: the spherical planet (work in progress) instead of the flat map.
+    let planet = std::env::args().any(|arg| arg == "--planet");
+    let mut app = App::new();
+    app
         .add_plugins((
             DefaultPlugins.set(ImagePlugin::default_nearest()),
             MeshPickingPlugin,
@@ -37,11 +53,18 @@ fn main() {
             dev_tools::DevToolsPlugin,
             environment::EnvironmentPlugin,
             camera::CameraPlugin,
-            map::MapPlugin { seed },
             shaders::ShadersPlugin,
             ui::UiPlugin,
-        ))
-        .run();
+        ));
+    if planet {
+        app.add_plugins(planet::PlanetPlugin {
+            seed,
+            n: argument("--n").unwrap_or(PLANET_CELLS),
+        });
+    } else {
+        app.add_plugins(map::MapPlugin { seed });
+    }
+    app.run();
 }
 
 /// Top-level game state.

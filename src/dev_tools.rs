@@ -47,7 +47,8 @@ impl Plugin for DevToolsPlugin {
                 toggle_gizmos::<RiverGizmos>.run_if(input_just_pressed(KeyCode::F4)),
                 draw_rivers
                     .run_if(gizmos_enabled::<RiverGizmos>)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<Map>),
             ),
         );
         if let Ok(dir) = std::env::var("UF_LAB") {
@@ -55,7 +56,12 @@ impl Plugin for DevToolsPlugin {
                 dir: dir.into(),
                 ..default()
             })
-            .add_systems(Update, lab_shots.run_if(in_state(AppState::InGame)));
+            .add_systems(
+                Update,
+                lab_shots
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<Map>),
+            );
         }
         if let Ok(path) = std::env::var("UF_SCREENSHOT") {
             let delay = std::env::var("UF_SCREENSHOT_DELAY")

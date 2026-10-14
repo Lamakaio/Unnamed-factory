@@ -283,6 +283,16 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     of which routing's sequential part is 5 s); n = 512: ~3 s. Per-cell passes run on all
     cores through `par.rs` (scoped threads, results identical to sequential).
     In-face neighbour distances are precomputed per face position (`local_distance`).
+- **Planet mode** (`cargo run --release -- --planet [--n <cells>] [--seed <n>]`, milestone 2,
+  work in progress; `src/planet/`): `PlanetPlugin` replaces `MapPlugin` (the flat map's
+  systems in `camera.rs` / `dev_tools.rs` run only if `Map` exists). It generates the planet
+  in the background, keeps a `worldgen::surface::PlanetSurface` (per-face fields padded with
+  the neighbouring faces' cells, bicubic in face cell coordinates; `position(face, p)` on the
+  sphere), and spawns `PlanetChunk`s (64 × 64 cells of a face, meshed relative to their sea
+  level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
+  patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
+  colour by height for now), re-meshed when the camera moved by 25% of their distance. The
+  sea is a translucent sphere; the camera starts in orbit with no atmosphere or fog.
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
   `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.
