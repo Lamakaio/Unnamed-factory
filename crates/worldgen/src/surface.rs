@@ -4,10 +4,23 @@
 
 use bevy_math::{Vec2, Vec3};
 
-use crate::{grid::Grid, heightmap::catmull_rom, planet::Planet, sphere::FACES};
+use crate::{
+    WorldgenSettings,
+    detail::gullies,
+    grid::Grid,
+    heightmap::catmull_rom,
+    noise::{Noise, smoothstep},
+    planet::Planet,
+    sphere::{FACES, SphereGrid},
+};
 
-/// Cells of padding around each face (the bicubic stencil reaches two cells out).
-const PAD: usize = 3;
+/// Cells of padding around each face: the bicubic stencil reaches two cells out, and fine
+/// detail near a face's edge is also evaluated on the neighbouring face, up to
+/// [`EDGE_BLEND`] cells past its edge.
+const PAD: usize = 14;
+/// Near a face's edge, fine detail blends with the neighbouring face's over this many cells
+/// (each face's gullies follow its own cell axes).
+const EDGE_BLEND: f32 = 8.;
 
 /// A per-cell field of the planet, sampled continuously face by face.
 #[derive(Clone)]
@@ -80,7 +93,8 @@ impl FaceField {
     }
 }
 
-/// The planet's surface for rendering: heights and lake depths between cells.
+/// The planet's surface for rendering: heights (with fine detail: roughness and gullies, as
+/// on the flat map's `detail.rs`) and lake depths between cells.
 #[derive(Clone)]
 pub struct PlanetSurface {
     pub n: usize,
@@ -88,23 +102,89 @@ pub struct PlanetSurface {
     pub radius: f32,
     pub heights: FaceField,
     pub lake_depth: FaceField,
-    grid: std::sync::Arc<crate::sphere::SphereGrid>,
+    pub ruggedness: FaceField,
+    pub calm: FaceField,
+    grid: std::sync::Arc<SphereGrid>,
+    seed: u32,
+    /// Gully wavelength (cells), octaves and depth (world units), as on the flat map.
+    detail_wavelength: f32,
+    detail_octaves: u32,
+    detail_amplitude: f32,
 }
 
 impl PlanetSurface {
     pub fn new(planet: &Planet) -> Self {
+        let flat = WorldgenSettings::default();
         Self {
             n: planet.grid.n(),
             radius: planet.radius(),
             heights: FaceField::new(planet, &planet.heights),
             lake_depth: FaceField::new(planet, &planet.lake_depth),
-            grid: std::sync::Arc::new(crate::sphere::SphereGrid::new(planet.grid.n())),
+            ruggedness: FaceField::new(planet, &planet.ruggedness),
+            calm: FaceField::new(planet, &planet.calm),
+            grid: std::sync::Arc::new(SphereGrid::new(planet.grid.n())),
+            seed: planet.settings.seed as u32 ^ 0xD37A,
+            detail_wavelength: flat.detail_wavelength,
+            detail_octaves: flat.detail_octaves,
+            detail_amplitude: flat.detail_amplitude,
         }
     }
 
-    /// Height above sea level at continuous cell coordinates of a face.
+    /// Height above sea level at continuous cell coordinates of a face: the cells' heights
+    /// (bicubic), with fine detail on rugged land.
     pub fn height(&self, face: usize, p: Vec2) -> f32 {
-        self.heights.bicubic(face, p)
+        let height = self.heights.bicubic(face, p);
+        if height <= 0. {
+            return height;
+        }
+        let strength = self.ruggedness.bilinear(face, p)
+            * (1. - self.calm.bilinear(face, p).clamp(0., 1.));
+        if strength <= 0.01 {
+            return height;
+        }
+        let direction = self.direction(face, p);
+        let noise = Noise::new(self.seed);
+        // Small irregular bumps (3D noise: seamless across faces)...
+        let world = direction * (2. * self.n as f32 / std::f32::consts::PI);
+        let roughness = noise.fbm3(world / 5., 3) * 0.12;
+        // ...and gullies on slopes, blended with the neighbouring face's near an edge.
+        let edge = [p.x + 0.5, self.n as f32 - 0.5 - p.x, p.y + 0.5, self.n as f32 - 0.5 - p.y];
+        let (nearest, distance) = edge
+            .iter()
+            .enumerate()
+            .fold((0, f32::MAX), |best, (k, &d)| if d < best.1 { (k, d) } else { best });
+        let mut gully = self.gullies_on(face, p, world);
+        if distance < EDGE_BLEND {
+            // The neighbouring face across the nearest edge: the direction just past it.
+            let outward = [-Vec2::X, Vec2::X, -Vec2::Y, Vec2::Y][nearest];
+            let beyond = self.direction(face, p + outward * (distance + 1.));
+            let (other, _) = self.face_coords(beyond);
+            if other != face {
+                let q = self.grid.coords_on_face(other, direction);
+                let own = 0.5 + 0.5 * smoothstep(0., EDGE_BLEND, distance);
+                gully = gully * own + self.gullies_on(other, q, world) * (1. - own);
+            }
+        }
+        height + (gully + roughness) * self.detail_amplitude * strength
+    }
+
+    /// Gullies (about -1..1, already masked by slope and patchiness) at cell coordinates `p` of
+    /// `face`, following the slope of the cells' heights.
+    fn gullies_on(&self, face: usize, p: Vec2, world: Vec3) -> f32 {
+        let e = 0.5;
+        let gradient = Vec2::new(
+            self.heights.bicubic(face, p + Vec2::X * e) - self.heights.bicubic(face, p - Vec2::X * e),
+            self.heights.bicubic(face, p + Vec2::Y * e) - self.heights.bicubic(face, p - Vec2::Y * e),
+        ) / (2. * e);
+        let slope_mask = smoothstep(0.12, 0.6, gradient.length());
+        if slope_mask <= 0. {
+            return 0.;
+        }
+        let noise = Noise::new(self.seed);
+        let patchiness = smoothstep(-0.4, 0.5, noise.layer(1).fbm3(world / 45., 3));
+        gullies(p, gradient, self.seed, self.detail_wavelength, self.detail_octaves)
+            * slope_mask
+            * (0.3 + 0.7 * patchiness)
     }
 
     /// Unit direction of continuous cell coordinates of a face.

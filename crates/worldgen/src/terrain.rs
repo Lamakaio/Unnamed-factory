@@ -652,7 +652,7 @@ pub fn distance_field(size: usize, mask: &[bool]) -> Vec<f32> {
 }
 
 /// Polynomial smooth minimum: blends `a` and `b` over a band of `k` world units.
-fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+pub fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
     let h = (k - (a - b).abs()).max(0.) / k;
     a.min(b) - h * h * k / 4.
 }

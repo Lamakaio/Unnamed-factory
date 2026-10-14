@@ -184,7 +184,7 @@ fn spawn_planet(
     // The sea: a sphere at sea level.
     commands.spawn((
         Name::new("Sea"),
-        Mesh3d(meshes.add(Sphere::new(surface.radius).mesh().ico(7).unwrap())),
+        Mesh3d(meshes.add(sea_sphere(surface.radius))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgba(0.07, 0.25, 0.5, 0.82),
             alpha_mode: AlphaMode::Blend,
@@ -194,6 +194,19 @@ fn spawn_planet(
         Transform::default(),
     ));
 }
+
+/// The sea's sphere, subdivided finely enough that its flat triangles sag less than
+/// [`SEA_SAG`] below the true sphere (shallow water would show through: Bevy's `ico(k)` splits
+/// each icosahedron edge into `k + 1` segments).
+fn sea_sphere(radius: f32) -> Mesh {
+    // An icosahedron edge spans about 63.4°; a chord of angle θ sags by about R θ² / 8.
+    let segment = (8. * SEA_SAG / radius).sqrt();
+    let subdivisions = ((63.4f32.to_radians() / segment).ceil() as u32).clamp(8, 160);
+    Sphere::new(radius).mesh().ico(subdivisions).unwrap()
+}
+
+/// Largest sag of the sea sphere's triangles below sea level (world units).
+const SEA_SAG: f32 = 0.02;
 
 /// Look at the planet from orbit, with the planet camera; space has no atmosphere nor fog
 /// (the flat map's assume a ground plane).

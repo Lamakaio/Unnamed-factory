@@ -141,6 +141,17 @@ impl SphereGrid {
         (face, (angle + 1.) / 2. * self.n as f32 - 0.5)
     }
 
+    /// Continuous cell coordinates of a direction in `face`'s projection, extended past its
+    /// edges (for directions on neighbouring faces, near the edge); the direction must be in
+    /// the face's hemisphere.
+    pub fn coords_on_face(&self, face: usize, direction: Vec3) -> Vec2 {
+        let (normal, u, v) = FACE_AXES[face];
+        let depth = direction.dot(normal).max(1e-6);
+        let tangent = Vec2::new(direction.dot(u), direction.dot(v)) / depth;
+        let angle = Vec2::new(tangent.x.atan(), tangent.y.atan()) / FRAC_PI_4;
+        (angle + 1.) / 2. * self.n as f32 - 0.5
+    }
+
     /// The cell containing a direction.
     pub fn cell_at(&self, direction: Vec3) -> usize {
         let (face, p) = self.face_coords(direction);

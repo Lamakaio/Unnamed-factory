@@ -36,6 +36,8 @@ const CONTINENT_FREQUENCY: f32 = 2.4;
 const CONTINENTAL_BIAS: f32 = 0.22;
 /// Subsidence of rift floors (relative, like uplift).
 const RIFT_SUBSIDENCE: f32 = 0.3;
+/// Drainage area (cells) from which fine detail fades around rivers.
+const CALM_RIVER_AREA: f32 = 150.;
 /// Uplift of the low swells over all land (relative, like the provinces' uplift).
 const PLAIN_SWELLS: f32 = 0.08;
 /// Distances to the coast are only needed this far (cells) inland and out at sea: beyond,
@@ -140,6 +142,10 @@ pub struct Planet {
     pub drainage: Vec<f32>,
     /// Depth of the lake water over each cell (0: no lake), from filling the basins.
     pub lake_depth: Vec<f32>,
+    /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
+    pub ruggedness: Vec<f32>,
+    /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
+    pub calm: Vec<f32>,
     /// Plate of each cell, and whether each plate is continental.
     pub plate: Vec<u16>,
     pub continental_plate: Vec<bool>,
@@ -710,19 +716,43 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         })
         .collect();
     let shelf_floor = grid.blur(&shelf_floor, 3);
+    // Shores, as on the flat map (`terrain::shape_coast`): from a blurred signed distance to
+    // the shore (so the coast doesn't follow the cells' staircase), land rises gently from
+    // the water line and the sea floor slopes down from it.
+    let signed: Vec<f32> = (0..cells)
+        .map(|i| if sea[i] { -to_sea[i] } else { to_sea[i] })
+        .collect();
+    let shore = grid.blur(&grid.blur(&signed, 2), 2);
+    let variation = noise.layer(10);
     for i in 0..cells {
+        let p = grid.direction(i) * radius;
+        let d = shore[i];
         if sea[i] {
-            let p = grid.direction(i) * radius;
-            // (At sea, `to_sea` is the distance to land.)
-            let shore = smoothstep(0., 6., to_sea[i]);
-            heights[i] = (-0.3 + (shelf_floor[i] + 0.3) * shore)
+            let open = smoothstep(0., 6., -d);
+            let floor_height = (-0.3 + (shelf_floor[i] + 0.3) * open)
                 * (0.9 + 0.1 * floor.fbm3(p / 60., 3));
+            heights[i] = floor_height.max(0.15 + 0.35 * (d - 0.5)).min(-0.05);
+        } else {
+            let slope = 0.25 + 0.3 * (0.5 + 0.5 * variation.fbm3(p / 60., 3)) + 0.5 * shape.range[i];
+            let ramp = 0.15 + slope * (d - 0.5);
+            // (Land cells may end up just under water: the shore follows `shore`.)
+            heights[i] = terrain::smooth_min(heights[i], ramp, 1.).max(-0.3);
         }
     }
     let filled = priority_flood(&grid, &heights, &sea, 1e-4);
     let drainage = FlowGraph::new(&grid, &filled, &sea).accumulate(|i| grid.area(i));
     // Lakes: where the filled surface stands clearly above the ground.
     let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
+    let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
+    // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
+    let calm: Vec<f32> = (0..cells)
+        .map(|i| {
+            let river = smoothstep(CALM_RIVER_AREA * 0.5, CALM_RIVER_AREA, drainage[i]);
+            let lake = smoothstep(0.02, 0.1, lake_depth[i]);
+            river.max(lake)
+        })
+        .collect();
+    let calm: Vec<f32> = grid.blur(&calm, 2).iter().map(|c| (c * 3.).min(1.)).collect();
     lap("drainage", &mut timings);
 
     Planet {
@@ -734,6 +764,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         range: shape.range,
         drainage,
         lake_depth,
+        ruggedness,
+        calm,
         plate: plate_of,
         continental_plate: plates.iter().map(|p| p.continental).collect(),
         timings,

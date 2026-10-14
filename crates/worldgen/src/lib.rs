@@ -23,7 +23,7 @@
 //! relative to the continent center. Heights are world units, sea level is 0.
 
 mod climate;
-mod detail;
+pub(crate) mod detail;
 mod flow;
 pub mod grid;
 pub mod sphere;

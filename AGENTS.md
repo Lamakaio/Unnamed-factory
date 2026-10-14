@@ -288,11 +288,16 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   systems in `camera.rs` / `dev_tools.rs` run only if `Map` exists). It generates the planet
   in the background, keeps a `worldgen::surface::PlanetSurface` (per-face fields padded with
   the neighbouring faces' cells, bicubic in face cell coordinates; `position(face, p)` on the
-  sphere), and spawns `PlanetChunk`s (64 × 64 cells of a face, meshed relative to their sea
+  sphere; heights get fine detail as on the flat map: 3D-noise roughness and `detail::gullies`,
+  scaled by `Planet::ruggedness`, faded by `Planet::calm` near rivers and lakes, and blended
+  with the neighbouring face's gullies within `EDGE_BLEND` cells of a face edge), and spawns
+  `PlanetChunk`s (64 × 64 cells of a face, meshed relative to their sea
   level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
   colour by height for now, drawn with the toon `ToonMaterial`, snow off), re-meshed when the camera moved by 25% of their distance. The
-  sea is a translucent sphere. The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
+  sea is a translucent sphere, subdivided by radius (`sea_sphere`: Bevy's `ico(k)` splits each
+  edge into `k + 1` segments, coarse ones sag below shallow water). Coasts are shaped as on
+  the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);
   right drag orbits, middle drag / arrows move the focus, wheel zooms; far out it looks
