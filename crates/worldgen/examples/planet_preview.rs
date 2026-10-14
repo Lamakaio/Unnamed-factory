@@ -23,10 +23,13 @@ fn main() {
     std::fs::create_dir_all(&out).unwrap();
     let mut n = PlanetSettings::default().n;
     let mut coarse_steps = PlanetSettings::default().coarse_steps;
+    let mut history = None;
     let mut seeds = Vec::new();
     while let Some(arg) = args.next() {
         if arg == "--n" {
             n = args.next().unwrap().parse().unwrap();
+        } else if arg == "--history" {
+            history = Some(worldgen::tectonics::TectonicSettings::default());
         } else if arg == "--coarse" {
             coarse_steps = args.next().unwrap().parse().unwrap();
         } else {
@@ -41,6 +44,7 @@ fn main() {
             seed,
             n,
             coarse_steps,
+            history: history.clone(),
             ..Default::default()
         });
         report(seed, &planet);

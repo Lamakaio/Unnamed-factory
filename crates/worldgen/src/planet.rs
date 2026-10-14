@@ -62,6 +62,9 @@ pub struct PlanetSettings {
     /// Number of tectonic plates, and the share of them that are continental.
     pub plate_count: usize,
     pub continental_plates: f32,
+    /// Shape continents and mountain belts from a tectonic history (`tectonics.rs`) instead of
+    /// noise and plate-boundary rules.
+    pub history: Option<crate::tectonics::TectonicSettings>,
     /// Mean area of a province (cells), and the share of each province type
     /// (`[plains, hills, plateau]`) and how softly they blend (cells), as on the flat map.
     pub province_cells: f32,
@@ -104,6 +107,7 @@ impl Default for PlanetSettings {
             land_fraction: 0.3,
             plate_count: 12,
             continental_plates: 0.4,
+            history: None,
             province_cells: 8_000.,
             province_weights: [0.35, 0.45, 0.2],
             province_blend: flat.province_blend,
@@ -368,6 +372,26 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         settings.craton_cells.sqrt() / settings.n as f32,
     );
 
+    // The tectonic history, if any: crust, uplift (blurred into belts), oceanic age.
+    let history = settings.history.as_ref().map(|history| {
+        let t = crate::tectonics::run(&crate::tectonics::TectonicSettings {
+            seed: settings.seed,
+            ..history.clone()
+        });
+        let young: Vec<f32> =
+            (0..t.grid.len()).map(|i| t.orogeny[i] * (-t.orogeny_age[i] / YOUNG_STEPS).exp()).collect();
+        let old: Vec<f32> = (0..t.grid.len())
+            .map(|i| t.orogeny[i] * (1. - (-t.orogeny_age[i] / YOUNG_STEPS).exp()))
+            .collect();
+        let crust: Vec<f32> = t.crust.iter().map(|c| c.min(1.)).collect();
+        let fields = HistoryFields {
+            crust: t.grid.blur(&crust, 1),
+            young: t.grid.blur(&young, 3),
+            old: t.grid.blur(&old, 4),
+            age: t.age.clone(),
+        };
+        (t, fields)
+    });
     let continents = noise.layer(1);
     let peaks = noise.layer(2);
     let hills = noise.layer(3);
@@ -408,6 +432,23 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         }
         let base = base / total;
         let mut boundary = Boundary::default();
+        // With a history: continents from its crust (noise only details the coasts), belts
+        // from its uplift, mid-ocean ridges where its ocean floor is young.
+        if let Some((t, fields)) = &history {
+            let crust = t.grid.bilinear(&fields.crust, direction);
+            let young = t.grid.bilinear(&fields.young, direction);
+            let ocean_age = t.grid.bilinear(&fields.age, direction);
+            let continental = crust > 0.5;
+            boundary.belt = if continental { smoothstep(0.06, 0.6, young) } else { 0. };
+            boundary.foothills = if continental { smoothstep(0.01, 0.15, young) } else { 0. };
+            boundary.arc = if continental { 0. } else { smoothstep(0.1, 0.6, young) };
+            boundary.ridge = if continental { 0. } else { (-ocean_age / 4.).exp() };
+            let peaks_here = smoothstep(0.78, 0.95, arcs.ridged3(p / 16., 2));
+            let stretches = smoothstep(0.05, 0.35, arcs.layer(1).fbm3(p / 70., 2));
+            let value = (crust - 0.5) * 1.2 + outline * 0.3 + boundary.arc * peaks_here * stretches * 1.2;
+            let plate = t.plate[t.grid.cell_at(direction)];
+            return (plate, value, boundary);
+        }
         let here_continental = base + outline > 0.;
         for &(dk, k) in &nearest[1..] {
             let x = (dk - d1) / 2.;
@@ -517,12 +558,17 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         let young = b.belt * (0.3 + 0.7 * (0.5 * parallel + 0.5 * summits));
         let foothills = b.foothills * (0.5 + 0.5 * hills.layer(5).fbm3(p / 30., 3).abs());
 
-        // Old ranges along the sutures between ancient blocks: lower and rounder with age.
+        // Old ranges: with a history, its old uplift (worn the more the older); else along the
+        // sutures between ancient blocks.
         let w = (p + warp.layer(3).warp3(p / 140., 3, 60.)).normalize();
         let (near, count) = craton_index.nearest::<4>(&cratons, w, radius);
         let near = &near[..count];
         let (mut old, mut age) = (0f32, 0f32);
-        if near.len() >= 2 {
+        if let Some((t, fields)) = &history {
+            let uplift = t.grid.bilinear(&fields.old, direction);
+            old = smoothstep(0.05, 0.6, uplift);
+            age = 0.6;
+        } else if near.len() >= 2 {
             let (d1, a) = near[0];
             for &(dk, k) in &near[1..] {
                 let (lo, hi) = (a.min(k) as u32, a.max(k) as u32);
@@ -772,10 +818,31 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         ruggedness,
         calm,
         plate: plate_of,
-        continental_plate: plates.iter().map(|p| p.continental).collect(),
+        continental_plate: match &history {
+            // (A history's plates: continental if a good share of their crust is.)
+            Some((t, _)) => (0..t.plates.len())
+                .map(|k| {
+                    let cells = (0..t.grid.len()).filter(|&i| t.plate[i] as usize == k);
+                    let (total, land) = cells.fold((0, 0), |(n, l), i| (n + 1, l + (t.crust[i] > 0.5) as usize));
+                    land * 3 > total
+                })
+                .collect(),
+            None => plates.iter().map(|p| p.continental).collect(),
+        },
         timings,
     }
 }
+
+/// A tectonic history's fields, smoothed, for shaping.
+struct HistoryFields {
+    crust: Vec<f32>,
+    young: Vec<f32>,
+    old: Vec<f32>,
+    age: Vec<f32>,
+}
+
+/// Uplift younger than this many tectonic steps makes young (sharp) ranges.
+const YOUNG_STEPS: f32 = 12.;
 
 /// Shaping results on one grid.
 struct Shaped {

@@ -276,6 +276,20 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     passes run on all cores (`par_map`); provinces and blocks are found through a coarse
     `PointIndex`. Landforms are sized in cells (radius `2n/π` cells; n = 1024 is the target
     planet, 256 the fast default for previews).
+  - `tectonics.rs` (milestone 4, v1): `run(&TectonicSettings) -> Tectonics`, a deep-time
+    history (default 50 steps × 4 Myr) on a coarse cube-sphere (n = 96). Each plate keeps its
+    crust in its own frame (a raster turning with it: no resampling drift); each step every
+    world cell asks every plate what covers it; overlaps where plates converge (relative
+    motion across the boundary) resolve by crust (continental floats; between oceans the
+    younger wins): oceanic losers are consumed, continents stack (collision: thickening +
+    uplift), cordilleras over subduction, island arcs (accreting into continental crust);
+    uncovered cells are new oceanic crust (ridges). Rifts split the plate with the most
+    continent along a great circle; continents colliding for `WELD_STEPS` steps weld (same
+    motion). Outputs crust, plate, oceanic age, uplift and its age. Previews:
+    `tectonics_preview` (frames over the history), `tectonics_stats`.
+    `PlanetSettings::history` (preview `--history`) shapes the planet from it: continents from
+    the crust (noise details the coasts), young uplift → belts / foothills / island arcs, old
+    uplift → worn ranges, young ocean floor → ridges. Not the default yet.
   - `planet_climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
     were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,

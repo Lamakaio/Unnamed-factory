@@ -152,6 +152,22 @@ impl SphereGrid {
         (angle + 1.) / 2. * self.n as f32 - 0.5
     }
 
+    /// A per-cell field at a direction: bilinear between the four nearest cells of the face
+    /// (clamped at its edges).
+    pub fn bilinear(&self, values: &[f32], direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        let last = (self.n - 1) as f32;
+        let p = p.clamp(Vec2::ZERO, Vec2::splat(last));
+        let (x0, z0) = (p.x.floor(), p.y.floor());
+        let (fx, fz) = (p.x - x0, p.y - z0);
+        let (x0, z0) = (x0 as usize, z0 as usize);
+        let (x1, z1) = ((x0 + 1).min(self.n - 1), (z0 + 1).min(self.n - 1));
+        let at = |x: usize, z: usize| values[self.index(face, x, z)];
+        let top = at(x0, z0) + (at(x1, z0) - at(x0, z0)) * fx;
+        let bottom = at(x0, z1) + (at(x1, z1) - at(x0, z1)) * fx;
+        top + (bottom - top) * fz
+    }
+
     /// The cell containing a direction.
     pub fn cell_at(&self, direction: Vec3) -> usize {
         let (face, p) = self.face_coords(direction);
