@@ -3,8 +3,9 @@
 //! focus moves, so it never flips over the poles. Far out it looks straight down at the
 //! planet; close in it can tilt toward the horizon.
 //!
-//! Controls, as on the flat map: right drag orbits, middle drag (or the arrow keys) moves the
-//! focus over the surface, the wheel zooms.
+//! Controls: left (or middle) drag moves the focus over the surface (the ground follows the
+//! cursor), Q / E turn the view (physical keys: A / E on an AZERTY keyboard), right drag orbits
+//! and tilts, the arrow keys move the focus, the wheel zooms.
 
 use bevy::{
     camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamera,
@@ -23,6 +24,8 @@ use crate::{
 const ORBIT_SPEED: f32 = 0.005;
 const PAN_SPEED: f32 = 0.0015;
 const KEY_PAN_SPEED: f32 = 0.8;
+/// Turn speed with Q / E (radians per second).
+const KEY_TURN_SPEED: f32 = 1.5;
 const ZOOM_PER_LINE: f32 = 0.15;
 /// Closest and farthest camera distances (world units; the farthest in planet radii).
 const MIN_DISTANCE: f32 = 2.;
@@ -91,6 +94,12 @@ pub fn control(
         camera.distance = (camera.distance * (-lines * ZOOM_PER_LINE).exp())
             .clamp(MIN_DISTANCE, MAX_DISTANCE * radius);
     }
+    // Turn with Q / E (key positions: the same keys on any layout).
+    let turn = keys.pressed(KeyCode::KeyE) as i32 as f32 - keys.pressed(KeyCode::KeyQ) as i32 as f32;
+    if turn != 0. {
+        let up = camera.focus;
+        camera.forward = Quat::from_axis_angle(up, -turn * KEY_TURN_SPEED * time.delta_secs()) * camera.forward;
+    }
     // Orbit.
     if buttons.pressed(MouseButton::Right) && !over_ui {
         let delta = motion.delta * ORBIT_SPEED;
@@ -100,7 +109,7 @@ pub fn control(
     }
     // Pan: move the focus over the surface (screen right / up).
     let mut pan = Vec2::ZERO;
-    if buttons.pressed(MouseButton::Middle) && !over_ui {
+    if buttons.any_pressed([MouseButton::Left, MouseButton::Middle]) && !over_ui {
         pan += Vec2::new(-motion.delta.x, motion.delta.y) * PAN_SPEED * camera.distance;
     }
     let keys_pan = Vec2::new(

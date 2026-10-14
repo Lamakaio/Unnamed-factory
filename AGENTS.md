@@ -334,7 +334,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);
-  right drag orbits, middle drag / arrows move the focus, wheel zooms; far out it looks
+  left or middle drag / arrows move the focus, Q / E turn (physical keys: A / E on AZERTY), right
+  drag orbits and tilts, wheel zooms; far out it looks
   straight down; it stays above the ground and fits its clip planes to the view. No
   atmosphere or fog. The sun follows the view (low afternoon sun over the focus, F turns
   it) until the planet has a day cycle. `UF_PLANET_CAMERA=lon,lat[,distance[,pitch°]]` sets
