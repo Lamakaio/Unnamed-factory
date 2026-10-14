@@ -31,8 +31,9 @@ pub fn neighbours(size: usize, i: usize) -> impl Iterator<Item = (usize, f32)> {
     })
 }
 
+/// A cell in the Priority-Flood queue: height and index (32 bits, to keep entries small).
 #[derive(PartialEq)]
-struct Entry(f32, usize);
+struct Entry(f32, u32);
 
 impl Eq for Entry {}
 
@@ -60,16 +61,42 @@ pub fn priority_flood(
     base_level: &[bool],
     epsilon: f32,
 ) -> Vec<f32> {
+    priority_flood_from(grid, heights, base_level, &flood_seeds(grid, base_level), epsilon)
+}
+
+/// Where [`priority_flood`] starts: the map border, and the base level cells next to the rest
+/// (the open sea beyond them would only be popped to find closed neighbours). Depends only on
+/// the base level: compute it once for repeated floods.
+pub fn flood_seeds(grid: &impl Grid, base_level: &[bool]) -> Vec<u32> {
+    (0..base_level.len())
+        .filter(|&i| {
+            if base_level[i] {
+                grid.neighbours(i).any(|(j, _)| !base_level[j])
+            } else {
+                grid.is_border(i)
+            }
+        })
+        .map(|i| i as u32)
+        .collect()
+}
+
+/// [`priority_flood`] from precomputed [`flood_seeds`].
+pub fn priority_flood_from(
+    grid: &impl Grid,
+    heights: &[f32],
+    base_level: &[bool],
+    seeds: &[u32],
+    epsilon: f32,
+) -> Vec<f32> {
     let mut filled = heights.to_vec();
-    let mut closed = vec![false; heights.len()];
-    let mut open = BinaryHeap::new();
-    for i in 0..heights.len() {
-        if base_level[i] || grid.is_border(i) {
-            closed[i] = true;
-            open.push(Entry(filled[i], i));
-        }
+    let mut closed = base_level.to_vec();
+    let mut open = BinaryHeap::with_capacity(seeds.len());
+    for &i in seeds {
+        closed[i as usize] = true;
+        open.push(Entry(filled[i as usize], i));
     }
     while let Some(Entry(height, i)) = open.pop() {
+        let i = i as usize;
         for (n, _) in grid.neighbours(i) {
             if closed[n] {
                 continue;
@@ -78,7 +105,7 @@ pub fn priority_flood(
             if filled[n] <= height + epsilon {
                 filled[n] = height + epsilon;
             }
-            open.push(Entry(filled[n], n));
+            open.push(Entry(filled[n], n as u32));
         }
     }
     filled
@@ -116,6 +143,10 @@ impl FlowGraph {
             }
             let mut best_slope = 0.;
             for (j, distance) in grid.neighbours(i) {
+                // (Only downhill neighbours can be receivers: skip weighing the others.)
+                if heights[j] >= heights[i] {
+                    continue;
+                }
                 let slope = (heights[i] - heights[j]) / distance * weight(i, j);
                 if slope > best_slope {
                     best_slope = slope;

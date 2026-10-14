@@ -78,6 +78,11 @@ fn report(seed: u64, planet: &Planet) {
         percentile(0.99),
         percentile(1.),
     );
+    // A hash of the result, to check that optimisations leave it unchanged.
+    let hash = planet.heights.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
+        (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3)
+    });
+    println!("  heights hash {hash:016x}");
     for (name, duration) in &planet.timings {
         println!("  {name}: {:.2} s", duration.as_secs_f32());
     }

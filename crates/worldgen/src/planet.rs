@@ -33,6 +33,8 @@ use crate::{
 const CONTINENT_FREQUENCY: f32 = 2.4;
 /// How much a plate's crust raises (continental) or lowers (oceanic) the continent outline.
 const CONTINENTAL_BIAS: f32 = 0.22;
+/// Distances to the coast are only needed this far (cells): beyond, they are this value.
+const COAST_REACH: f32 = 64.;
 /// Distance over which the plates' crust bias blends across their boundaries (cells).
 const CRUST_BLEND: f32 = 25.;
 /// Crust value margin below the coast that is still continental (the shelf).
@@ -160,10 +162,11 @@ struct Region {
 }
 
 /// Points on the sphere, bucketed by the cells of a coarse cube-sphere, to find the nearest
-/// ones to a direction quickly.
+/// ones to a direction quickly: each coarse cell lists the points in it and in two rings of
+/// cells around it.
 struct PointIndex {
     coarse: SphereGrid,
-    buckets: Vec<Vec<usize>>,
+    candidates: Vec<Vec<usize>>,
 }
 
 impl PointIndex {
@@ -175,23 +178,38 @@ impl PointIndex {
         for (k, &p) in points.iter().enumerate() {
             buckets[coarse.cell_at(p)].push(k);
         }
-        Self { coarse, buckets }
+        let candidates = (0..coarse.len())
+            .map(|cell| {
+                let mut cells = vec![cell];
+                for _ in 0..2 {
+                    let ring: Vec<usize> = cells
+                        .iter()
+                        .flat_map(|&c| coarse.neighbours(c).map(|(j, _)| j))
+                        .collect();
+                    cells.extend(ring);
+                    cells.sort_unstable();
+                    cells.dedup();
+                }
+                cells.iter().flat_map(|&c| buckets[c].iter().copied()).collect()
+            })
+            .collect();
+        Self { coarse, candidates }
     }
 
-    /// Points in the coarse cell of `direction` and its neighbours (two rings).
-    fn candidates(&self, direction: Vec3, out: &mut Vec<usize>) {
-        out.clear();
-        let cell = self.coarse.cell_at(direction);
-        let mut cells = vec![cell];
-        for _ in 0..2 {
-            let ring: Vec<usize> = cells.iter().flat_map(|&c| self.coarse.neighbours(c).map(|(j, _)| j)).collect();
-            cells.extend(ring);
-            cells.sort_unstable();
-            cells.dedup();
-        }
-        for c in cells {
-            out.extend(&self.buckets[c]);
-        }
+    /// The points near `direction` (in its coarse cell and two rings around it).
+    fn candidates(&self, direction: Vec3) -> &[usize] {
+        &self.candidates[self.coarse.cell_at(direction)]
+    }
+
+    /// The `K` points nearest to `direction` (by angle, converted to cells with `radius`),
+    /// nearest first; fewer if there are fewer candidates.
+    fn nearest<const K: usize>(
+        &self,
+        points: &[Region],
+        direction: Vec3,
+        radius: f32,
+    ) -> ([(f32, usize); K], usize) {
+        nearest_k(self.candidates(direction).iter().map(|&k| (points[k].center, k)), direction, radius)
     }
 }
 
@@ -226,16 +244,33 @@ fn par_map<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
     })
 }
 
-/// The nearest plates to a (warped) direction: `(distance in cells, plate)`, nearest first.
-fn nearest_plates(plates: &[Plate], w: Vec3, radius: f32) -> Vec<(f32, usize)> {
-    let mut distances: Vec<(f32, usize)> = plates
-        .iter()
-        .enumerate()
-        .map(|(k, plate)| (plate.center.angle_between(w) * radius, k))
-        .collect();
-    distances.sort_by(|a, b| a.0.total_cmp(&b.0));
-    distances.truncate(4);
-    distances
+/// The `K` nearest of some points (centre, id) to a direction: `(distance in cells, id)`,
+/// nearest first, and how many were found. Ranked by dot product; only the kept ones get an
+/// angle.
+fn nearest_k<const K: usize>(
+    points: impl Iterator<Item = (Vec3, usize)>,
+    direction: Vec3,
+    radius: f32,
+) -> ([(f32, usize); K], usize) {
+    let mut best = [(f32::MIN, usize::MAX); K];
+    let mut count = 0;
+    for (center, id) in points {
+        let dot = center.dot(direction);
+        if count == K && dot <= best[K - 1].0 {
+            continue;
+        }
+        let mut k = count.min(K - 1);
+        while k > 0 && best[k - 1].0 < dot {
+            best[k] = best[k - 1];
+            k -= 1;
+        }
+        best[k] = (dot, id);
+        count = (count + 1).min(K);
+    }
+    for entry in &mut best[..count] {
+        entry.0 = entry.0.clamp(-1., 1.).acos() * radius;
+    }
+    (best, count)
 }
 
 /// What a plate boundary does near a cell, from the cell's side.
@@ -337,7 +372,9 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         let direction = grid.direction(i);
         let p = direction * radius;
         let w = (p + warp.warp3(p / 180., 3, 45.)).normalize();
-        let nearest = nearest_plates(&plates, w, radius);
+        let (nearest, count) =
+            nearest_k::<4>(plates.iter().enumerate().map(|(k, p)| (p.center, k)), w, radius);
+        let nearest = &nearest[..count];
         let (d1, a) = nearest[0];
         let width = width_at(p);
         // Crust: continental plates carry continents, outlined by noise (so continents end
@@ -352,7 +389,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         // Blended across boundaries (over `CRUST_BLEND` cells), so the bias has no step.
         let bias = |k: usize| if plates[k].continental { CONTINENTAL_BIAS } else { -CONTINENTAL_BIAS };
         let (mut base, mut total) = (0., 0.);
-        for &(d, k) in &nearest {
+        for &(d, k) in nearest {
             let weight = (-(d - d1) / CRUST_BLEND).exp();
             base += bias(k) * weight;
             total += weight;
@@ -428,12 +465,13 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     });
     let plate_of: Vec<u16> = pass1.iter().map(|c| c.0).collect();
     let crust: Vec<f32> = pass1.iter().map(|c| c.1).collect();
+    // (A selection, not a sort: only this percentile is needed.)
     let mut sorted = crust.clone();
-    sorted.sort_by(f32::total_cmp);
-    let coast = sorted[((1. - settings.land_fraction) * (cells - 1) as f32) as usize];
+    let k = ((1. - settings.land_fraction) * (cells - 1) as f32) as usize;
+    let coast = *sorted.select_nth_unstable_by(k, f32::total_cmp).1;
     let sea: Vec<bool> = crust.iter().map(|&c| c < coast).collect();
     let continental: Vec<bool> = crust.iter().map(|&c| c >= coast - SHELF_BAND).collect();
-    let to_sea = distance_to(&grid, &sea);
+    let to_sea = distance_to(&grid, &sea, COAST_REACH);
     lap("plates", &mut timings);
 
     // Pass 2: landforms on land.
@@ -452,17 +490,12 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
 
         // Old ranges along the sutures between ancient blocks: lower and rounder with age.
         let w = (p + warp.layer(3).warp3(p / 140., 3, 60.)).normalize();
-        let mut candidates = Vec::new();
-        craton_index.candidates(w, &mut candidates);
-        let mut near: Vec<(f32, usize)> = candidates
-            .iter()
-            .map(|&k| (cratons[k].center.angle_between(w) * radius, k))
-            .collect();
-        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (near, count) = craton_index.nearest::<4>(&cratons, w, radius);
+        let near = &near[..count];
         let (mut old, mut age) = (0f32, 0f32);
         if near.len() >= 2 {
             let (d1, a) = near[0];
-            for &(dk, k) in &near[1..near.len().min(4)] {
+            for &(dk, k) in &near[1..] {
                 let (lo, hi) = (a.min(k) as u32, a.max(k) as u32);
                 let suture = hash(settings.seed as u32 ^ 0x01D, lo, hi) as f32 / u32::MAX as f32;
                 if suture > settings.old_range_share {
@@ -481,14 +514,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         // Provinces, blended from the nearest few.
         let w = (p + warp.layer(1).warp3(p / 160., 3, 70.) + warp.layer(2).warp3(p / 50., 2, 15.))
             .normalize();
-        province_index.candidates(w, &mut candidates);
-        let mut near: Vec<(f32, usize)> = candidates
-            .iter()
-            .map(|&k| (provinces[k].center.angle_between(w) * radius, k))
-            .collect();
-        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (near, count) = province_index.nearest::<4>(&provinces, w, radius);
+        let near = &near[..count];
         let (mut weights, mut cap, mut total) = ([0f32; 3], 0., 0.);
-        for &(d, k) in near.iter().take(4) {
+        for &(d, k) in near {
             let weight = (-(d - near[0].0) / settings.province_blend).exp();
             weights[provinces[k].kind] += weight;
             cap += provinces[k].value * weight;
@@ -561,8 +590,17 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         routing_jitter: settings.routing_jitter,
         ..Default::default()
     };
-    let mut heights = terrain::erode(&grid, &erosion, &shape);
+    let (mut heights, erosion_timings) = terrain::erode_timed(&grid, &erosion, &shape);
     lap("erosion", &mut timings);
+    timings.extend([
+        ("  flood", erosion_timings.flood),
+        ("  routing", erosion_timings.routing),
+        ("  accumulation", erosion_timings.accumulation),
+        ("  incision", erosion_timings.incision),
+        ("  glaciers", erosion_timings.glaciers),
+        ("  diffusion", erosion_timings.diffusion),
+    ]);
+    log::debug!("diffusion substeps per step: {}", erosion_timings.diffusion_substeps);
 
     // World units: the ranges' summits set the scale; plateaus are cut at their cap level.
     let mut summits: Vec<f32> = (0..cells)
@@ -634,12 +672,12 @@ struct Cell {
 }
 
 /// Distance (in cells) from each cell to the nearest cell on the other side of the `sea`
-/// mask: for land cells to the sea, for sea cells to land. Each cell's nearest source is
-/// propagated from its neighbours and the distance measured to it directly (stepping along
-/// neighbours instead would draw star-shaped rays).
-pub fn distance_to(grid: &SphereGrid, sea: &[bool]) -> Vec<f32> {
+/// mask: for land cells to the sea, for sea cells to land, up to `reach` (further cells get
+/// `reach`). Each cell's nearest source is propagated from its neighbours and the distance
+/// measured to it directly (stepping along neighbours instead would draw star-shaped rays).
+pub fn distance_to(grid: &SphereGrid, sea: &[bool], reach: f32) -> Vec<f32> {
     use std::{cmp::Reverse, collections::BinaryHeap};
-    let mut distance = vec![f32::MAX; grid.len()];
+    let mut distance = vec![reach; grid.len()];
     let mut source = vec![usize::MAX; grid.len()];
     let mut open = BinaryHeap::new();
     // Sources: cells next to the other side.
@@ -660,7 +698,7 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool]) -> Vec<f32> {
                 continue;
             }
             let candidate = 0.5 + grid.distance(j, source[i]);
-            if candidate < distance[j] {
+            if candidate < distance[j] && candidate < reach {
                 distance[j] = candidate;
                 source[j] = source[i];
                 open.push(Reverse(((candidate * 1024.) as u32, j)));

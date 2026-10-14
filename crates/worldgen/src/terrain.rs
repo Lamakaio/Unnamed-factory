@@ -13,12 +13,14 @@
 //! their outlet but fills them only slowly with sediment, so a basin holds a lake where it is
 //! sinking or being dug faster than it fills.
 
+use std::time::{Duration, Instant};
+
 use bevy_math::Vec2;
 use rand::{Rng, RngExt};
 
 use crate::{
     Landform, WorldgenSettings,
-    flow::{FlowGraph, neighbours, priority_flood},
+    flow::{FlowGraph, flood_seeds, neighbours, priority_flood_from},
     grid::Grid,
     noise::{Noise, hash, smoothstep},
 };
@@ -365,16 +367,66 @@ const MAX_DIFFUSION_STEP: f32 = 0.1;
 ///
 /// Returns heights in the simulation's relative units (scaled later), with their lake basins.
 pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Vec<f32> {
+    erode_timed(grid, settings, shape).0
+}
+
+/// Time spent in each part of [`erode`], summed over its steps.
+#[derive(Default, Debug)]
+pub struct ErosionTimings {
+    pub flood: Duration,
+    pub routing: Duration,
+    pub accumulation: Duration,
+    pub incision: Duration,
+    pub glaciers: Duration,
+    pub diffusion: Duration,
+    /// Diffusion substeps per erosion step.
+    pub diffusion_substeps: usize,
+}
+
+/// [`erode`], also returning the time spent in each of its parts.
+pub fn erode_timed(
+    grid: &impl Grid,
+    settings: &WorldgenSettings,
+    shape: &Shape,
+) -> (Vec<f32>, ErosionTimings) {
+    let mut timings = ErosionTimings::default();
     let mut heights = shape.heights.clone();
     let dt = settings.erosion_dt;
+    // Hillslope diffusion acts on the land cells, between side neighbours (one cell apart):
+    // listed once (compressed rows), the grid's topology doesn't change.
+    let diffusing: Vec<u32> = (0..heights.len() as u32)
+        .filter(|&i| !shape.base_level[i as usize])
+        .collect();
+    let mut side_start = Vec::with_capacity(diffusing.len() + 1);
+    let mut sides = Vec::with_capacity(diffusing.len() * 4);
+    side_start.push(0u32);
+    for &i in &diffusing {
+        sides.extend(
+            grid.neighbours(i as usize)
+                .filter(|&(_, distance)| distance < 1.2)
+                .map(|(j, _)| j as u32),
+        );
+        side_start.push(sides.len() as u32);
+    }
+    let seeds = flood_seeds(grid, &shape.base_level);
+    let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt;
+    let mut previous = heights.clone();
     for step in 0..settings.erosion_steps {
-        let water = priority_flood(grid, &heights, &shape.base_level, 1e-4);
+        let mut clock = Instant::now();
+        let mut lap = |total: &mut Duration| {
+            *total += clock.elapsed();
+            clock = Instant::now();
+        };
+        let water = priority_flood_from(grid, &heights, &shape.base_level, &seeds, 1e-4);
+        lap(&mut timings.flood);
         let seed = hash(settings.seed as u32, step as u32, 0x51ED);
         let jitter = settings.routing_jitter;
         let graph = FlowGraph::with_weights(grid, &water, &shape.base_level, |i, j| {
             1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
         });
+        lap(&mut timings.routing);
         let area = graph.accumulate(|i| shape.rain[i]);
+        lap(&mut timings.accumulation);
 
         for &i in &graph.order {
             if shape.base_level[i] {
@@ -399,6 +451,7 @@ pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Ve
                 / graph.receiver_distance[i];
             heights[i] = (uplifted + f * water[r]) / (1. + f);
         }
+        lap(&mut timings.incision);
 
         // Glaciers in the high valleys, digging unevenly along their course (overdeepening).
         if step + GLACIAL_STEPS >= settings.erosion_steps {
@@ -406,9 +459,15 @@ pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Ve
                 .filter(|&i| !shape.base_level[i])
                 .map(|i| heights[i])
                 .collect();
-            land.sort_by(f32::total_cmp);
-            let high = land.get(land.len() * 3 / 4).copied().unwrap_or(0.);
-            let top = land.last().copied().unwrap_or(1.).max(high + 1e-3);
+            // (The 75th percentile and the maximum: a selection, not a sort.)
+            let top = land.iter().copied().fold(f32::MIN, f32::max);
+            let high = if land.is_empty() {
+                0.
+            } else {
+                let k = land.len() * 3 / 4;
+                *land.select_nth_unstable_by(k, f32::total_cmp).1
+            };
+            let top = if land.is_empty() { 1. } else { top }.max(high + 1e-3);
             let ice: Vec<f32> = (0..heights.len())
                 .map(|i| {
                     let height = (heights[i] - high) / (top - high);
@@ -426,31 +485,25 @@ pub fn erode(grid: &impl Grid, settings: &WorldgenSettings, shape: &Shape) -> Ve
             }
         }
 
+        lap(&mut timings.glaciers);
         // Hillslope diffusion, explicit, in substeps of at most `MAX_DIFFUSION_STEP`: closer
         // to the stability limit (0.25), the cell-sized checker mode stops being damped and
         // shows as stripes.
-        let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt;
         let substeps = (max_k / MAX_DIFFUSION_STEP).ceil().max(1.);
+        timings.diffusion_substeps = substeps as usize;
         for _ in 0..substeps as usize {
-            let previous = heights.clone();
-            for i in 0..heights.len() {
-                if shape.base_level[i] {
-                    continue;
-                }
+            previous.copy_from_slice(&heights);
+            for (c, &i) in diffusing.iter().enumerate() {
+                let i = i as usize;
                 let k = shape.diffusion[i] * dt / substeps;
-                let mut sum = 0.;
-                let mut count = 0.;
-                for (j, distance) in grid.neighbours(i) {
-                    if distance < 1.2 {
-                        sum += previous[j];
-                        count += 1.;
-                    }
-                }
-                heights[i] += k * (sum - count * previous[i]);
+                let sides = &sides[side_start[c] as usize..side_start[c + 1] as usize];
+                let sum: f32 = sides.iter().map(|&j| previous[j as usize]).sum();
+                heights[i] += k * (sum - sides.len() as f32 * previous[i]);
             }
         }
+        lap(&mut timings.diffusion);
     }
-    heights
+    (heights, timings)
 }
 
 /// Plateaus: cut the high ground of plateau provinces down to their cap level (a resistant
