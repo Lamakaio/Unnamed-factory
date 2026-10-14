@@ -1,6 +1,6 @@
 //! Planet previews: a shaded relief map (equirectangular), two globe views and the plates.
 //!
-//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [seeds...]`
+//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [--coarse <steps>] [seeds...]`
 //!
 //! Writes `<seed>_map.png`, `<seed>_globes.png` and `<seed>_plates.png` (continental plates
 //! bright, oceanic dark, land brightest, ranges darkened), and prints the
@@ -19,13 +19,16 @@ const RIVER_AREA: f32 = 150.;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let out = args.next().expect("usage: planet_preview <out_dir> [--n <cells>] [seeds...]");
+    let out = args.next().expect("usage: planet_preview <out_dir> [--n <cells>] [--coarse <steps>] [seeds...]");
     std::fs::create_dir_all(&out).unwrap();
     let mut n = PlanetSettings::default().n;
+    let mut coarse_steps = PlanetSettings::default().coarse_steps;
     let mut seeds = Vec::new();
     while let Some(arg) = args.next() {
         if arg == "--n" {
             n = args.next().unwrap().parse().unwrap();
+        } else if arg == "--coarse" {
+            coarse_steps = args.next().unwrap().parse().unwrap();
         } else {
             seeds.push(arg.parse::<u64>().unwrap());
         }
@@ -37,6 +40,7 @@ fn main() {
         let planet = generate_planet(&PlanetSettings {
             seed,
             n,
+            coarse_steps,
             ..Default::default()
         });
         report(seed, &planet);

@@ -74,6 +74,11 @@ pub struct PlanetSettings {
     /// Erosion: steps, time step, erodibility, drainage area exponent, hillslope diffusion,
     /// routing jitter (as in [`WorldgenSettings`]).
     pub erosion_steps: usize,
+    /// The first `coarse_steps` erosion steps run on a grid `coarse_factor` times coarser (the
+    /// large drainage network forms there, at a fraction of the cost); the rest refine it at
+    /// full resolution. 0: all at full resolution.
+    pub coarse_steps: usize,
+    pub coarse_factor: usize,
     pub erosion_dt: f32,
     pub erodibility: f32,
     pub area_exponent: f32,
@@ -101,6 +106,8 @@ impl Default for PlanetSettings {
             max_height: flat.max_height,
             sea_depth: flat.sea_depth,
             erosion_steps: flat.erosion_steps,
+            coarse_steps: 45,
+            coarse_factor: 2,
             erosion_dt: flat.erosion_dt,
             erodibility: flat.erodibility,
             area_exponent: flat.area_exponent,
@@ -367,6 +374,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let arcs = noise.layer(6);
     let width_at = |p: Vec3| settings.range_width * (0.8 + 0.45 * peaks.layer(1).fbm3(p / 120., 2));
 
+    // Shaping on a grid whose cells are `scale` full-size cells long (all lengths are in
+    // full-size cells: noise, plates and provinces look the same on any grid).
+    let shape_on = |grid: &SphereGrid, scale: f32| -> Shaped {
+    let cells = grid.len();
     // Pass 1: plates, boundaries, crust.
     let pass1: Vec<(u16, f32, Boundary)> = par_map(cells, |i| {
         let direction = grid.direction(i);
@@ -471,8 +482,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let coast = *sorted.select_nth_unstable_by(k, f32::total_cmp).1;
     let sea: Vec<bool> = crust.iter().map(|&c| c < coast).collect();
     let continental: Vec<bool> = crust.iter().map(|&c| c >= coast - SHELF_BAND).collect();
-    let to_sea = distance_to(&grid, &sea, COAST_REACH);
-    lap("plates", &mut timings);
+    let to_sea: Vec<f32> = distance_to(grid, &sea, COAST_REACH / scale)
+        .into_iter()
+        .map(|d| d * scale)
+        .collect();
 
     // Pass 2: landforms on land.
     let pass2: Vec<Cell> = par_map(cells, |i| {
@@ -565,7 +578,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         uplift: pass2.iter().map(|c| c.uplift).collect(),
         erodibility: pass2.iter().map(|c| c.erodibility).collect(),
         diffusion: pass2.iter().map(|c| c.diffusion).collect(),
-        rain: (0..cells).map(|i| grid.area(i)).collect(),
+        // (Rain in full-size cells: a coarse cell gathers `scale²` of them.)
+        rain: (0..cells).map(|i| grid.area(i) * scale * scale).collect(),
         base_level: sea.clone(),
         heights: pass2.iter().map(|c| c.height).collect(),
         sea_floor: vec![0.; cells],
@@ -576,30 +590,78 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         rift: pass1.iter().map(|c| c.2.rift).collect(),
         glacial_noise: pass2.iter().map(|c| c.glacial_noise).collect(),
     };
-    drop(pass2);
-    lap("shape", &mut timings);
+    Shaped {
+        shape,
+        boundaries: pass1.iter().map(|c| c.2).collect(),
+        plate_of,
+        crust,
+        coast,
+        sea,
+        continental,
+        to_sea,
+    }
+    };
 
-    // Erosion, as on the flat map.
-    let erosion = WorldgenSettings {
+    // Erosion, as on the flat map: first on the coarse grid, then refined at full resolution
+    // from its result.
+    let erosion = |steps: usize, scale: f32| WorldgenSettings {
         seed: settings.seed,
-        erosion_steps: settings.erosion_steps,
+        erosion_steps: steps,
         erosion_dt: settings.erosion_dt,
         erodibility: settings.erodibility,
         area_exponent: settings.area_exponent,
         diffusion: settings.diffusion,
         routing_jitter: settings.routing_jitter,
+        cell_size: scale,
         ..Default::default()
     };
-    let (mut heights, erosion_timings) = terrain::erode_timed(&grid, &erosion, &shape);
+    let report = |name: &'static str, t: &terrain::ErosionTimings, timings: &mut Vec<(&'static str, Duration)>| {
+        timings.extend([
+            (name, t.routing + t.accumulation + t.incision + t.glaciers + t.diffusion),
+            ("    routing", t.routing),
+            ("    accumulation", t.accumulation),
+            ("    incision", t.incision),
+            ("    glaciers", t.glaciers),
+            ("    diffusion", t.diffusion),
+        ]);
+    };
+    let coarse_steps = settings.coarse_steps.min(settings.erosion_steps);
+    let mut fine_shape = None;
+    if coarse_steps > 0 && settings.coarse_factor > 1 {
+        let factor = settings.coarse_factor;
+        let coarse_grid = SphereGrid::new(settings.n / factor);
+        let coarse = shape_on(&coarse_grid, factor as f32);
+        let fine = shape_on(&grid, 1.);
+        lap("shape", &mut timings);
+        let (coarse_heights, t) =
+            terrain::erode_timed(&coarse_grid, &erosion(coarse_steps, factor as f32), &coarse.shape);
+        report("  coarse erosion", &t, &mut timings);
+        let mut fine = fine;
+        // The fine grid starts from the coarse result (its land only).
+        let upsampled = upsample(&coarse_grid, &coarse_heights, &grid);
+        for (i, h) in fine.shape.heights.iter_mut().enumerate() {
+            *h = if fine.sea[i] { 0. } else { upsampled[i].max(0.) };
+        }
+        fine_shape = Some(fine);
+    }
+    let shaped = match fine_shape {
+        Some(shaped) => shaped,
+        None => {
+            let shaped = shape_on(&grid, 1.);
+            lap("shape", &mut timings);
+            shaped
+        }
+    };
+    let Shaped { shape, boundaries, plate_of, crust, coast, sea, continental, to_sea } = shaped;
+    let cells = grid.len();
+    let (mut heights, t) =
+        terrain::erode_timed(&grid, &erosion(settings.erosion_steps - coarse_steps, 1.), &shape);
+    report("  fine erosion", &t, &mut timings);
     lap("erosion", &mut timings);
-    timings.extend([
-        ("  routing", erosion_timings.routing),
-        ("  accumulation", erosion_timings.accumulation),
-        ("  incision", erosion_timings.incision),
-        ("  glaciers", erosion_timings.glaciers),
-        ("  diffusion", erosion_timings.diffusion),
-    ]);
-    log::debug!("diffusion substeps per step: {}", erosion_timings.diffusion_substeps);
+    // ("erosion" is the sum of both stages, listed after them.)
+    let erosion_total = timings.pop().unwrap();
+    let at = timings.iter().position(|t| t.0.starts_with("  coarse") || t.0.starts_with("  fine")).unwrap_or(timings.len());
+    timings.insert(at, erosion_total);
 
     // World units: the ranges' summits set the scale; plateaus are cut at their cap level.
     let mut summits: Vec<f32> = (0..cells)
@@ -622,7 +684,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let floor = noise.layer(9);
     let shelf_floor: Vec<f32> = (0..cells)
         .map(|i| {
-            let b = pass1[i].2;
+            let b = boundaries[i];
             let slope = smoothstep(coast - SHELF_BAND * 0.6, coast - SHELF_BAND * 1.6, crust[i]);
             let abyss = settings.sea_depth * (1. - 0.45 * b.ridge) * (1. + 0.4 * b.trench);
             -(SHELF_DEPTH + (abyss - SHELF_DEPTH) * slope)
@@ -654,6 +716,40 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         continental_plate: plates.iter().map(|p| p.continental).collect(),
         timings,
     }
+}
+
+/// Shaping results on one grid.
+struct Shaped {
+    shape: Shape,
+    boundaries: Vec<Boundary>,
+    plate_of: Vec<u16>,
+    crust: Vec<f32>,
+    coast: f32,
+    sea: Vec<bool>,
+    continental: Vec<bool>,
+    /// Distance to the coast (full-size cells, up to `COAST_REACH`).
+    to_sea: Vec<f32>,
+}
+
+/// Values of a coarse grid sampled on a finer one (bilinear within each face, clamped at face
+/// edges: the half coarse cell along them is refined by the fine steps anyway).
+fn upsample(coarse: &SphereGrid, values: &[f32], fine: &SphereGrid) -> Vec<f32> {
+    let (m, n) = (coarse.n(), fine.n());
+    let ratio = m as f32 / n as f32;
+    (0..fine.len())
+        .map(|i| {
+            let (face, x, z) = fine.coords(i);
+            let c = |v: usize| ((v as f32 + 0.5) * ratio - 0.5).clamp(0., (m - 1) as f32);
+            let (cx, cz) = (c(x), c(z));
+            let (x0, z0) = (cx.floor() as usize, cz.floor() as usize);
+            let (x1, z1) = ((x0 + 1).min(m - 1), (z0 + 1).min(m - 1));
+            let (fx, fz) = (cx - x0 as f32, cz - z0 as f32);
+            let at = |x: usize, z: usize| values[coarse.index(face, x, z)];
+            let top = at(x0, z0) + (at(x1, z0) - at(x0, z0)) * fx;
+            let bottom = at(x0, z1) + (at(x1, z1) - at(x0, z1)) * fx;
+            top + (bottom - top) * fz
+        })
+        .collect()
 }
 
 /// Per-cell results of the landform pass.

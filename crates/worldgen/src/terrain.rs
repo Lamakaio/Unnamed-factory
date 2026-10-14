@@ -409,7 +409,9 @@ pub fn erode_timed(
         );
         side_start.push(sides.len() as u32);
     }
-    let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt;
+    // (Lengths in cells of `cell_size`: the Laplacian divides by its square.)
+    let max_k =
+        shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt / settings.cell_size.powi(2);
     let mut previous = heights.clone();
     for step in 0..settings.erosion_steps {
         let mut clock = Instant::now();
@@ -447,7 +449,7 @@ pub fn erode_timed(
                 * shape.erodibility[i]
                 * dt
                 * area[i].powf(settings.area_exponent)
-                / graph.receiver_distance[i];
+                / (graph.receiver_distance[i] * settings.cell_size);
             heights[i] = (uplifted + f * water[r]) / (1. + f);
         }
         lap(&mut timings.incision);
@@ -494,7 +496,7 @@ pub fn erode_timed(
             previous.copy_from_slice(&heights);
             for (c, &i) in diffusing.iter().enumerate() {
                 let i = i as usize;
-                let k = shape.diffusion[i] * dt / substeps;
+                let k = shape.diffusion[i] * dt / substeps / settings.cell_size.powi(2);
                 let sides = &sides[side_start[c] as usize..side_start[c + 1] as usize];
                 let sum: f32 = sides.iter().map(|&j| previous[j as usize]).sum();
                 heights[i] += k * (sum - sides.len() as f32 * previous[i]);

@@ -267,7 +267,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     continents, mid-ocean ridges at sea. Old sutures between ancient blocks (`cratons`) are worn
     ranges, lower and more diffusive the older. Provinces (plains / broad rounded hills /
     plateaus, about `province_cells` each) blended softly; near the sea, plateaus give way to
-    lowlands and interior uplift ramps down. Then `terrain::erode`, scaling, `cap_plateaus`, a
+    lowlands and interior uplift ramps down. Then `terrain::erode`, in two stages: the first
+    `coarse_steps` (45 of 60) on a grid `coarse_factor` (2) times coarser (shaped the same way:
+    `shape_on(grid, scale)` keeps every length in full-size cells; `WorldgenSettings::cell_size`
+    tells erosion how long a cell is), then upsampled (`upsample`) and refined at full
+    resolution (`--coarse 0` in the preview: all at full resolution). Then scaling, `cap_plateaus`, a
     sea floor of shelf / slope / abyss (raised at ridges, deepened at trenches). Both shaping
     passes run on all cores (`par_map`); provinces and blocks are found through a coarse
     `PointIndex`. Landforms are sized in cells (radius `2n/π` cells; n = 1024 is the target
@@ -275,7 +279,7 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
     `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png` (continental plates
-    bright, oceanic dark). At n = 256 erosion takes ~5–9 s; at n = 1024 about 16× that.
+    bright, oceanic dark). Whole planet at n = 1024: ~20 s (erosion ~13 s); n = 256: ~2 s.
     In-face neighbour distances are precomputed per face position (`local_distance`).
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
