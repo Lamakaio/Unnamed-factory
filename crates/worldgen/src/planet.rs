@@ -33,6 +33,10 @@ use crate::{
 const CONTINENT_FREQUENCY: f32 = 2.4;
 /// How much a plate's crust raises (continental) or lowers (oceanic) the continent outline.
 const CONTINENTAL_BIAS: f32 = 0.22;
+/// Subsidence of rift floors (relative, like uplift).
+const RIFT_SUBSIDENCE: f32 = 0.3;
+/// Uplift of the low swells over all land (relative, like the provinces' uplift).
+const PLAIN_SWELLS: f32 = 0.08;
 /// Distances to the coast are only needed this far (cells): beyond, they are this value.
 const COAST_REACH: f32 = 64.;
 /// Distance over which the plates' crust bias blends across their boundaries (cells).
@@ -131,6 +135,8 @@ pub struct Planet {
     pub range: Vec<f32>,
     /// Upstream drainage area of each cell (in mean cell areas).
     pub drainage: Vec<f32>,
+    /// Depth of the lake water over each cell (0: no lake), from filling the basins.
+    pub lake_depth: Vec<f32>,
     /// Plate of each cell, and whether each plate is continental.
     pub plate: Vec<u16>,
     pub continental_plate: Vec<bool>,
@@ -548,17 +554,28 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         let undulation = 0.5 + 0.5 * hills.layer(3).fbm3(p / 35., 3);
         let interior = (plains * 0.2 * undulation + hilly * 0.9 * rolling + plateau)
             * (0.35 + 0.65 * inland);
+        // Low swells over all land, plains and coasts included: without them, a gently tilted
+        // plain drains in straight parallel lines; with them, rivers wind between the swells.
+        let swells = PLAIN_SWELLS
+            * (0.5 + 0.5 * hills.layer(9).fbm3(p / 24., 3))
+            * (0.5 + 0.5 * hills.layer(10).fbm3(p / 70., 2));
         let uplift = (interior * (1. - 0.85 * b.rift) * (1. - b.belt * 0.5)
             + young * 1.1
             + foothills * 0.22
             + worn * 0.55
             + b.shoulders * 0.35)
-            * land.powf(1.5);
+            * land.powf(1.5)
+            + swells * land.sqrt();
         let range = (b.belt + foothills * 0.4).max(old * 0.6).min(1.);
         Cell {
             land,
             uplift,
-            subsidence: b.rift * 0.4 * land,
+            // Rift floors sink in segments along the axis (a chain of basins, rift lakes), as
+            // on the flat map.
+            subsidence: b.rift
+                * smoothstep(-0.1, 0.35, hills.layer(11).fbm3(p / 45., 2))
+                * RIFT_SUBSIDENCE
+                * land,
             provinces: [plains, hilly, plateau],
             plateau_cap: cap / total.max(1e-6),
             range,
@@ -702,6 +719,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     let filled = priority_flood(&grid, &heights, &sea, 1e-4);
     let drainage = FlowGraph::new(&grid, &filled, &sea).accumulate(|i| grid.area(i));
+    // Lakes: where the filled surface stands clearly above the ground.
+    let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     lap("drainage", &mut timings);
 
     Planet {
@@ -712,6 +731,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         continental,
         range: shape.range,
         drainage,
+        lake_depth,
         plate: plate_of,
         continental_plate: plates.iter().map(|p| p.continental).collect(),
         timings,

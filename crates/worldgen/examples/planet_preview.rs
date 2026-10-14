@@ -151,6 +151,9 @@ fn relief_colour(planet: &Planet, shade: &[f32], i: usize) -> [f32; 3] {
             break;
         }
     }
+    if planet.lake_depth[i] > 0.05 {
+        return mix([0.25, 0.5, 0.78], [0.12, 0.3, 0.6], planet.lake_depth[i] / 4.);
+    }
     let colour = colour.map(|c| c * shade[i]);
     let river = planet.drainage[i] / RIVER_AREA;
     if river >= 1. {
