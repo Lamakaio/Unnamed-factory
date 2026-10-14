@@ -321,7 +321,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `PlanetChunk`s (64 × 64 cells of a face, meshed relative to their sea
   level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
-  colour by height for now, drawn with the toon `ToonMaterial`, snow off), re-meshed when the camera moved by 25% of their distance. The
+  drawn with `PlanetTerrainMaterial`, `planet_terrain.wesl`: the flat map's toon ground generated
+  from `map_material.wesl` with face cell coordinates (UV0) for its patterns, radial heights and
+  up, and ground materials from the climate per vertex: colour = (dryness, forest, desert, wet
+  bed), UV1 = (snow, cold), see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
   Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
   resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`);

@@ -111,6 +111,8 @@ pub struct PlanetSurface {
     /// Ground colour of each cell (linear RGB), from its climate (Köppen class at its altitude);
     /// `None` without a climate.
     pub ground: Option<[FaceField; 3]>,
+    /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
+    pub weights: Option<[FaceField; 5]>,
     /// The rivers, their water levels kept under the surface across their channel.
     pub rivers: Vec<PlanetRiver>,
     channels: Channels,
@@ -136,7 +138,16 @@ impl PlanetSurface {
                 FaceField::new(planet, &colours.iter().map(|c| c[k]).collect::<Vec<_>>())
             })
         });
+        let weights = climate.map(|climate| {
+            let weights: Vec<[f32; 5]> = crate::par::map(planet.grid.len(), |i| {
+                climate.koppen_at(planet.grid.direction(i), planet.heights[i]).ground_weights()
+            });
+            [0, 1, 2, 3, 4].map(|k| {
+                FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>())
+            })
+        });
         let mut surface = Self {
+            weights,
             ground,
             rivers: Vec::new(),
             channels: Channels::default(),
@@ -192,6 +203,12 @@ impl PlanetSurface {
         surface.channels = Channels::new(&rivers, surface.radius);
         surface.rivers = rivers;
         surface
+    }
+
+    /// How much of a river's channel or a lake covers a point (0..1): the beds.
+    pub fn wetness(&self, face: usize, p: Vec2) -> f32 {
+        let lake = smoothstep(0.02, 0.1, self.lake_depth.bilinear(face, p));
+        lake.max(self.channels.wetness(self.direction(face, p) * self.radius))
     }
 
     /// Height in a direction, before the river channels are carved.
@@ -388,6 +405,25 @@ impl Channels {
             height = height.min(carved);
         }
         height
+    }
+}
+
+impl Channels {
+    /// 1 in a channel, fading out just past its edge.
+    fn wetness(&self, p: Vec3) -> f32 {
+        let Some(ids) = self.buckets.get(&(p / BUCKET).floor().as_ivec3()) else {
+            return 0.;
+        };
+        let mut wet: f32 = 0.;
+        for &id in ids {
+            let s = &self.segments[id as usize];
+            let ab = s.b - s.a;
+            let u = ((p - s.a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0., 1.);
+            let half = (s.width.0 + (s.width.1 - s.width.0) * u) / 2.;
+            let distance = p.distance(s.a + ab * u);
+            wet = wet.max(((half + 0.3 - distance) / 0.3).clamp(0., 1.));
+        }
+        wet
     }
 }
 

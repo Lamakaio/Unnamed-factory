@@ -594,6 +594,27 @@ impl Koppen {
         }
     }
 
+    /// Ground material weights for the terrain shader: (dryness of the grass, forest,
+    /// desert, snow, cold: conifers and alpine grass), 0..1.
+    pub fn ground_weights(self) -> [f32; 5] {
+        match self {
+            Koppen::Af | Koppen::Am => [0.0, 1.0, 0.0, 0.0, 0.0],
+            Koppen::Aw => [0.6, 0.25, 0.0, 0.0, 0.0],
+            Koppen::BWh => [1.0, 0.0, 1.0, 0.0, 0.0],
+            Koppen::BWk => [1.0, 0.0, 0.8, 0.0, 0.3],
+            Koppen::BSh => [0.85, 0.05, 0.25, 0.0, 0.0],
+            Koppen::BSk => [0.8, 0.05, 0.15, 0.0, 0.3],
+            Koppen::Csa | Koppen::Csb => [0.6, 0.3, 0.0, 0.0, 0.0],
+            Koppen::Cwa | Koppen::Cfa => [0.15, 0.55, 0.0, 0.0, 0.0],
+            Koppen::Cfb | Koppen::Cfc => [0.05, 0.45, 0.0, 0.0, 0.15],
+            Koppen::Dfa | Koppen::Dfb => [0.1, 0.6, 0.0, 0.0, 0.45],
+            Koppen::Dw => [0.3, 0.45, 0.0, 0.0, 0.5],
+            Koppen::Dfc => [0.1, 0.75, 0.0, 0.1, 0.9],
+            Koppen::ET => [0.25, 0.0, 0.0, 0.25, 1.0],
+            Koppen::EF => [0.0, 0.0, 0.0, 1.0, 1.0],
+        }
+    }
+
     /// Ground colour of the landscape (sRGB, 0..1, toon-friendly).
     pub fn ground_color(self) -> [f32; 3] {
         match self {

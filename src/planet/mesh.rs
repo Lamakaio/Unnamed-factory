@@ -54,6 +54,8 @@ pub fn build_chunk_mesh(
         positions: Vec::new(),
         normals: Vec::new(),
         colors: Vec::new(),
+        uvs: Vec::new(),
+        covers: Vec::new(),
         indices: Vec::new(),
     };
     builder.visit(chunk.min - 0.5, CHUNK_CELLS as f32);
@@ -61,6 +63,8 @@ pub fn build_chunk_mesh(
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, builder.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, builder.normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, builder.colors)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, builder.uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, builder.covers)
         .with_inserted_indices(Indices::U32(builder.indices))
 }
 
@@ -71,7 +75,11 @@ struct Builder<'a> {
     camera: Vec3,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
+    /// Ground materials (see `PlanetTerrainShader`): (dryness, forest, desert, wet bed), and
+    /// (snow, cold); the face's cell coordinates.
     colors: Vec<[f32; 4]>,
+    covers: Vec<[f32; 2]>,
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
 }
 
@@ -114,8 +122,10 @@ impl Builder<'_> {
                     normal = -normal;
                 }
                 self.normals.push(normal.to_array());
-                let height = self.surface.height(face, p);
-                self.colors.push(ground_colour(self.surface, face, p, height));
+                let (colour, cover) = ground_materials(self.surface, face, p);
+                self.colors.push(colour);
+                self.covers.push(cover);
+                self.uvs.push(p.to_array());
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;
@@ -151,6 +161,8 @@ impl Builder<'_> {
                 self.positions.push((lowered - self.origin).to_array());
                 self.normals.push(self.normals[vertex as usize]);
                 self.colors.push(self.colors[vertex as usize]);
+                self.covers.push(self.covers[vertex as usize]);
+                self.uvs.push(self.uvs[vertex as usize]);
             }
             for i in 0..PATCH_RES {
                 let (top_a, top_b) = (edge[i], edge[i + 1]);
@@ -165,57 +177,12 @@ impl Builder<'_> {
     }
 }
 
-/// Ground colour: the climate's (by Köppen class) on land, sand at the water's edge and under
-/// shallow water, darkening with depth; by height without a climate.
-fn ground_colour(surface: &PlanetSurface, face: usize, p: Vec2, height: f32) -> [f32; 4] {
-    let Some(ground) = &surface.ground else {
-        return relief_colour(height, 0.);
+/// Ground materials at a point: (dryness, forest, desert, wet bed) and (snow, cold).
+fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4], [f32; 2]) {
+    let wet = surface.wetness(face, p);
+    let Some(weights) = &surface.weights else {
+        return ([0.3, 0., 0., wet], [0., 0.]);
     };
-    let land = Vec3::from(ground.each_ref().map(|field| field.bilinear(face, p)));
-    let sand = Vec3::from(Color::srgb(0.78, 0.72, 0.55).to_linear().to_f32_array_no_alpha());
-    let deep = Vec3::from(Color::srgb(0.2, 0.22, 0.25).to_linear().to_f32_array_no_alpha());
-    let colour = if height < 0. {
-        sand.lerp(deep, (-height / 10.).clamp(0., 1.))
-    } else {
-        sand.lerp(land, smoothstep(0.05, 0.35, height))
-    };
-    [colour.x, colour.y, colour.z, 1.]
-}
-
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0., 1.);
-    t * t * (3. - 2. * t)
-}
-
-/// Ground colour by height (as the planet previews).
-fn relief_colour(height: f32, lake: f32) -> [f32; 4] {
-    let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
-        let t = t.clamp(0., 1.);
-        [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t)
-    };
-    let colour = if lake > 0.05 {
-        mix([0.25, 0.5, 0.78], [0.12, 0.3, 0.6], lake / 4.)
-    } else if height < 0. {
-        mix([0.62, 0.58, 0.45], [0.2, 0.22, 0.25], -height / 10.)
-    } else {
-        let stops = [
-            (0., [0.36, 0.56, 0.27]),
-            (6., [0.52, 0.62, 0.32]),
-            (14., [0.58, 0.50, 0.33]),
-            (24., [0.55, 0.48, 0.42]),
-            (32., [0.70, 0.68, 0.66]),
-            (38., [0.95, 0.95, 0.97]),
-        ];
-        let mut colour = stops[stops.len() - 1].1;
-        for w in stops.windows(2) {
-            if height < w[1].0 {
-                colour = mix(w[0].1, w[1].1, (height - w[0].0) / (w[1].0 - w[0].0));
-                break;
-            }
-        }
-        colour
-    };
-    // (Vertex colours are linear.)
-    let linear = Color::srgb(colour[0], colour[1], colour[2]).to_linear();
-    [linear.red, linear.green, linear.blue, 1.]
+    let w = weights.each_ref().map(|field| field.bilinear(face, p));
+    ([w[0], w[1], w[2], wet], [w[3], w[4]])
 }
