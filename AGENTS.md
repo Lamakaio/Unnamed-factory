@@ -286,7 +286,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     uplift), cordilleras over subduction, island arcs (accreting into continental crust);
     uncovered cells are new oceanic crust (ridges). Rifts split the plate with the most
     continent along a great circle; continents colliding for `WELD_STEPS` steps weld (same
-    motion). Outputs crust, plate, oceanic age, uplift and its age. Previews:
+    motion; collisions are kept in ordered maps so welds happen in the same order on every
+    run: generation must stay deterministic). Outputs crust, plate, oceanic age, uplift and its age. Previews:
     `tectonics_preview` (frames over the history), `tectonics_stats`.
     `PlanetSettings::history` (the default; preview `--no-history` for the noise version) shapes the planet from it: continents from
     the crust (noise details the coasts), young uplift → belts / foothills / island arcs, old
@@ -328,15 +329,24 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   bed), UV1 = (snow, cold), see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
   Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
   resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
-  under the surface across the channel and end where they reach the sea (`PlanetSurface::new`);
+  under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
+  Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
+  cells walked on the sphere's grid): deltas (distributaries from `mouths::grow_channels`,
+  low land raised along them, `sea` updated) and estuaries, with a sediment plain around;
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
   `planet/water.rs` draws the water with the flat map's toon water on the sphere
   (`PlanetWaterMaterial`, `planet_water.wesl`, generated from `water.wesl`: pattern
   coordinates from vertex colour red/green, radial heights and up, no sea swell yet). Rivers
   are unrolled into (along, level) points and fed to the flat map's `river_profile` (falls,
-  domes, fades at the sea, lakes and junctions), then rebuilt as ribbons on the sphere; flow in
-  UV0, (whitewater, opacity) in UV1. Lakes are per-face cell squares with a corner under a lake,
-  at the water level; the sea is a per-face grid at sea level, subdivided so it sags less than
+  domes), then rebuilt as ribbons on the sphere (rows with forward/across directions); flow in
+  UV0, (whitewater, opacity) in UV1. As on the flat map they fade out where both banks reach
+  the sea (or go under their lake), carrying on straight if needed, fade in out of a lake, and
+  tributaries end in a junction cap on their parent's ribbon edge (crossings found in the
+  plane tangent at the junction; the cap uses the tributary's pattern coordinates), with
+  whitewater on the parent below; the few that never cross it fade out. Lakes are outlined per
+  face as on the flat map (BFS over the cell samples from the lakes: lower ground, up to
+  `SHORE_STEPS` onto the shore, just into river channels; marching squares on
+  level + `SHORE_MARGIN` - ground, clipped to the face; samples one past the edges); the sea is a per-face grid at sea level, subdivided so it sags less than
   `SEA_SAG`. `planet/vegetation.rs` places the flat map's trees, rocks and ground cover
   (`map::vegetation`'s species, rules, models and LODs, shared through
   `VegetationModelsPlugin`; instances carry a full rotation, upright on the sphere) on each

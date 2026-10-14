@@ -292,20 +292,20 @@ impl SurfaceBuilder {
 }
 
 /// Lake surfaces reach under the shore up to where the ground is this much above them.
-const SHORE_MARGIN: f32 = 0.03;
+pub(crate) const SHORE_MARGIN: f32 = 0.03;
 /// Contour value in river channels outside a lake: just outside, so the outline reaches well
 /// into the channel (under the ribbon, which is then cut out exactly).
-const RIVER_EDGE: f32 = -0.01;
+pub(crate) const RIVER_EDGE: f32 = -0.01;
 /// Cell size of the lookup grid of river ribbon triangles cut out of the lakes.
 const CLIP_CELL: f32 = 2.;
 /// Lake surfaces are drawn this far under their level: where a river fades into or out of a
 /// lake, its ribbon (at the lake's level, plus [`RIVER_OFFSET`]) stays clearly above it.
-const LAKE_SINK: f32 = 0.01;
+pub(crate) const LAKE_SINK: f32 = 0.01;
 /// Lake surfaces cover the shore up to this many samples from the water.
-const SHORE_STEPS: u8 = 3;
+pub(crate) const SHORE_STEPS: u8 = 3;
 /// Contour value of the samples a lake must not cover (low ground beyond its rim, or another
 /// lake's): strongly outside, so the outline keeps close to the last sample it covers.
-const OUTSIDE: f32 = -1.;
+pub(crate) const OUTSIDE: f32 = -1.;
 
 /// The lake surfaces, outlined by the contour where the ground (as drawn, with the river
 /// channels) rises above them (marching squares on the lake mask's samples, interpolated: the
@@ -465,7 +465,7 @@ fn lakes_mesh(continent: &Continent, heights: &TerrainHeights, opaque: &[[Vec2; 
 /// The part of a grid cell where `values` (at its corners, in order round it) are positive,
 /// cut along their linear interpolation (marching squares): one polygon, or two for a saddle
 /// whose center is outside.
-fn contour_cell(corners: [Vec2; 4], values: [f32; 4]) -> Vec<Vec<Vec2>> {
+pub(crate) fn contour_cell(corners: [Vec2; 4], values: [f32; 4]) -> Vec<Vec<Vec2>> {
     let cut = |a: usize, b: usize| {
         let t = values[a] / (values[a] - values[b]);
         corners[a].lerp(corners[b], t)
@@ -499,7 +499,7 @@ fn bounds_of(polygon: &[Vec2]) -> (Vec2, Vec2) {
 
 /// The part of a convex polygon where `sign * (b - a).perp_dot(p - a) > 0`, on one side of the
 /// line through `a` and `b` (Sutherland-Hodgman).
-fn clip_half_plane(polygon: &[Vec2], a: Vec2, b: Vec2, sign: f32) -> Vec<Vec2> {
+pub(crate) fn clip_half_plane(polygon: &[Vec2], a: Vec2, b: Vec2, sign: f32) -> Vec<Vec2> {
     let side = |p: Vec2| sign * (b - a).perp_dot(p - a);
     let mut out = Vec::with_capacity(polygon.len() + 2);
     for k in 0..polygon.len() {
@@ -546,15 +546,15 @@ fn subtract_triangle(polygon: Vec<Vec2>, triangle: &[Vec2; 3]) -> Vec<Vec<Vec2>>
 
 /// Rivers fade in (outlets) or out (inflows) over this distance (world units), this far inside
 /// their lake (they stay visible across the shore).
-const OUTLET_FADE: f32 = 1.;
-const LAKE_FADE_INSIDE: f32 = 1.;
+pub(crate) const OUTLET_FADE: f32 = 1.;
+pub(crate) const LAKE_FADE_INSIDE: f32 = 1.;
 
 /// Rivers also start fading out where the water under them is this deep.
-const OPEN_WATER_DEPTH: f32 = 0.5;
+pub(crate) const OPEN_WATER_DEPTH: f32 = 0.5;
 
 /// Rivers fade out over this distance (a constant plus this many widths) into the water they
 /// flow into.
-const RIVER_FADE: (f32, f32) = (1., 2.5);
+pub(crate) const RIVER_FADE: (f32, f32) = (1., 2.5);
 
 /// Fade a river out from row `start` on, extending it straight past its end if needed, and
 /// drop the rows past the fade.
@@ -775,8 +775,8 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 
 /// Whitewater where a tributary pours into its parent, fading downstream over this many
 /// tributary widths (plus a constant).
-const CONFLUENCE_FOAM: f32 = 0.55;
-const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
+pub(crate) const CONFLUENCE_FOAM: f32 = 0.55;
+pub(crate) const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
 /// At a confluence, the tributary's flow turns towards its parent's, and the parent's near
 /// bank towards the tributary's, by up to this much, over this many tributary widths (plus a
 /// constant).

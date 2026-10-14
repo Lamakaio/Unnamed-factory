@@ -20,7 +20,7 @@ pub enum Mouth {
 }
 
 /// Spacing of distributary polyline points, in world units (as for rivers).
-const SPACING: f32 = 0.5;
+pub(crate) const SPACING: f32 = 0.5;
 /// Largest angle (radians) between a distributary and the delta's direction.
 const MAX_TURN: f32 = 1.3;
 
@@ -254,24 +254,24 @@ fn build_delta(
         .collect()
 }
 
-struct Channel {
-    points: Vec<ChannelPoint>,
+pub(crate) struct Channel {
+    pub(crate) points: Vec<ChannelPoint>,
     /// Ends in the sea (as opposed to forking, or giving up over land).
-    open: bool,
+    pub(crate) open: bool,
 }
 
 #[derive(Clone, Copy)]
-struct ChannelPoint {
-    position: Vec2,
-    width: f32,
+pub(crate) struct ChannelPoint {
+    pub(crate) position: Vec2,
+    pub(crate) width: f32,
     /// Distance from the apex along the channels.
-    travelled: f32,
+    pub(crate) travelled: f32,
     /// Distance to the channel's tip (infinite where it forks).
-    to_tip: f32,
+    pub(crate) to_tip: f32,
 }
 
 /// Grow the distributary tree from the apex.
-fn grow_channels(
+pub(crate) fn grow_channels(
     rng: &mut impl Rng,
     noise: Noise,
     is_sea: &dyn Fn(Vec2) -> bool,

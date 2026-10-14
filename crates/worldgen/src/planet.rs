@@ -728,7 +728,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             shaped
         }
     };
-    let Shaped { shape, boundaries, plate_of, crust, coast, sea, continental, to_sea } = shaped;
+    let Shaped { shape, boundaries, plate_of, crust, coast, mut sea, continental, to_sea } = shaped;
     let cells = grid.len();
     let (mut heights, t) =
         terrain::erode_timed(&grid, &erosion(settings.erosion_steps - coarse_steps, 1.), &shape);
@@ -795,8 +795,19 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // Lakes: where the filled surface stands clearly above the ground.
     let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
-    let rivers =
+    let mut rivers =
         crate::planet_rivers::extract(&grid, radius, &heights, &filled, &sea, &lake_depth);
+    // Deltas and estuaries at the river mouths (deltas build land out into the sea).
+    crate::planet_mouths::shape_mouths(
+        &grid,
+        radius,
+        settings.seed,
+        noise.layer(11),
+        &shore,
+        &mut heights,
+        &mut sea,
+        &mut rivers,
+    );
     // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
     let calm: Vec<f32> = (0..cells)
         .map(|i| {
