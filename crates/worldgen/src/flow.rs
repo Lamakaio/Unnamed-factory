@@ -195,6 +195,8 @@ impl FlowGraph {
         let mut basin = vec![UNSET; n];
         let mut pits = vec![usize::MAX];
         let mut path = Vec::new();
+        // Cells in the pits' basins (the only ones the basin graph looks at).
+        let mut in_pits = Vec::new();
         for start in 0..n {
             let mut i = start;
             while basin[i] == UNSET && receivers[i] != i {
@@ -206,23 +208,26 @@ impl FlowGraph {
                     0
                 } else {
                     pits.push(i);
+                    in_pits.push(i);
                     (pits.len() - 1) as u32
                 };
             }
             let b = basin[i];
             for k in path.drain(..) {
                 basin[k] = b;
+                if b != 0 {
+                    in_pits.push(k);
+                }
             }
         }
+        // (In index order, as a scan of every cell would find them.)
+        in_pits.sort_unstable();
         let mut water = heights.to_vec();
         if pits.len() > 1 {
             // Lowest pass between each pair of neighbouring basins: (height, cell on each side).
             let mut passes: std::collections::HashMap<(u32, u32), (f32, u32, u32)> = Default::default();
-            for i in 0..n {
+            for &i in &in_pits {
                 let bi = basin[i];
-                if bi == 0 {
-                    continue;
-                }
                 for (j, _) in grid.neighbours(i) {
                     let bj = basin[j];
                     if bj == bi {
@@ -278,11 +283,8 @@ impl FlowGraph {
                     queue.push_back(child);
                 }
             }
-            for i in 0..n {
-                let b = basin[i] as usize;
-                if b != 0 {
-                    water[i] = water[i].max(level[b]);
-                }
+            for &i in &in_pits {
+                water[i] = water[i].max(level[basin[i] as usize]);
             }
             // Carve: reverse the receivers from the pass cell down to the pit, so the pit
             // drains through the pass into the downstream basin.
