@@ -2,7 +2,8 @@
 //!
 //! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [seeds...]`
 //!
-//! Writes `<seed>_map.png`, `<seed>_globes.png` and `<seed>_plates.png`, and prints the
+//! Writes `<seed>_map.png`, `<seed>_globes.png` and `<seed>_plates.png` (continental plates
+//! bright, oceanic dark, land brightest, ranges darkened), and prints the
 //! planet's statistics and timings.
 
 use std::{fs::File, io::BufWriter, path::Path};
@@ -50,7 +51,9 @@ fn main() {
                 (k.wrapping_mul(53) % 255) as f32 / 255.,
                 (k.wrapping_mul(181) % 255) as f32 / 255.,
             ];
-            let tint = if planet.sea[i] { 0.45 } else { 0.9 };
+            // Continental plates bright, oceanic ones dark; land brighter still.
+            let tint = if planet.continental_plate[k as usize] { 0.75 } else { 0.35 }
+                + if planet.sea[i] { 0. } else { 0.25 };
             let mountain = planet.range[i];
             hue.map(|c| (c * 0.6 + 0.3) * tint * (1. - 0.5 * mountain))
         };

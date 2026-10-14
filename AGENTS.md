@@ -254,19 +254,25 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     (relative to the mean). Neighbours across face edges are found by direction (at cube
     corners a cell has 7). Tests: round trip, areas, mutual neighbours, everything drains.
   - `noise.rs`: 3D noise (`get3`, `fbm3`, `ridged3`, `warp3`) to sample the sphere by direction.
-  - `planet.rs`: `generate_planet(&PlanetSettings) -> Planet`: continents from noise sized
-    relative to the radius (`CONTINENT_FREQUENCY`), provinces (plains / broad rounded hills /
-    plateaus, `province_weights`, blended softly, plateaus capped with `cap_plateaus`), rigid
-    plates (Euler-pole rotations) whose fast-converging boundaries raise ridged mountain belts
-    (as `terrain::shape` on the flat map),
-    then `terrain::erode` on the sphere, scaling to world units and a sea floor deepening away
-    from land (`distance_to`: exact distance to the nearest land cell, propagated, then
-    blurred); drainage. Landforms are sized in cells, so they match the flat map; the radius
-    is `2n/π` cells (n = 1024 is the target planet, 256 the fast default for previews).
+  - `planet.rs`: `generate_planet(&PlanetSettings) -> Planet` (module docs explain it):
+    rigid plates (Euler-pole rotations), each continental or oceanic; a crust value = continent
+    noise + the plates' bias (blended across boundaries, `CRUST_BLEND`), cut at the level
+    leaving `land_fraction` above, with shelves just below (`SHELF_BAND`). Boundaries act by
+    crust on each side: continent–continent collision → wide ranges, ocean under continent →
+    coastal cordillera + trench, ocean–ocean → island arc (volcanoes raise the crust), rifts in
+    continents, mid-ocean ridges at sea. Old sutures between ancient blocks (`cratons`) are worn
+    ranges, lower and more diffusive the older. Provinces (plains / broad rounded hills /
+    plateaus, about `province_cells` each) blended softly; near the sea, plateaus give way to
+    lowlands and interior uplift ramps down. Then `terrain::erode`, scaling, `cap_plateaus`, a
+    sea floor of shelf / slope / abyss (raised at ridges, deepened at trenches). Both shaping
+    passes run on all cores (`par_map`); provinces and blocks are found through a coarse
+    `PointIndex`. Landforms are sized in cells (radius `2n/π` cells; n = 1024 is the target
+    planet, 256 the fast default for previews).
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
-    `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png`. At n = 256 erosion
-    takes ~9 s (~2.4× the flat map's cost per cell: neighbours are found through directions).
+    `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png` (continental plates
+    bright, oceanic dark). At n = 256 erosion takes ~5–9 s; at n = 1024 about 16× that.
+    In-face neighbour distances are precomputed per face position (`local_distance`).
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
   `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.

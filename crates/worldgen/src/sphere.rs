@@ -36,6 +36,10 @@ pub struct SphereGrid {
     local: Vec<Vec3>,
     /// Area of each cell of a face, relative to the mean cell area.
     local_area: Vec<f32>,
+    /// Distance (in cells) from each cell of a face to its neighbours within the face, per
+    /// [`OFFSETS`] entry: the same for every face, so neighbour lookups away from face edges
+    /// need no trigonometry.
+    local_distance: Vec<[f32; 8]>,
     /// Mean angle between neighbouring cell centres (radians): a distance of one cell.
     spacing: f32,
 }
@@ -60,11 +64,22 @@ impl SphereGrid {
                 (solid_angle(a, b, c) + solid_angle(a, c, d)) / mean
             })
             .collect();
+        let spacing = std::f32::consts::FRAC_PI_2 / n as f32;
+        let local_distance = (0..n * n)
+            .map(|k| {
+                let (x, z) = ((k % n) as f32, (k / n) as f32);
+                let here = local_direction(n, x, z);
+                OFFSETS.map(|(dx, dz)| {
+                    angle_between(here, local_direction(n, x + dx as f32, z + dz as f32)) / spacing
+                })
+            })
+            .collect();
         Self {
             n,
             local,
             local_area,
-            spacing: std::f32::consts::FRAC_PI_2 / n as f32,
+            local_distance,
+            spacing,
         }
     }
 
@@ -140,9 +155,18 @@ impl Grid for SphereGrid {
     fn neighbours(&self, i: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
         let (face, x, z) = self.coords(i);
         let n = self.n as i64;
-        let here = self.direction(i);
         let mut found = [(0usize, 0f32); 8];
         let mut count = 0;
+        // Away from face edges: plain grid offsets, distances from the table.
+        if x > 0 && z > 0 && x + 1 < self.n && z + 1 < self.n {
+            let distances = &self.local_distance[z * self.n + x];
+            for (k, (dx, dz)) in OFFSETS.into_iter().enumerate() {
+                let j = self.index(face, (x as i64 + dx) as usize, (z as i64 + dz) as usize);
+                found[k] = (j, distances[k]);
+            }
+            return found.into_iter().take(8);
+        }
+        let here = self.direction(i);
         for (dx, dz) in OFFSETS {
             let (nx, nz) = (x as i64 + dx, z as i64 + dz);
             let j = if nx >= 0 && nz >= 0 && nx < n && nz < n {
