@@ -115,8 +115,7 @@ impl Builder<'_> {
                 }
                 self.normals.push(normal.to_array());
                 let height = self.surface.height(face, p);
-                let lake = self.surface.lake_depth.bilinear(face, p);
-                self.colors.push(relief_colour(height, lake));
+                self.colors.push(relief_colour(height, 0.));
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;

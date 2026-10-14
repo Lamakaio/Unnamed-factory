@@ -142,6 +142,8 @@ pub struct Planet {
     pub drainage: Vec<f32>,
     /// Depth of the lake water over each cell (0: no lake), from filling the basins.
     pub lake_depth: Vec<f32>,
+    /// The rivers (see `planet_rivers`).
+    pub rivers: Vec<crate::planet_rivers::PlanetRiver>,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
     pub ruggedness: Vec<f32>,
     /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
@@ -744,6 +746,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // Lakes: where the filled surface stands clearly above the ground.
     let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
+    let rivers =
+        crate::planet_rivers::extract(&grid, radius, &heights, &filled, &sea, &lake_depth);
     // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
     let calm: Vec<f32> = (0..cells)
         .map(|i| {
@@ -764,6 +768,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         range: shape.range,
         drainage,
         lake_depth,
+        rivers,
         ruggedness,
         calm,
         plate: plate_of,

@@ -295,6 +295,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
   colour by height for now, drawn with the toon `ToonMaterial`, snow off), re-meshed when the camera moved by 25% of their distance. The
+  Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
+  resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
+  under the surface across the channel and end where they reach the sea (`PlanetSurface::new`);
+  `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
+  `planet/water.rs` draws river ribbons and per-face lake surfaces (cell squares with a
+  corner under a lake, at the water level) with a translucent `StandardMaterial` (no flow
+  yet). The
   sea is a translucent sphere, subdivided by radius (`sea_sphere`: Bevy's `ico(k)` splits each
   edge into `k + 1` segments, coarse ones sag below shallow water). Coasts are shaped as on
   the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the

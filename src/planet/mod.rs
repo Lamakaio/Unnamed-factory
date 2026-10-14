@@ -5,6 +5,7 @@
 
 mod camera;
 mod mesh;
+mod water;
 
 use std::{sync::Arc, time::Instant};
 
@@ -181,6 +182,7 @@ fn spawn_planet(
             }
         }
     }
+    water::spawn(&mut commands, surface, &mut meshes, &mut materials);
     // The sea: a sphere at sea level.
     commands.spawn((
         Name::new("Sea"),

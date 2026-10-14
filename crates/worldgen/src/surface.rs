@@ -2,7 +2,9 @@
 //! padded with the neighbouring faces' cells (found by direction), interpolated bicubically
 //! in the face's cell coordinates. The game meshes the planet face by face through it.
 
-use bevy_math::{Vec2, Vec3};
+use std::collections::HashMap;
+
+use bevy_math::{IVec3, Vec2, Vec3};
 
 use crate::{
     WorldgenSettings,
@@ -11,6 +13,7 @@ use crate::{
     heightmap::catmull_rom,
     noise::{Noise, smoothstep},
     planet::Planet,
+    planet_rivers::PlanetRiver,
     sphere::{FACES, SphereGrid},
 };
 
@@ -104,6 +107,9 @@ pub struct PlanetSurface {
     pub lake_depth: FaceField,
     pub ruggedness: FaceField,
     pub calm: FaceField,
+    /// The rivers, their water levels kept under the surface across their channel.
+    pub rivers: Vec<PlanetRiver>,
+    channels: Channels,
     grid: std::sync::Arc<SphereGrid>,
     seed: u32,
     /// Gully wavelength (cells), octaves and depth (world units), as on the flat map.
@@ -115,7 +121,9 @@ pub struct PlanetSurface {
 impl PlanetSurface {
     pub fn new(planet: &Planet) -> Self {
         let flat = WorldgenSettings::default();
-        Self {
+        let mut surface = Self {
+            rivers: Vec::new(),
+            channels: Channels::default(),
             n: planet.grid.n(),
             radius: planet.radius(),
             heights: FaceField::new(planet, &planet.heights),
@@ -127,12 +135,65 @@ impl PlanetSurface {
             detail_wavelength: flat.detail_wavelength,
             detail_octaves: flat.detail_octaves,
             detail_amplitude: flat.detail_amplitude,
+        };
+        // River water levels: never above the ground across the channel (smoothing and
+        // meanders move points over lower ground), never rising downstream.
+        let mut rivers = planet.rivers.clone();
+        for river in &mut rivers {
+            let mut previous = f32::MAX;
+            let count = river.points.len();
+            for k in 0..count {
+                let point = river.points[k];
+                let (before, after) =
+                    (river.points[k.saturating_sub(1)], river.points[(k + 1).min(count - 1)]);
+                let up = point.direction;
+                let across = (after.direction - before.direction).cross(up).normalize_or_zero();
+                let lowest = [-0.5f32, 0., 0.5]
+                    .map(|side| {
+                        let q = (up * surface.radius + across * side * point.width).normalize();
+                        surface.uncarved_height(q)
+                    })
+                    .into_iter()
+                    .fold(f32::MAX, f32::min);
+                let level = point.level.min(lowest).min(previous);
+                river.points[k].level = level;
+                previous = level;
+            }
         }
+        // Rivers end where they reach the sea (the shaped coast may lie upstream of the cell
+        // they drained into), as on the flat map (`end_rivers_at_coast`).
+        for river in &mut rivers {
+            let reached = river
+                .points
+                .iter()
+                .position(|p| surface.uncarved_height(p.direction) < -SEA_REACHED);
+            if let Some(k) = reached {
+                river.points.truncate(k + 1);
+                river.end = crate::RiverEnd::Sea;
+            }
+        }
+        rivers.retain(|river| river.points.len() >= 2);
+        surface.channels = Channels::new(&rivers, surface.radius);
+        surface.rivers = rivers;
+        surface
+    }
+
+    /// Height in a direction, before the river channels are carved.
+    fn uncarved_height(&self, direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        self.detailed_height(face, p, direction)
     }
 
     /// Height above sea level at continuous cell coordinates of a face: the cells' heights
     /// (bicubic), with fine detail on rugged land.
     pub fn height(&self, face: usize, p: Vec2) -> f32 {
+        let direction = self.direction(face, p);
+        let height = self.detailed_height(face, p, direction);
+        self.channels.carve(direction * self.radius, height)
+    }
+
+    /// The cells' heights with fine detail (no river channels).
+    fn detailed_height(&self, face: usize, p: Vec2, direction: Vec3) -> f32 {
         let height = self.heights.bicubic(face, p);
         if height <= 0. {
             return height;
@@ -142,7 +203,6 @@ impl PlanetSurface {
         if strength <= 0.01 {
             return height;
         }
-        let direction = self.direction(face, p);
         let noise = Noise::new(self.seed);
         // Small irregular bumps (3D noise: seamless across faces)...
         let world = direction * (2. * self.n as f32 / std::f32::consts::PI);
@@ -213,4 +273,109 @@ impl PlanetSurface {
     pub fn cells(&self) -> usize {
         self.grid.len()
     }
+}
+
+/// Depth of the sea floor where a river has reached the sea.
+const SEA_REACHED: f32 = 0.05;
+/// Bank width relative to the channel width (at least [`MIN_BANK`]), widened to keep the
+/// bank's mean slope under [`MAX_BANK_SLOPE`], up to [`MAX_BANK`] (as on the flat map,
+/// `map/rivers.rs`).
+const BANK_PER_WIDTH: f32 = 1.;
+const MIN_BANK: f32 = 0.8;
+const MAX_BANK_SLOPE: f32 = 0.5;
+const MAX_BANK: f32 = 6.;
+/// Size of the lookup buckets of river segments (world units).
+const BUCKET: f32 = 4.;
+
+/// A straight piece of river between two points (world positions at sea level radius).
+#[derive(Clone)]
+struct Segment {
+    a: Vec3,
+    b: Vec3,
+    level: (f32, f32),
+    width: (f32, f32),
+    depth: (f32, f32),
+}
+
+/// The river channels, carved into the surface: segments bucketed by position.
+#[derive(Clone, Default)]
+struct Channels {
+    segments: Vec<Segment>,
+    buckets: HashMap<IVec3, Vec<u32>>,
+}
+
+impl Channels {
+    fn new(rivers: &[PlanetRiver], radius: f32) -> Self {
+        let mut channels = Self::default();
+        for river in rivers {
+            for pair in river.points.windows(2) {
+                let (p, q) = (pair[0], pair[1]);
+                let segment = Segment {
+                    a: p.direction * radius,
+                    b: q.direction * radius,
+                    level: (p.level, q.level),
+                    width: (p.width, q.width),
+                    depth: (p.depth, q.depth),
+                };
+                let reach = reach(p.width.max(q.width));
+                let (lo, hi) = (
+                    ((segment.a.min(segment.b) - reach) / BUCKET).floor().as_ivec3(),
+                    ((segment.a.max(segment.b) + reach) / BUCKET).floor().as_ivec3(),
+                );
+                let id = channels.segments.len() as u32;
+                for x in lo.x..=hi.x {
+                    for y in lo.y..=hi.y {
+                        for z in lo.z..=hi.z {
+                            channels.buckets.entry(IVec3::new(x, y, z)).or_default().push(id);
+                        }
+                    }
+                }
+                channels.segments.push(segment);
+            }
+        }
+        channels
+    }
+
+    /// Carve the channels at `p` (a point at sea level radius) into `height`: a parabolic
+    /// channel under the water line, then banks rising back to the terrain.
+    fn carve(&self, p: Vec3, height: f32) -> f32 {
+        let Some(ids) = self.buckets.get(&(p / BUCKET).floor().as_ivec3()) else {
+            return height;
+        };
+        let base = height;
+        let mut height = height;
+        for &id in ids {
+            let s = &self.segments[id as usize];
+            let ab = s.b - s.a;
+            let u = ((p - s.a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0., 1.);
+            let distance = p.distance(s.a + ab * u);
+            let width = s.width.0 + (s.width.1 - s.width.0) * u;
+            if distance >= reach(width) {
+                continue;
+            }
+            let water = s.level.0 + (s.level.1 - s.level.0) * u;
+            let half = width / 2.;
+            let carved = if distance < half {
+                let depth = s.depth.0 + (s.depth.1 - s.depth.0) * u;
+                water - depth * (1. - (distance / half).powi(2))
+            } else {
+                let rise = (base - water).max(0.);
+                let bank = (width * BANK_PER_WIDTH)
+                    .max(MIN_BANK)
+                    .max(rise / MAX_BANK_SLOPE)
+                    .min(MAX_BANK.max(width * BANK_PER_WIDTH));
+                let t = ((distance - half) / bank).clamp(0., 1.);
+                let ease_out = 1. - (1. - t) * (1. - t);
+                let smooth = t * t * (3. - 2. * t);
+                water + rise * 0.5 * (ease_out + smooth)
+            };
+            height = height.min(carved);
+        }
+        height
+    }
+}
+
+/// Distance from a river's axis where its banks end.
+fn reach(width: f32) -> f32 {
+    width / 2. + MAX_BANK.max(width * BANK_PER_WIDTH)
 }
