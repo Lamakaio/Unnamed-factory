@@ -27,9 +27,9 @@ use crate::{
 /// Size of the sea plane, in world units.
 const SEA_SIZE: f32 = 8000.;
 /// River ribbons extend this far past the channel edges, under the banks.
-const RIVER_OVERLAP: f32 = 0.25;
+pub(crate) const RIVER_OVERLAP: f32 = 0.25;
 /// Rivers float this much above their water line, to avoid fighting with lakes and the sea.
-const RIVER_OFFSET: f32 = 0.02;
+pub(crate) const RIVER_OFFSET: f32 = 0.02;
 /// River ribbon directions are measured over this many points on each side.
 const RIVER_TANGENT_SPAN: usize = 2;
 /// Rivers steeper than this (water line slope) run in steps: pools between small falls.
@@ -49,15 +49,15 @@ const FALL_RUN: (f32, f32) = (0.2, 1.4);
 /// Steep stretches (water line slope from the first to the second value) get volume: an oval
 /// cross-section (see [`Row::dome`]), the water bulging up in the middle and its edges sunk
 /// into the banks, which the ribbon cannot follow down steep slopes.
-const DOME_SLOPE: (f32, f32) = (0.2, 0.6);
+pub(crate) const DOME_SLOPE: (f32, f32) = (0.2, 0.6);
 /// Height of the oval's top above the water line, and its edges' depth below it, relative to
 /// the ribbon's half-width.
-const DOME_SHAPE: (f32, f32) = (0.3, 1.);
+pub(crate) const DOME_SHAPE: (f32, f32) = (0.3, 1.);
 /// Domed stretches are also lowered by this much (relative to the half-width, like
 /// [`DOME_SHAPE`]): on the steepest slopes the terrain mesh lags under the carved channel.
-const DOME_DROP: f32 = 0.35;
+pub(crate) const DOME_DROP: f32 = 0.35;
 /// Segments across a domed cross-section.
-const DOME_SEGMENTS: usize = 8;
+pub(crate) const DOME_SEGMENTS: usize = 8;
 
 pub struct WaterPlugin;
 
@@ -667,14 +667,14 @@ fn steer(flow: Vec2, towards: Vec2, amount: f32) -> Vec2 {
 }
 
 /// Water line and flow of a river, per point.
-struct ProfilePoint {
-    level: f32,
-    speed: f32,
-    foam: f32,
+pub(crate) struct ProfilePoint {
+    pub(crate) level: f32,
+    pub(crate) speed: f32,
+    pub(crate) foam: f32,
     /// Height of the fall right after this point (0 if none), and its horizontal extent
     /// relative to the drop.
-    drop: f32,
-    fall_run: f32,
+    pub(crate) drop: f32,
+    pub(crate) fall_run: f32,
 }
 
 /// A deterministic pseudo-random value in 0..1 for a river point (and a salt).
@@ -689,7 +689,7 @@ fn jitter(point: &RiverPoint, salt: u32) -> f32 {
 
 /// The water line of a river and its flow. Steep stretches run in irregular steps: pools (see
 /// [`POOL_TILT`]) between falls of varied height and slant, and sloping chutes.
-fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
+pub(crate) fn river_profile(points: &[RiverPoint]) -> Vec<ProfilePoint> {
     let n = points.len();
     // Slope of the natural water line, smoothed over a few points.
     let slope: Vec<f32> = (0..n)
@@ -799,7 +799,7 @@ fn floored_points(river: &River) -> Vec<RiverPoint> {
 
 /// Where the fall after point `i` reaches the next pool, as a fraction of the way to point
 /// `i + 1`.
-fn fall_split(points: &[RiverPoint], profile: &[ProfilePoint], i: usize) -> f32 {
+pub(crate) fn fall_split(points: &[RiverPoint], profile: &[ProfilePoint], i: usize) -> f32 {
     let run = (points[i + 1].position - points[i].position).xz().length();
     (profile[i].fall_run * profile[i].drop / run.max(1e-3)).min(0.6)
 }

@@ -18,7 +18,7 @@ mod spatial;
 mod springs;
 mod vegetation;
 mod sea;
-mod water;
+pub(crate) mod water;
 
 use std::time::Instant;
 

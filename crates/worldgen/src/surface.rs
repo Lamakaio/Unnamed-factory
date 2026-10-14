@@ -205,6 +205,12 @@ impl PlanetSurface {
         surface
     }
 
+    /// Depth of the lake water in a direction (0: no lake).
+    pub fn lake_depth_at(&self, direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        self.lake_depth.bilinear(face, p)
+    }
+
     /// How much of a river's channel or a lake covers a point (0..1): the beds.
     pub fn wetness(&self, face: usize, p: Vec2) -> f32 {
         let lake = smoothstep(0.02, 0.1, self.lake_depth.bilinear(face, p));

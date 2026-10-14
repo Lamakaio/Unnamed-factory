@@ -86,6 +86,7 @@ src/ui.rs               UiPlugin: loading text (BSN), `label()` text scene, Poin
 assets/materials/map.mapmat terrain material params (pbr + tint as hex)
 assets/shaders/map_material.wesl   terrain fragment shader (WESL): toon ground colours + cel lighting, per-pixel normals
 assets/shaders/water.wesl          water fragment shader (WESL): toon water (depth bands, refracted swell and breakers, river flow and falls, glints)
+assets/shaders/planet_water.wesl   the same toon water on the planet (generated from water.wesl, radial up, no swell)
 CREDITS.md              sources of every borrowed technique (papers, articles, shaders); keep it up to date
 ```
 
@@ -329,11 +330,14 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`);
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
-  `planet/water.rs` draws river ribbons and per-face lake surfaces (cell squares with a
-  corner under a lake, at the water level) with a translucent `StandardMaterial` (no flow
-  yet). The
-  sea is a translucent sphere, subdivided by radius (`sea_sphere`: Bevy's `ico(k)` splits each
-  edge into `k + 1` segments, coarse ones sag below shallow water). Coasts are shaped as on
+  `planet/water.rs` draws the water with the flat map's toon water on the sphere
+  (`PlanetWaterMaterial`, `planet_water.wesl`, generated from `water.wesl`: pattern
+  coordinates from vertex colour red/green, radial heights and up, no sea swell yet). Rivers
+  are unrolled into (along, level) points and fed to the flat map's `river_profile` (falls,
+  domes, fades at the sea, lakes and junctions), then rebuilt as ribbons on the sphere; flow in
+  UV0, (whitewater, opacity) in UV1. Lakes are per-face cell squares with a corner under a lake,
+  at the water level; the sea is a per-face grid at sea level, subdivided so it sags less than
+  `SEA_SAG`. Coasts are shaped as on
   the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);

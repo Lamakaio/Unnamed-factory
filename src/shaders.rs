@@ -13,6 +13,7 @@ impl Plugin for ShadersPlugin {
         app.add_plugins((
             MaterialPlugin::<MapMaterial>::default(),
             MaterialPlugin::<PlanetTerrainMaterial>::default(),
+            MaterialPlugin::<PlanetWaterMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
             MaterialPlugin::<ToonMaterial>::default(),
             MaterialPlugin::<LodToonMaterial>::default(),
@@ -25,6 +26,31 @@ impl Plugin for ShadersPlugin {
 
 const MAP_SHADER_ASSET_PATH: &str = "shaders/map_material.wesl";
 const PLANET_TERRAIN_SHADER_ASSET_PATH: &str = "shaders/planet_terrain.wesl";
+const PLANET_WATER_SHADER_ASSET_PATH: &str = "shaders/planet_water.wesl";
+
+/// The planet's water: the flat map's toon water on the sphere (`planet_water.wesl`). Meshes
+/// carry 2D pattern coordinates in vertex colour red/green; rivers also their flow velocity
+/// (UV0, in those coordinates) and (whitewater, opacity) (UV1).
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct PlanetWaterShader {
+    #[uniform(100)]
+    pub tint: LinearRgba,
+    /// x: the sea level radius.
+    #[uniform(101)]
+    pub planet: Vec4,
+    /// Prevailing wind direction (in the pattern coordinates).
+    #[uniform(104)]
+    pub wind: Vec4,
+}
+
+impl MaterialExtension for PlanetWaterShader {
+    fn fragment_shader() -> ShaderRef {
+        PLANET_WATER_SHADER_ASSET_PATH.into()
+    }
+}
+
+pub type PlanetWaterMaterial = ExtendedMaterial<StandardMaterial, PlanetWaterShader>;
 
 /// The planet's terrain: the flat map's toon ground on the sphere (`planet_terrain.wesl`).
 /// Meshes carry the face's cell coordinates (UV0), and the ground materials from the climate:
