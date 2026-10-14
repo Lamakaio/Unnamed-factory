@@ -287,9 +287,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     continent along a great circle; continents colliding for `WELD_STEPS` steps weld (same
     motion). Outputs crust, plate, oceanic age, uplift and its age. Previews:
     `tectonics_preview` (frames over the history), `tectonics_stats`.
-    `PlanetSettings::history` (preview `--history`) shapes the planet from it: continents from
+    `PlanetSettings::history` (the default; preview `--no-history` for the noise version) shapes the planet from it: continents from
     the crust (noise details the coasts), young uplift → belts / foothills / island arcs, old
-    uplift → worn ranges, young ocean floor → ridges. Not the default yet.
+    uplift → worn ranges, young ocean floor → ridges; ridges run along belts (`across` from the
+    belt strength's contours).
   - `planet_climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
     were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,

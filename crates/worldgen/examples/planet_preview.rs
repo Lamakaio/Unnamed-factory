@@ -1,6 +1,6 @@
 //! Planet previews: a shaded relief map (equirectangular), two globe views and the plates.
 //!
-//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [--coarse <steps>] [seeds...]`
+//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [--coarse <steps>] [--no-history] [seeds...]`
 //!
 //! Writes `<seed>_map.png`, `<seed>_globes.png` and `<seed>_plates.png` (continental plates
 //! bright, oceanic dark, land brightest, ranges darkened), and prints the
@@ -23,13 +23,13 @@ fn main() {
     std::fs::create_dir_all(&out).unwrap();
     let mut n = PlanetSettings::default().n;
     let mut coarse_steps = PlanetSettings::default().coarse_steps;
-    let mut history = None;
+    let mut history = PlanetSettings::default().history;
     let mut seeds = Vec::new();
     while let Some(arg) = args.next() {
         if arg == "--n" {
             n = args.next().unwrap().parse().unwrap();
-        } else if arg == "--history" {
-            history = Some(worldgen::tectonics::TectonicSettings::default());
+        } else if arg == "--no-history" {
+            history = None;
         } else if arg == "--coarse" {
             coarse_steps = args.next().unwrap().parse().unwrap();
         } else {

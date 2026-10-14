@@ -107,7 +107,7 @@ impl Default for PlanetSettings {
             land_fraction: 0.3,
             plate_count: 12,
             continental_plates: 0.4,
-            history: None,
+            history: Some(crate::tectonics::TectonicSettings::default()),
             province_cells: 8_000.,
             province_weights: [0.35, 0.45, 0.2],
             province_blend: flat.province_blend,
