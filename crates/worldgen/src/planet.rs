@@ -404,7 +404,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
                             .trench
                             .max(collision * (-(x / (width * 0.35)).powi(2)).exp());
                     } else {
-                        let offset = (x - width * 0.7) / (width * 0.35);
+                        let offset = (x - width * 0.7) / (width * 0.22);
                         boundary.arc = boundary.arc.max(collision * (-offset * offset).exp());
                     }
                 }
@@ -418,8 +418,11 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
                 boundary.ridge = boundary.ridge.max(divergence * (-(x / (width * 2.)).powi(2)).exp());
             }
         }
-        // Island arcs: a chain of volcanic islands, rising through the crust value.
-        let volcanoes = smoothstep(0.55, 0.85, arcs.ridged3(p / 14., 3));
+        // Island arcs: a sparse chain of volcanic islands (scattered peaks, with long gaps
+        // along the arc), rising through the crust value.
+        let peaks_here = smoothstep(0.78, 0.95, arcs.ridged3(p / 16., 2));
+        let stretches = smoothstep(0.05, 0.35, arcs.layer(1).fbm3(p / 70., 2));
+        let volcanoes = peaks_here * stretches;
         let crust = base + outline + boundary.arc * volcanoes * 1.2;
         (a as u16, crust, boundary)
     });
