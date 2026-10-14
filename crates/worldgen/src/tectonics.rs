@@ -154,7 +154,8 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
         .collect();
     let mut events = Vec::new();
     // Plate pairs colliding (steps in a row), and plates welded to another (moving with it).
-    let mut welding: std::collections::HashMap<(u16, u16), usize> = Default::default();
+    // (Ordered maps: plates weld in the same order on every run.)
+    let mut welding: std::collections::BTreeMap<(u16, u16), usize> = Default::default();
     let mut welded: Vec<(u16, u16)> = Vec::new();
 
     for step in 0..settings.steps {
@@ -218,7 +219,7 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
         });
         let mut owner = vec![u16::MAX; cells];
         // Continental collision cells between each pair of plates this step.
-        let mut collisions: std::collections::HashMap<(u16, u16), usize> = Default::default();
+        let mut collisions: std::collections::BTreeMap<(u16, u16), usize> = Default::default();
         for i in 0..cells {
             let claims = &claims[i];
             if claims.is_empty() {
