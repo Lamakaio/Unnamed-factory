@@ -15,7 +15,7 @@ fn main() {
         seed: args[1] as u64,
         ..Default::default()
     });
-    let surface = PlanetSurface::new(&planet);
+    let surface = PlanetSurface::new(&planet, None);
     for dlat in [-1.5f32, -0.75, 0., 0.75, 1.5] {
         let mut line = String::new();
         for dlon in [-1.5f32, -0.75, 0., 0.75, 1.5] {

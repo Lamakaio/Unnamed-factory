@@ -276,6 +276,18 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     passes run on all cores (`par_map`); provinces and blocks are found through a coarse
     `PointIndex`. Landforms are sized in cells (radius `2n/π` cells; n = 1024 is the target
     planet, 256 the fast default for previews).
+  - `planet_climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
+    PlanetClimate`, twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
+    were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,
+    ice albedo, ocean/land heat capacity, implicit diffusive transport weaker over land,
+    rule-based ocean current anomalies), winds from pressure belts around the ITCZ (plus warm
+    land lows) turned by Coriolis, moisture evaporated, advected semi-Lagrangian and rained out
+    by terrain uplift, convergence and saturation (sinking air dry). `Koppen::classify`, and
+    `PlanetClimate::koppen_at(direction, height)` (bilinear months, lapse rate with
+    `meters_per_unit` = 100). Tuned on the zonal means printed by `climate_preview`
+    (`--example climate_preview -- <out_dir> [--n] [seeds]`, also Köppen / rain / January and
+    July temperature maps). In the game the ground colour is the cell's Köppen
+    `ground_color` (`PlanetSurface::ground`), sand at the water's edge.
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
     `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png` (continental plates

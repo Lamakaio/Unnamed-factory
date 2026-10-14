@@ -34,6 +34,7 @@ mod mouths;
 pub mod noise;
 mod par;
 pub mod planet;
+pub mod planet_climate;
 pub mod planet_rivers;
 mod rivers;
 mod terrain;

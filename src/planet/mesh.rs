@@ -115,7 +115,7 @@ impl Builder<'_> {
                 }
                 self.normals.push(normal.to_array());
                 let height = self.surface.height(face, p);
-                self.colors.push(relief_colour(height, 0.));
+                self.colors.push(ground_colour(self.surface, face, p, height));
             }
         }
         let index = |x: usize, z: usize| first + (z * N + x) as u32;
@@ -165,7 +165,29 @@ impl Builder<'_> {
     }
 }
 
-/// Ground colour by height (as the planet previews, until biomes come with the climate).
+/// Ground colour: the climate's (by Köppen class) on land, sand at the water's edge and under
+/// shallow water, darkening with depth; by height without a climate.
+fn ground_colour(surface: &PlanetSurface, face: usize, p: Vec2, height: f32) -> [f32; 4] {
+    let Some(ground) = &surface.ground else {
+        return relief_colour(height, 0.);
+    };
+    let land = Vec3::from(ground.each_ref().map(|field| field.bilinear(face, p)));
+    let sand = Vec3::from(Color::srgb(0.78, 0.72, 0.55).to_linear().to_f32_array_no_alpha());
+    let deep = Vec3::from(Color::srgb(0.2, 0.22, 0.25).to_linear().to_f32_array_no_alpha());
+    let colour = if height < 0. {
+        sand.lerp(deep, (-height / 10.).clamp(0., 1.))
+    } else {
+        sand.lerp(land, smoothstep(0.05, 0.35, height))
+    };
+    [colour.x, colour.y, colour.z, 1.]
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+/// Ground colour by height (as the planet previews).
 fn relief_colour(height: f32, lake: f32) -> [f32; 4] {
     let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
         let t = t.clamp(0., 1.);

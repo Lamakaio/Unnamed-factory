@@ -13,6 +13,7 @@ use crate::{
     heightmap::catmull_rom,
     noise::{Noise, smoothstep},
     planet::Planet,
+    planet_climate::PlanetClimate,
     planet_rivers::PlanetRiver,
     sphere::{FACES, SphereGrid},
 };
@@ -107,6 +108,9 @@ pub struct PlanetSurface {
     pub lake_depth: FaceField,
     pub ruggedness: FaceField,
     pub calm: FaceField,
+    /// Ground colour of each cell (linear RGB), from its climate (Köppen class at its altitude);
+    /// `None` without a climate.
+    pub ground: Option<[FaceField; 3]>,
     /// The rivers, their water levels kept under the surface across their channel.
     pub rivers: Vec<PlanetRiver>,
     channels: Channels,
@@ -119,9 +123,21 @@ pub struct PlanetSurface {
 }
 
 impl PlanetSurface {
-    pub fn new(planet: &Planet) -> Self {
+    pub fn new(planet: &Planet, climate: Option<&PlanetClimate>) -> Self {
         let flat = WorldgenSettings::default();
+        let ground = climate.map(|climate| {
+            let colours: Vec<[f32; 3]> = crate::par::map(planet.grid.len(), |i| {
+                let [r, g, b] = climate
+                    .koppen_at(planet.grid.direction(i), planet.heights[i])
+                    .ground_color();
+                [r, g, b].map(srgb_to_linear)
+            });
+            [0, 1, 2].map(|k| {
+                FaceField::new(planet, &colours.iter().map(|c| c[k]).collect::<Vec<_>>())
+            })
+        });
         let mut surface = Self {
+            ground,
             rivers: Vec::new(),
             channels: Channels::default(),
             n: planet.grid.n(),
@@ -378,4 +394,9 @@ impl Channels {
 /// Distance from a river's axis where its banks end.
 fn reach(width: f32) -> f32 {
     width / 2. + MAX_BANK.max(width * BANK_PER_WIDTH)
+}
+
+/// sRGB component to linear.
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }

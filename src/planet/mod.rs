@@ -16,6 +16,7 @@ use bevy::{
 };
 use worldgen::{
     planet::{PlanetSettings, generate_planet},
+    planet_climate::{ClimateSettings, simulate},
     sphere::FACES,
     surface::PlanetSurface,
 };
@@ -80,7 +81,8 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             n,
             ..default()
         });
-        let surface = PlanetSurface::new(&planet);
+        let climate = simulate(&planet, &ClimateSettings::default());
+        let surface = PlanetSurface::new(&planet, Some(&climate));
         info!(
             "Planet generated in {:.1?} ({} cells, radius {:.0}): {:?}",
             start.elapsed(),
