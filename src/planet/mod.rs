@@ -3,12 +3,12 @@
 //! (meshed in the background with a level of detail following the camera, see [`mesh`]) and
 //! a sea sphere. The flat map (`map`) is not loaded in this mode.
 
+mod camera;
 mod mesh;
 
 use std::{sync::Arc, time::Instant};
 
 use bevy::{
-    camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamera,
     pbr::AtmosphereSettings,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
@@ -29,7 +29,7 @@ const MAX_MESH_TASKS: usize = 8;
 /// (and at least by this many world units).
 const REMESH_MOVE_RATIO: f32 = 0.25;
 const REMESH_MIN_MOVE: f32 = 4.;
-/// The camera starts this many planet radii from the centre.
+/// The camera starts this many planet radii from the surface.
 const START_DISTANCE: f32 = 2.6;
 
 pub struct PlanetPlugin {
@@ -48,6 +48,9 @@ impl Plugin for PlanetPlugin {
                 (
                     finish_generation.run_if(in_state(AppState::Loading)),
                     (schedule_chunk_meshes, finish_chunk_meshes)
+                        .chain()
+                        .run_if(in_state(AppState::InGame)),
+                    (camera::control, camera::apply, camera::follow_sun)
                         .chain()
                         .run_if(in_state(AppState::InGame)),
                 ),
@@ -180,19 +183,38 @@ fn spawn_planet(
     ));
 }
 
-/// Look at the planet from orbit; space has no atmosphere nor fog (the flat map's assume a
-/// ground plane).
+/// Look at the planet from orbit, with the planet camera; space has no atmosphere nor fog
+/// (the flat map's assume a ground plane).
 fn view_planet(
     mut commands: Commands,
     world: Res<PlanetWorld>,
-    camera: Single<(Entity, &mut Transform, &mut PanOrbitCamera)>,
+    camera: Single<Entity, With<Camera3d>>,
 ) {
-    let (entity, mut transform, mut controller) = camera.into_inner();
-    let distance = world.surface.radius * START_DISTANCE;
-    *transform = Transform::from_xyz(0., distance * 0.35, distance).looking_at(Vec3::ZERO, Vec3::Y);
-    controller.last_anchor_depth = -f64::from(distance);
+    let mut focus = Vec3::new(0., 0.35, 1.);
+    let mut distance = world.surface.radius * START_DISTANCE;
+    let mut pitch = None;
+    // `UF_PLANET_CAMERA=longitude,latitude[,distance[,pitch]]` (degrees, world units): the
+    // starting view, for screenshots.
+    if let Ok(view) = std::env::var("UF_PLANET_CAMERA") {
+        let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if let [longitude, latitude, ..] = values[..] {
+            let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
+            focus = Vec3::new(
+                latitude.cos() * longitude.cos(),
+                latitude.sin(),
+                latitude.cos() * longitude.sin(),
+            );
+        }
+        if let [_, _, d, ..] = values[..] {
+            distance = d;
+        }
+        if let [_, _, _, p] = values[..] {
+            pitch = Some(p.to_radians());
+        }
+    }
+    camera::take_over(&mut commands, *camera, focus, distance, pitch);
     commands
-        .entity(entity)
+        .entity(*camera)
         .remove::<(AtmosphereSettings, DistanceFog)>();
 }
 

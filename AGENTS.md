@@ -292,7 +292,14 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
   colour by height for now), re-meshed when the camera moved by 25% of their distance. The
-  sea is a translucent sphere; the camera starts in orbit with no atmosphere or fog.
+  sea is a translucent sphere. The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
+  pan-orbit controller) looks at a focus point on the surface from a distance, with a
+  tangent forward direction parallel-transported as the focus moves (no flip at the poles);
+  right drag orbits, middle drag / arrows move the focus, wheel zooms; far out it looks
+  straight down; it stays above the ground and fits its clip planes to the view. No
+  atmosphere or fog. The sun follows the view (low afternoon sun over the focus, F turns
+  it) until the planet has a day cycle. `UF_PLANET_CAMERA=lon,lat[,distance[,pitch°]]` sets
+  the starting view (screenshots).
 - In the game, `map::start_generation` runs `worldgen::generate` plus `TerrainHeights::new` on
   the `AsyncComputeTaskPool`. `finish_generation` polls the task with `check_ready`, inserts
   `Map` (`Map.continent` is the `worldgen::Continent`), and enters `AppState::InGame`.

@@ -118,6 +118,12 @@ impl PlanetSurface {
         self.direction(face, p) * (self.radius + self.height(face, p))
     }
 
+    /// Height above sea level in a direction from the planet's centre.
+    pub fn height_at(&self, direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        self.height(face, p)
+    }
+
     /// The face and cell coordinates of a direction.
     pub fn face_coords(&self, direction: Vec3) -> (usize, Vec2) {
         self.grid.face_coords(direction)

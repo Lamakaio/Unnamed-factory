@@ -14,6 +14,7 @@ pub struct EnvironmentPlugin;
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(DirectionalLightShadowMap { size: 4096 })
+            .init_resource::<SunTurn>()
             .add_systems(Startup, spawn_environment)
             .add_systems(Update, rotate_sun.run_if(input_pressed(KeyCode::KeyF)));
     }
@@ -21,7 +22,12 @@ impl Plugin for EnvironmentPlugin {
 
 /// Marker for the directional light acting as the sun.
 #[derive(Component)]
-struct Sun;
+pub struct Sun;
+
+/// How far the sun was turned with F (radians), for views that place the sun themselves
+/// (the planet's).
+#[derive(Resource, Default)]
+pub struct SunTurn(pub f32);
 
 /// Sun rotation speed while F is held, in radians per second.
 const SUN_ROTATION_SPEED: f32 = 1.;
@@ -58,6 +64,7 @@ fn spawn_environment(
     ));
 }
 
-fn rotate_sun(mut sun: Single<&mut Transform, With<Sun>>, time: Res<Time>) {
+fn rotate_sun(mut sun: Single<&mut Transform, With<Sun>>, mut turn: ResMut<SunTurn>, time: Res<Time>) {
     sun.rotate_axis(Dir3::Z, time.delta_secs() * SUN_ROTATION_SPEED);
+    turn.0 += time.delta_secs() * SUN_ROTATION_SPEED;
 }
