@@ -308,6 +308,11 @@ impl PlanetSurface {
         self.grid.face_coords(direction)
     }
 
+    /// Seed of the surface's details (for things placed on it).
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
     /// Number of cells (for checks).
     pub fn cells(&self) -> usize {
         self.grid.len()

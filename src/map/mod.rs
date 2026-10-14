@@ -16,7 +16,7 @@ mod mesh;
 mod rivers;
 mod spatial;
 mod springs;
-mod vegetation;
+pub(crate) mod vegetation;
 mod sea;
 pub(crate) mod water;
 

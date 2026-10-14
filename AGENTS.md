@@ -337,7 +337,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   domes, fades at the sea, lakes and junctions), then rebuilt as ribbons on the sphere; flow in
   UV0, (whitewater, opacity) in UV1. Lakes are per-face cell squares with a corner under a lake,
   at the water level; the sea is a per-face grid at sea level, subdivided so it sags less than
-  `SEA_SAG`. Coasts are shaped as on
+  `SEA_SAG`. `planet/vegetation.rs` places the flat map's trees, rocks and ground cover
+  (`map::vegetation`'s species, rules, models and LODs, shared through
+  `VegetationModelsPlugin`; instances carry a full rotation, upright on the sphere) on each
+  terrain chunk's face cells: large things within `PLACE_DISTANCE` (merged LOD2, dropped past
+  `DROP_DISTANCE`), ground cover when a chunk comes near. Biomes come from the climate's ground
+  weights (forest weight through a groves noise, conifers where cold), beaches below
+  `BEACH_HEIGHT`, rock on steep cells. Grass sway still bends along world x/z. Coasts are shaped as on
   the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);

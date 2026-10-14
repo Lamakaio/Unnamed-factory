@@ -47,33 +47,33 @@ pub const METERS_TO_WORLD: f32 = 0.05;
 
 /// LOD0 (textured) models show within this distance of the camera, cross-fading with the
 /// merged LOD1 stand-ins over ± [`LOD_FADE`].
-const LOD0_DISTANCE: f32 = 20.;
-const LOD_FADE: f32 = 2.;
+pub(crate) const LOD0_DISTANCE: f32 = 20.;
+pub(crate) const LOD_FADE: f32 = 2.;
 /// Ground cover fades out between these distances.
-const GROUND_FADE: (f32, f32) = (14., 18.);
+pub(crate) const GROUND_FADE: (f32, f32) = (14., 18.);
 /// LOD0 entities are spawned within their visible distance plus this margin, and despawned
 /// beyond it plus twice the margin.
-const SPAWN_MARGIN: f32 = 3.;
+pub(crate) const SPAWN_MARGIN: f32 = 3.;
 /// Most LOD0 entities spawned per frame.
-const SPAWNS_PER_FRAME: usize = 600;
+pub(crate) const SPAWNS_PER_FRAME: usize = 600;
 /// Chunks closer than this (camera to the chunk, world units) show the merged LOD1 mesh
 /// instead of the LOD2 one; leaving takes a margin more, against flickering.
-const NEAR_DISTANCE: f32 = 90.;
-const LEVEL_MARGIN: f32 = 15.;
+pub(crate) const NEAR_DISTANCE: f32 = 90.;
+pub(crate) const LEVEL_MARGIN: f32 = 15.;
 /// Placement grid cells (world units) for large things and for ground cover.
-const LARGE_CELL: f32 = 0.45;
-const GROUND_CELL: f32 = 0.28;
+pub(crate) const LARGE_CELL: f32 = 0.45;
+pub(crate) const GROUND_CELL: f32 = 0.28;
 /// Placement grid cell of the tall grass patches, and the share of the ground they cover.
-const PATCH_CELL: f32 = 0.18;
-const PATCH_COVER: f32 = 0.3;
+pub(crate) const PATCH_CELL: f32 = 0.18;
+pub(crate) const PATCH_COVER: f32 = 0.3;
 /// Snow on objects: from this far below the terrain's snow line (where the ground is fully
 /// snowy) to the line itself.
 const SNOW_FADE: f32 = 2.;
 /// Background tasks at once (placement, near meshes).
-const MAX_TASKS: usize = 4;
+pub(crate) const MAX_TASKS: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
+pub(crate) enum Kind {
     Tree,
     Bush,
     Rock,
@@ -83,7 +83,7 @@ enum Kind {
 
 impl Species {
     /// Grass-like species bend in the wind (`SwayToonMaterial`).
-    fn sways(&self) -> bool {
+    pub(crate) fn sways(&self) -> bool {
         matches!(
             self.name,
             "tall_grass" | "dry_tall_grass" | "reeds" | "wispy_grass" | "grass_a" | "grass_b"
@@ -93,12 +93,12 @@ impl Species {
 
 impl Kind {
     /// Kinds with low-poly stand-ins (LOD1 and LOD2).
-    fn has_stand_ins(self) -> bool {
+    pub(crate) fn has_stand_ins(self) -> bool {
         self != Kind::Ground
     }
 
     /// Steepest ground (1 - normal.y) it grows or lies on.
-    fn max_steepness(self) -> f32 {
+    pub(crate) fn max_steepness(self) -> f32 {
         match self {
             Kind::Tree | Kind::Ground => 0.25,
             Kind::Bush | Kind::Wood => 0.35,
@@ -107,15 +107,15 @@ impl Kind {
     }
 }
 
-struct Species {
+pub(crate) struct Species {
     /// Model file prefix in `assets/models/nature`.
-    name: &'static str,
-    kind: Kind,
+    pub(crate) name: &'static str,
+    pub(crate) kind: Kind,
     /// Random scale range (on top of [`METERS_TO_WORLD`]).
-    scale: (f32, f32),
+    pub(crate) scale: (f32, f32),
 }
 
-const SPECIES: &[Species] = &[
+pub(crate) const SPECIES: &[Species] = &[
     // Kenney Nature Kit (low poly, recoloured): the bulk of the forests and rocks.
     Species { name: "oak_round", kind: Kind::Tree, scale: (0.8, 1.2) },
     Species { name: "oak_detailed", kind: Kind::Tree, scale: (0.8, 1.2) },
@@ -177,7 +177,7 @@ const SPECIES: &[Species] = &[
 ];
 
 /// Probability per large placement cell of each species, by biome.
-fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
+pub(crate) fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
     match biome {
         Biome::DeciduousForest => &[
             ("oak_round", 0.2),
@@ -265,7 +265,7 @@ fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
 }
 
 /// Probability per patch cell of each tall grass species, by biome (only inside patches).
-fn patch_rules(biome: Biome) -> &'static [(&'static str, f32)] {
+pub(crate) fn patch_rules(biome: Biome) -> &'static [(&'static str, f32)] {
     match biome {
         Biome::Meadow => &[("tall_grass", 0.45), ("wispy_grass", 0.12)],
         Biome::Steppe => &[("dry_tall_grass", 0.5)],
@@ -276,7 +276,7 @@ fn patch_rules(biome: Biome) -> &'static [(&'static str, f32)] {
 }
 
 /// Probability per ground cover cell of each species, by biome.
-fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
+pub(crate) fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
     match biome {
         Biome::DeciduousForest => &[("fern", 0.18), ("plant", 0.04), ("mushrooms", 0.02)],
         Biome::ConiferForest => &[("fern", 0.1), ("mushrooms", 0.02)],
@@ -297,7 +297,7 @@ fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
     }
 }
 
-fn species_index(name: &str) -> u16 {
+pub(crate) fn species_index(name: &str) -> u16 {
     SPECIES
         .iter()
         .position(|s| s.name == name)
@@ -308,17 +308,27 @@ pub struct VegetationPlugin;
 
 impl Plugin for VegetationPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(VegetationModelsPlugin).add_systems(
+            Update,
+            (start_placement, finish_placement, update_levels, update_details)
+                .chain()
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_exists::<Vegetation>),
+        );
+    }
+}
+
+/// Loads the nature models and prepares them ([`Vegetation`]) once the world exists (the flat
+/// map or the planet).
+pub struct VegetationModelsPlugin;
+
+impl Plugin for VegetationModelsPlugin {
+    fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_models).add_systems(
             Update,
-            (
-                prepare_models
-                    .run_if(not(resource_exists::<Vegetation>))
-                    .run_if(resource_exists::<Map>),
-                (start_placement, finish_placement, update_levels, update_details)
-                    .chain()
-                    .run_if(in_state(AppState::InGame))
-                    .run_if(resource_exists::<Vegetation>),
-            ),
+            prepare_models
+                .run_if(not(resource_exists::<Vegetation>))
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -344,14 +354,14 @@ fn load_models(mut commands: Commands, asset_server: Res<AssetServer>) {
 type Part = (Handle<Mesh>, PartMaterial);
 
 #[derive(Clone)]
-enum PartMaterial {
+pub(crate) enum PartMaterial {
     Toon(Handle<ToonMaterial>),
     Sway(Handle<SwayToonMaterial>),
 }
 
 /// Geometry of a stand-in, merged into the chunks' meshes.
 #[derive(Default)]
-struct StandIn {
+pub(crate) struct StandIn {
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     colors: Vec<[f32; 4]>,
@@ -360,16 +370,17 @@ struct StandIn {
 
 /// The loaded vegetation models, ready to place.
 #[derive(Resource)]
-struct Vegetation {
+pub(crate) struct Vegetation {
     lod0: Vec<Vec<Part>>,
-    lod1: Arc<Vec<StandIn>>,
-    lod2: Arc<Vec<StandIn>>,
-    far_material: Handle<ToonMaterial>,
-    near_material: Handle<LodToonMaterial>,
+    pub(crate) lod1: Arc<Vec<StandIn>>,
+    pub(crate) lod2: Arc<Vec<StandIn>>,
+    pub(crate) far_material: Handle<ToonMaterial>,
+    pub(crate) near_material: Handle<LodToonMaterial>,
 }
 
 /// Once every model is loaded, convert their materials to toon materials and extract the
-/// stand-in geometry.
+/// stand-in geometry. Snow on objects follows the flat map's snow line (none on the planet:
+/// heights are radial there).
 fn prepare_models(
     mut commands: Commands,
     models: Option<Res<VegetationModels>>,
@@ -381,13 +392,20 @@ fn prepare_models(
     mut toon_materials: ResMut<Assets<ToonMaterial>>,
     mut lod_materials: ResMut<Assets<LodToonMaterial>>,
     mut sway_materials: ResMut<Assets<SwayToonMaterial>>,
-    map: Res<Map>,
+    map: Option<Res<Map>>,
 ) {
-    // Matches the terrain's snow (ground textures: from temperature 0.12 to 0.04).
-    let snow_line = map.continent.settings.snow_line;
-    let snow = Vec4::new(0.88 * snow_line - SNOW_FADE, 0.93 * snow_line, 0., 0.);
-    let wind = Vec2::from_angle(map.continent.wind_angle);
-    let wind = Vec4::new(wind.x, wind.y, 0., 0.);
+    let (snow, wind) = match map {
+        Some(map) => {
+            // Matches the terrain's snow (ground textures: from temperature 0.12 to 0.04).
+            let snow_line = map.continent.settings.snow_line;
+            let wind = Vec2::from_angle(map.continent.wind_angle);
+            (
+                Vec4::new(0.88 * snow_line - SNOW_FADE, 0.93 * snow_line, 0., 0.),
+                Vec4::new(wind.x, wind.y, 0., 0.),
+            )
+        }
+        None => (Vec4::ZERO, Vec4::new(1., 0., 0., 0.)),
+    };
     let Some(models) = models else {
         return;
     };
@@ -512,17 +530,17 @@ fn append_mesh(stand_in: &mut StandIn, mesh: &Mesh) {
 
 /// One placed tree, bush, rock...
 #[derive(Clone, Copy)]
-struct Instance {
-    species: u16,
-    position: Vec3,
-    yaw: f32,
-    scale: f32,
+pub(crate) struct Instance {
+    pub(crate) species: u16,
+    pub(crate) position: Vec3,
+    pub(crate) rotation: Quat,
+    pub(crate) scale: f32,
 }
 
 impl Instance {
     fn transform(&self) -> Transform {
         Transform::from_translation(self.position)
-            .with_rotation(Quat::from_rotation_y(self.yaw))
+            .with_rotation(self.rotation)
             .with_scale(Vec3::splat(self.scale))
     }
 }
@@ -604,7 +622,7 @@ impl Placement {
                 instances.push(Instance {
                     species,
                     position: Vec3::new(p.x, sample.height - sink, p.y),
-                    yaw: random(x, z, 5) * std::f32::consts::TAU,
+                    rotation: Quat::from_rotation_y(random(x, z, 5) * std::f32::consts::TAU),
                     scale,
                 });
             }
@@ -640,7 +658,7 @@ impl Placement {
                 instances.push(Instance {
                     species: species_index(name),
                     position: at.extend(self.heights.height(at) - 0.08).xzy(),
-                    yaw: (-back).to_angle() + (p.x * 7.3).sin() * 0.5,
+                    rotation: Quat::from_rotation_y((-back).to_angle() + (p.x * 7.3).sin() * 0.5),
                     scale: METERS_TO_WORLD * scale,
                 });
             }
@@ -655,7 +673,7 @@ const SPRING_ROCK_SCALE: f32 = 5.;
 /// The stand-ins of `instances` merged into one mesh, relative to `origin`. With
 /// `with_origins`, each vertex also carries its instance's world origin (UV0 = x, z;
 /// UV1.x = y), for the per-object fade of [`LodToonMaterial`].
-fn merged_mesh(
+pub(crate) fn merged_mesh(
     stand_ins: &[StandIn],
     instances: &[Instance],
     origin: Vec3,
@@ -668,7 +686,7 @@ fn merged_mesh(
         if stand_in.positions.is_empty() {
             continue;
         }
-        let rotation = Quat::from_rotation_y(instance.yaw);
+        let rotation = instance.rotation;
         let first = merged.positions.len() as u32;
         merged.positions.extend(
             stand_in
@@ -976,40 +994,47 @@ fn update_details(
                     continue;
                 }
                 budget -= 1;
-                let range = if ground {
-                    GROUND_FADE.0..GROUND_FADE.1
-                } else {
-                    LOD0_DISTANCE - LOD_FADE..LOD0_DISTANCE + LOD_FADE
-                };
-                let entities = vegetation.lod0[instance.species as usize]
-                    .iter()
-                    .map(|(mesh, material)| {
-                        let mut entity = commands.spawn((
-                            Mesh3d(mesh.clone()),
-                            instance.transform(),
-                            VisibilityRange {
-                                start_margin: 0.0..0.0,
-                                end_margin: range.clone(),
-                                use_aabb: false,
-                            },
-                            Pickable::IGNORE,
-                        ));
-                        match material {
-                            PartMaterial::Toon(material) => {
-                                entity.insert(MeshMaterial3d(material.clone()))
-                            }
-                            PartMaterial::Sway(material) => {
-                                entity.insert(MeshMaterial3d(material.clone()))
-                            }
-                        };
-                        if ground {
-                            entity.insert(NotShadowCaster);
-                        }
-                        entity.id()
-                    })
-                    .collect();
+                let entities = spawn_lod0(&mut commands, &vegetation, instance, ground);
                 state.spawned.insert(index, entities);
             }
         }
     }
+}
+
+/// Spawn the LOD0 model of an instance (its parts), cross-fading out at its LOD distance
+/// (ground cover: fading out, casting no shadow).
+pub(crate) fn spawn_lod0(
+    commands: &mut Commands,
+    vegetation: &Vegetation,
+    instance: &Instance,
+    ground: bool,
+) -> Vec<Entity> {
+    let range = if ground {
+        GROUND_FADE.0..GROUND_FADE.1
+    } else {
+        LOD0_DISTANCE - LOD_FADE..LOD0_DISTANCE + LOD_FADE
+    };
+    vegetation.lod0[instance.species as usize]
+        .iter()
+        .map(|(mesh, material)| {
+            let mut entity = commands.spawn((
+                Mesh3d(mesh.clone()),
+                instance.transform(),
+                VisibilityRange {
+                    start_margin: 0.0..0.0,
+                    end_margin: range.clone(),
+                    use_aabb: false,
+                },
+                Pickable::IGNORE,
+            ));
+            match material {
+                PartMaterial::Toon(material) => entity.insert(MeshMaterial3d(material.clone())),
+                PartMaterial::Sway(material) => entity.insert(MeshMaterial3d(material.clone())),
+            };
+            if ground {
+                entity.insert(NotShadowCaster);
+            }
+            entity.id()
+        })
+        .collect()
 }
