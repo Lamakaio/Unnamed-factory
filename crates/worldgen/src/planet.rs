@@ -440,6 +440,9 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             let ocean_age = t.grid.bilinear(&fields.age, direction);
             let continental = crust > 0.5;
             boundary.belt = if continental { smoothstep(0.06, 0.6, young) } else { 0. };
+            // (Ridges run parallel to the belt: the belt's strength falls steadily from its
+            // axis, so its contours stand in for the distance across it.)
+            boundary.across = (1. - smoothstep(0.03, 0.9, young)) * width * 1.4;
             boundary.foothills = if continental { smoothstep(0.01, 0.15, young) } else { 0. };
             boundary.arc = if continental { 0. } else { smoothstep(0.1, 0.6, young) };
             boundary.ridge = if continental { 0. } else { (-ocean_age / 4.).exp() };
