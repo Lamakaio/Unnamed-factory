@@ -19,7 +19,10 @@ use worldgen::{
     surface::PlanetSurface,
 };
 
-use crate::AppState;
+use crate::{
+    AppState,
+    shaders::{ToonMaterial, ToonShader},
+};
 
 /// Chunk side, in cells of the planet's grid.
 pub const CHUNK_CELLS: usize = 64;
@@ -133,21 +136,30 @@ struct ChunkMeshTask {
     camera: Vec3,
 }
 
-/// Material of the planet's terrain (vertex colours for now).
+/// Material of the planet's terrain: the vertex colours with the toon lighting of the
+/// vegetation (`toon.wesl`), its snow off (it goes by world height, which means nothing on a
+/// sphere: the colours whiten the summits instead).
 #[derive(Resource)]
-struct TerrainMaterial(Handle<StandardMaterial>);
+struct TerrainMaterial(Handle<ToonMaterial>);
 
 fn spawn_planet(
     mut commands: Commands,
     world: Res<PlanetWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut toon_materials: ResMut<Assets<ToonMaterial>>,
 ) {
     let surface = &world.surface;
-    let material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 0.95,
-        ..default()
+    let material = toon_materials.add(ToonMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.95,
+            ..default()
+        },
+        extension: ToonShader {
+            tint: LinearRgba::WHITE,
+            snow: Vec4::ZERO,
+        },
     });
     commands.insert_resource(TerrainMaterial(material));
     let chunks_per_side = surface.n.div_ceil(CHUNK_CELLS);

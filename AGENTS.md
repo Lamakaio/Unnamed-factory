@@ -291,7 +291,7 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   sphere), and spawns `PlanetChunk`s (64 × 64 cells of a face, meshed relative to their sea
   level point) meshed in background tasks (≤ 8) with a quadtree LOD (`planet/mesh.rs`:
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
-  colour by height for now), re-meshed when the camera moved by 25% of their distance. The
+  colour by height for now, drawn with the toon `ToonMaterial`, snow off), re-meshed when the camera moved by 25% of their distance. The
   sea is a translucent sphere. The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);
