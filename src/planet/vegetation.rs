@@ -22,6 +22,7 @@ use bevy::{
 use worldgen::{
     Biome,
     noise::{Noise, hash, smoothstep},
+    planet_springs::PlanetSpringKind,
     surface::PlanetSurface,
 };
 
@@ -42,6 +43,9 @@ const PLACE_DISTANCE: f32 = 260.;
 const DROP_DISTANCE: f32 = 320.;
 /// Ground this close above sea level is beach.
 const BEACH_HEIGHT: f32 = 0.2;
+/// Scale of the rock a hillside spring comes out of (on top of [`METERS_TO_WORLD`]), as on the
+/// flat map.
+const SPRING_ROCK_SCALE: f32 = 5.;
 
 /// Places and draws the planet's vegetation once the models are ready.
 pub(super) struct PlanetVegetationPlugin;
@@ -151,7 +155,8 @@ fn start_placement(
     for (_, entity, chunk, origin) in candidates.into_iter().take(available) {
         let (surface, stand_ins) = (world.surface.clone(), vegetation.lod2.clone());
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let large = place(&surface, &chunk, LARGE_CELL, 1, large_rules, false);
+            let mut large = place(&surface, &chunk, LARGE_CELL, 1, large_rules, false);
+            large.extend(spring_rocks(&surface, &chunk));
             let far = merged_mesh(&stand_ins, &large, origin, false);
             Placed { large, far }
         });
@@ -416,6 +421,47 @@ fn place(
                 rotation: Quat::from_rotation_arc(Vec3::Y, radial)
                     * Quat::from_rotation_y(random(x, z, 5) * std::f32::consts::TAU),
                 scale,
+            });
+        }
+    }
+    instances
+}
+
+/// Rock outcrops the hillside springs of a chunk spout from (`map::vegetation::spring_rocks`):
+/// a tall rock right behind the spout (hiding its top) and boulders on both sides.
+fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
+    let (min, max) = (chunk.min - 0.5, chunk.min - 0.5 + CHUNK_CELLS as f32);
+    let mut instances = Vec::new();
+    for spring in surface.springs() {
+        let (face, p) = surface.face_coords(spring.direction);
+        if !matches!(spring.kind, PlanetSpringKind::Hillside)
+            || face != chunk.face
+            || p.cmplt(min).any()
+            || p.cmpge(max).any()
+        {
+            continue;
+        }
+        let tall = ["rock_tall_a", "rock_tall_b", "rock_tall_c", "rock_tall_d"]
+            [(p.x as usize + p.y as usize) % 4];
+        let flank = spring.width * 0.4 + 0.3;
+        for (k, (name, offset, scale)) in [
+            (tall, Vec2::new(-0.45, 0.), SPRING_ROCK_SCALE),
+            ("boulder_a", Vec2::new(-0.15, flank), SPRING_ROCK_SCALE * 0.55),
+            ("boulder_c", Vec2::new(-0.2, -flank), SPRING_ROCK_SCALE * 0.45),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let direction = spring.direction_of(offset, surface.radius);
+            let height = surface.height_at(direction) - 0.08;
+            // Upright, facing upstream, turned a little.
+            let upstream = (-spring.downstream).reject_from(direction).normalize();
+            let facing = Quat::from_mat3(&Mat3::from_cols(upstream, direction, upstream.cross(direction)));
+            instances.push(Instance {
+                species: species_index(name),
+                position: direction * (surface.radius + height),
+                rotation: facing * Quat::from_rotation_y(((p.x + k as f32) * 7.3).sin() * 0.5),
+                scale: METERS_TO_WORLD * scale,
             });
         }
     }

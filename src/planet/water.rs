@@ -8,6 +8,8 @@
 //! - lakes: per face, outlined by marching squares where the ground rises above the water (a
 //!   lake covers its extent, the lower ground connected to it and a little of the shore, not
 //!   ground beyond its rim), reaching just into the river channels at its edge;
+//! - springs (`worldgen::planet_springs`): pond surfaces the river fades in out of, and
+//!   hillside spouts (a row up in the notch, whitewater below);
 //! - the sea: a sphere at sea level, built face by face, each face with its wave field
 //!   (`worldgen::planet_sea`, a texture by cell: swell crests along the travel time to the
 //!   shore, bigger where they come with a strong wind).
@@ -31,8 +33,13 @@ use bevy::{
 };
 use half::f16;
 use worldgen::{
-    RiverEnd, RiverPoint, planet::Planet, planet_rivers::PlanetRiver, planet_sea::sea_field,
-    sphere::FACES, surface::PlanetSurface,
+    RiverEnd, RiverPoint,
+    planet::Planet,
+    planet_rivers::PlanetRiver,
+    planet_sea::sea_field,
+    planet_springs::{PlanetSpringKind, SPOUT_HEIGHT},
+    sphere::FACES,
+    surface::PlanetSurface,
 };
 
 use crate::{
@@ -53,6 +60,10 @@ const SEA_SAG: f32 = 0.02;
 const FADE_STEP: f32 = 0.5;
 /// A junction cap looks for its parent's edge this far (world units) around the junction.
 const CAP_SEARCH: f32 = 30.;
+/// Rivers fade in out of their pond over this distance; hillside springs foam on their first
+/// rows (as on the flat map).
+const POND_FADE: f32 = 0.8;
+const SPRING_FOAM: [f32; 4] = [1., 0.8, 0.55, 0.3];
 
 /// A mesh being built: positions, pattern coordinates (vertex colour), flow velocity or wind
 /// (UV0) and (whitewater, opacity) (UV1, rivers only).
@@ -457,6 +468,35 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         if rows.len() < 2 {
             continue;
         }
+        match surface.springs().iter().find(|spring| spring.river == index).map(|s| &s.kind) {
+            // Out of a pond: fading in from its rim.
+            Some(PlanetSpringKind::Pond { .. }) => {
+                let start = rows[0].along;
+                for row in &mut rows {
+                    row.fade *= smoothstep(0., POND_FADE, row.along - start);
+                }
+            }
+            // Out of the hillside: a spout from the notch, foaming.
+            Some(PlanetSpringKind::Hillside) => {
+                for (row, foam) in rows.iter_mut().zip(SPRING_FOAM) {
+                    row.foam = row.foam.max(foam);
+                }
+                let first = rows[0];
+                rows.insert(
+                    0,
+                    Row {
+                        center: first.center - first.forward * 0.4 + first.center.normalize() * SPOUT_HEIGHT,
+                        half: first.half * 0.45,
+                        along: first.along - 0.4,
+                        speed: 2.,
+                        foam: 1.,
+                        dome: 0.,
+                        ..first
+                    },
+                );
+            }
+            None => {}
+        }
         let parent = match river.end {
             RiverEnd::Junction(parent) => Some(&all_rows[parent]).filter(|rows| rows.len() >= 2),
             _ => None,
@@ -703,6 +743,29 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
     (!water.indices.is_empty()).then(|| water.build(false))
 }
 
+/// The springs' ponds: a fan from each pond's centre to its outline, just over its level.
+fn ponds_mesh(surface: &PlanetSurface) -> Option<Mesh> {
+    let mut water = Water::default();
+    for spring in surface.springs() {
+        let (PlanetSpringKind::Pond { center, .. }, Some(outline)) = (&spring.kind, spring.outline())
+        else {
+            continue;
+        };
+        let height = surface.radius + spring.level + RIVER_OFFSET;
+        let mut vertex = |local: Vec2| {
+            let direction = spring.direction_of(local, surface.radius);
+            let (face, p) = surface.face_coords(direction);
+            water.vertex(direction * height, p, wind(surface, face, p), 0., 1.)
+        };
+        let middle = vertex(*center);
+        let ring: Vec<u32> = outline.iter().map(|&q| vertex(q)).collect();
+        for k in 0..ring.len() {
+            water.indices.extend([middle, ring[k], ring[(k + 1) % ring.len()]]);
+        }
+    }
+    (!water.indices.is_empty()).then(|| water.build(false))
+}
+
 /// The sea over one face: a grid fine enough that its triangles sag less than [`SEA_SAG`].
 fn sea_mesh(surface: &PlanetSurface, face: usize) -> Mesh {
     let n = surface.n as f32;
@@ -813,6 +876,15 @@ pub fn spawn(
     };
     let start = std::time::Instant::now();
     spawn("Rivers".into(), rivers_mesh(surface), &still);
+    let ponds = surface
+        .springs()
+        .iter()
+        .filter(|spring| matches!(spring.kind, PlanetSpringKind::Pond { .. }))
+        .count();
+    info!("{} springs: {ponds} ponds, {} hillside", surface.springs().len(), surface.springs().len() - ponds);
+    if let Some(mesh) = ponds_mesh(surface) {
+        spawn("Ponds".into(), mesh, &still);
+    }
     for face in 0..FACES {
         if let Some(mesh) = lakes_mesh(surface, face) {
             spawn(format!("Lakes {face}"), mesh, &still);

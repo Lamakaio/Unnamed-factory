@@ -342,6 +342,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   also returns the un-meandered valley points (level, floodplain half-width where the river
   meanders); the cells around are lowered to water + 0.4 (lake shores kept above their lake),
   walking the grid with `planet_rivers::for_cells_within`, and calmed (no fine detail).
+  Springs (`planet_springs.rs`, the flat map's `map::springs` in the plane tangent at each
+  source: x downstream, y across): river sources off lakes and other rivers get a pond (flat
+  ground) or a hillside notch, carved after the channels in `PlanetSurface::height` (bucketed
+  in 3D; ponds count as wet). `planet/water.rs` draws the ponds (rivers fade in from the rim)
+  and hillside spouts (a raised row in the notch, whitewater below); `planet/vegetation.rs`
+  puts the flat map's rock outcrop round each spout.
   Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
   cells walked on the sphere's grid): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;

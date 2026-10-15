@@ -15,6 +15,7 @@ use crate::{
     planet::Planet,
     planet_climate::{PlanetClimate, WindField},
     planet_rivers::PlanetRiver,
+    planet_springs::{PlanetSpring, Springs, find_springs},
     sphere::{FACES, SphereGrid},
 };
 
@@ -118,6 +119,8 @@ pub struct PlanetSurface {
     /// The rivers, their water levels kept under the surface across their channel.
     pub rivers: Vec<PlanetRiver>,
     channels: Channels,
+    /// River springs (ponds, hillside notches), carved like the channels.
+    springs: Springs,
     grid: std::sync::Arc<SphereGrid>,
     seed: u32,
     /// Gully wavelength (cells), octaves and depth (world units), as on the flat map.
@@ -154,6 +157,7 @@ impl PlanetSurface {
             ground,
             rivers: Vec::new(),
             channels: Channels::default(),
+            springs: Springs::default(),
             n: planet.grid.n(),
             radius: planet.radius(),
             heights: FaceField::new(planet, &planet.heights),
@@ -204,6 +208,13 @@ impl PlanetSurface {
         }
         rivers.retain(|river| river.points.len() >= 2);
         surface.channels = Channels::new(&rivers, surface.radius);
+        let springs = find_springs(
+            &rivers,
+            surface.radius,
+            |d| surface.uncarved_height(d),
+            |d| surface.lake_depth_at(d),
+        );
+        surface.springs = Springs::new(springs, surface.radius);
         surface.rivers = rivers;
         surface
     }
@@ -217,7 +228,8 @@ impl PlanetSurface {
     /// How much of a river's channel or a lake covers a point (0..1): the beds.
     pub fn wetness(&self, face: usize, p: Vec2) -> f32 {
         let lake = smoothstep(0.02, 0.1, self.lake_depth.bilinear(face, p));
-        lake.max(self.channels.wetness(self.direction(face, p) * self.radius))
+        let world = self.direction(face, p) * self.radius;
+        lake.max(self.channels.wetness(world)).max(self.springs.carve(world, 0.).1)
     }
 
     /// Height in a direction, before the river channels are carved.
@@ -231,7 +243,8 @@ impl PlanetSurface {
     pub fn height(&self, face: usize, p: Vec2) -> f32 {
         let direction = self.direction(face, p);
         let height = self.detailed_height(face, p, direction);
-        self.channels.carve(direction * self.radius, height)
+        let world = direction * self.radius;
+        self.springs.carve(world, self.channels.carve(world, height)).0
     }
 
     /// The cells' heights with fine detail (no river channels).
@@ -350,6 +363,11 @@ impl PlanetSurface {
             wind += -uphill * turned + along * turned * wind.dot(along).signum();
         }
         (wind * exposure, strength * exposure)
+    }
+
+    /// The river springs (see `planet_springs`).
+    pub fn springs(&self) -> &[PlanetSpring] {
+        &self.springs.springs
     }
 
     /// Seed of the surface's details (for things placed on it).
