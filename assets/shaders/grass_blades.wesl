@@ -2,7 +2,10 @@
 // Bevy's mesh vertex shader (bevy_pbr render/mesh.wesl, without morph targets and skinning),
 // with each blade bending downwind by UV0.x (0 at the base, 1 at the tip), squared. The wind,
 // its gusts and the sway waves are those of the terrain's grass carpet (map_material.wesl),
-// so the blades move with the carpet around them. Used with toon.wesl as fragment shader.
+// so the blades move with the carpet around them. The bend is in the mesh's own frame (local
+// x/z = the wind's frame: world x/z on the flat map; on the planet, tiles are turned upright
+// with local x downwind), and the gust pattern runs on world x/z unless the mesh carries its
+// own (UV1: along / across the wind, continuous across tiles). Used with toon.wesl.
 
 import bevy_pbr::render::{
     mesh_functions,
@@ -48,25 +51,33 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_in.instance_index);
-    var world = mesh_functions::mesh_position_local_to_world(
+    let rest = mesh_functions::mesh_position_local_to_world(
         world_from_local,
         vec4<f32>(vertex.position, 1.0)
     );
 
     let time = globals.time;
-    let xz = world.xz;
-    let along = dot(xz, wind.xy);
-    let across = dot(xz, vec2(-wind.y, wind.x));
+    var along = dot(rest.xz, wind.xy);
+    var across = dot(rest.xz, vec2(-wind.y, wind.x));
+@if(VERTEX_UVS_B) {
+    along = vertex.uv_b.x;
+    across = vertex.uv_b.y;
+}
     let gust = smoothstep(0.05, 0.3,
         fbm2(vec2(along * 0.12 - time * GUST_SPEED * 0.12, across * 0.05)));
     let sway = 0.6 * sin(time * 3.1 + along * 3.0 + 0.8 * sin(across * 1.7))
         + 0.3 * sin(time * 5.3 + along * 7.0 + across * 2.0);
+    var local = vertex.position;
 @if(VERTEX_UVS_A) {
     let tip = vertex.uv.x * vertex.uv.x;
     let bend = (0.6 + 2.2 * gust + sway) * BEND * tip;
     // Bent blades also get a little shorter.
-    world = vec4(world.xyz + vec3(wind.x * bend, -abs(bend) * 0.3, wind.y * bend), 1.0);
+    local = local + vec3(wind.x * bend, -abs(bend) * 0.3, wind.y * bend);
 }
+    let world = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local, 1.0)
+    );
 
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);

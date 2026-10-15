@@ -1,7 +1,9 @@
 // Vertex shader of swaying vegetation (tall grass, reeds): Bevy's mesh vertex shader
 // (bevy_pbr render/mesh.wesl, without morph targets and skinning), with the model bending
 // with the wind, more the higher above its base. Gusts and a per-plant phase keep it from
-// moving in lockstep. Used with toon.wesl as fragment shader.
+// moving in lockstep. Heights are along the model's own up axis and the bend is the wind
+// projected across it, so plants stood upright on the planet bend sideways too (on the flat
+// map their up is world y). Used with toon.wesl as fragment shader.
 
 import bevy_pbr::render::{
     mesh_functions,
@@ -25,15 +27,19 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 
     // Height above the plant's base, in world units and in model units (metres).
     let origin = world_from_local[3].xyz;
-    let height = max(world.y - origin.y, 0.0);
     let scale = max(length(world_from_local[1].xyz), 1e-4);
+    let up = world_from_local[1].xyz / scale;
+    let height = max(dot(world.xyz - origin, up), 0.0);
+    let flat_wind = vec3(wind.x, 0.0, wind.y);
+    let across_up = flat_wind - up * dot(flat_wind, up);
+    let wind_dir = across_up / max(length(across_up), 1e-4);
     let metres = height / scale;
     let time = globals.time;
     let along = dot(origin.xz, wind.xy);
     let gust = 0.55 + 0.45 * sin(time * 0.36 - along * 0.12);
     let sway = (0.5 + 0.5 * sin(time * 2.4 + along * 0.9 + origin.x * 0.37)) * gust;
     let bend = height * 0.3 * min(metres, 1.5) * sway;
-    world = vec4(world.xyz + vec3(wind.x, 0.0, wind.y) * bend, 1.0);
+    world = vec4(world.xyz + wind_dir * bend, 1.0);
 
     out.world_position = world;
     out.position = position_world_to_clip(world.xyz);

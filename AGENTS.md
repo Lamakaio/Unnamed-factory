@@ -367,7 +367,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   terrain chunk's face cells: large things within `PLACE_DISTANCE` (merged LOD2, dropped past
   `DROP_DISTANCE`), ground cover when a chunk comes near. Biomes come from the climate's ground
   weights (forest weight through a groves noise, conifers where cold), beaches below
-  `BEACH_HEIGHT`, rock on steep cells. Grass sway still bends along world x/z. Coasts are shaped as on
+  `BEACH_HEIGHT`, rock on steep cells. Swaying models bend along the wind projected across
+  their own up axis (`toon_sway.wesl`: a fixed world direction made tangent on the planet).
+  `planet/grass.rs` builds the flat map's near grass blades on 1×1 tiles of face cells where
+  the terrain draws grass (from the climate weights); each tile is turned upright with local x
+  downwind (`PlanetSurface::wind_at`): `grass_blades.wesl` bends in the mesh's frame and takes
+  its gust pattern from UV1 (along / across the wind in face coordinates) when present. Coasts are shaped as on
   the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);

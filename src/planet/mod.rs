@@ -5,6 +5,7 @@
 //! (`map`) is not loaded in this mode.
 
 mod camera;
+mod grass;
 mod mesh;
 mod vegetation;
 mod water;
@@ -48,7 +49,7 @@ pub struct PlanetPlugin {
 impl Plugin for PlanetPlugin {
     fn build(&self, app: &mut App) {
         let (seed, n) = (self.seed as u64, self.n);
-        app.add_plugins(vegetation::PlanetVegetationPlugin)
+        app.add_plugins((vegetation::PlanetVegetationPlugin, grass::PlanetGrassPlugin))
             .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
             .add_systems(Startup, move |commands: Commands| start_generation(commands, seed, n))
             .add_systems(
