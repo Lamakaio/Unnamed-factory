@@ -114,6 +114,12 @@ pub struct PlanetSurface {
     pub ground: Option<[FaceField; 3]>,
     /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
     pub weights: Option<[FaceField; 5]>,
+    /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
+    /// on land near it. Land below sea level (dry basins) is land.
+    pub ocean: FaceField,
+    /// Wetlands: marsh (positive, where the climate is wet enough) or salt flats (negative:
+    /// closed flats and basins in dry climates), from `Planet::wetland` / `basins`.
+    pub marsh: FaceField,
     /// The climate's prevailing winds (see [`PlanetSurface::wind_at`]).
     wind: Option<std::sync::Arc<WindField>>,
     /// The rivers, their water levels kept under the surface across their channel.
@@ -144,9 +150,23 @@ impl PlanetSurface {
             })
         });
         let weights = climate.map(|climate| {
-            let weights: Vec<[f32; 5]> = crate::par::map(planet.grid.len(), |i| {
+            crate::par::map(planet.grid.len(), |i| {
                 climate.koppen_at(planet.grid.direction(i), planet.heights[i]).ground_weights()
-            });
+            })
+        });
+        // Marsh where wet ground meets a wet enough climate (not frozen), salt flats on closed
+        // flats where it is dry.
+        let marsh: Vec<f32> = (0..planet.grid.len())
+            .map(|i| {
+                let [dryness, _, _, snow, _] = weights.as_ref().map_or([0.3, 0., 0., 0., 0.], |w| w[i]);
+                let moist = 1. - smoothstep(0.5, 0.85, dryness);
+                let marsh = planet.wetland[i] * moist * (1. - snow);
+                marsh - planet.basins[i] * (1. - moist)
+            })
+            .collect();
+        let ocean: Vec<f32> = planet.sea.iter().map(|&s| if s { 1. } else { 0. }).collect();
+        let ocean = planet.grid.blur(&ocean, 3);
+        let weights = weights.map(|weights: Vec<[f32; 5]>| {
             [0, 1, 2, 3, 4].map(|k| {
                 FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>())
             })
@@ -155,6 +175,8 @@ impl PlanetSurface {
             wind: climate.map(|climate| std::sync::Arc::new(climate.wind_field())),
             weights,
             ground,
+            ocean: FaceField::new(planet, &ocean),
+            marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
             channels: Channels::default(),
             springs: Springs::default(),
@@ -200,7 +222,9 @@ impl PlanetSurface {
             let reached = river
                 .points
                 .iter()
-                .position(|p| surface.uncarved_height(p.direction) < -SEA_REACHED);
+                .position(|p| {
+                    surface.uncarved_height(p.direction) < -SEA_REACHED && surface.ocean_at(p.direction) > 0.5
+                });
             if let Some(k) = reached {
                 river.points.truncate(k + 1);
                 river.end = crate::RiverEnd::Sea;
@@ -363,6 +387,12 @@ impl PlanetSurface {
             wind += -uphill * turned + along * turned * wind.dot(along).signum();
         }
         (wind * exposure, strength * exposure)
+    }
+
+    /// The ocean in a direction (see [`PlanetSurface::ocean`]): above 0.5 at sea.
+    pub fn ocean_at(&self, direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        self.ocean.bilinear(face, p)
     }
 
     /// The river springs (see `planet_springs`).

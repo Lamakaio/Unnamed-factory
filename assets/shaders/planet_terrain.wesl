@@ -4,8 +4,10 @@
 // - horizontal coordinates: the cube face's cell coordinates (UV0), continuous on a face (the
 //   painted patterns may break at face edges); heights are radial (`planet.x` is the sea level
 //   radius) and slopes are measured against the radial up;
-// - ground materials come from the climate per vertex: colour = (dryness, forest, desert,
-//   wet river or lake bed), UV1 = (snow, cold: conifers and alpine grass);
+// - ground materials come from the climate per vertex: colour = (dryness, forest, marsh
+//   (positive) or salt flat (negative), wet river or lake bed), UV1 = (cold: conifers and
+//   alpine grass, plus snow above 1; coast: beaches only along the ocean); deserts are the
+//   driest ground;
 // - the view direction for the grass parallax is taken into face coordinates from the screen
 //   space derivatives.
 //
@@ -300,7 +302,7 @@ fn ground(
 
     // Sand: beaches just above the water line (and wherever the climate says so).
     let sand = mix(srgb(0.94, 0.85, 0.62), srgb(0.89, 0.79, 0.56), patches(blotches, 0.2));
-    let beach = 1.0 - smoothstep(0.15, 0.45, height + 0.15 * large);
+    let beach = (1.0 - smoothstep(0.15, 0.45, height + 0.15 * large)) * c.b;
     color = mix(color, sand, border(max(a.r, beach), medium));
 
     // Desert: warm sand in dune ripples, cracked clay flats.
@@ -391,10 +393,14 @@ fn fragment(
 @if(VERTEX_UVS_B)
     cover = in.uv_b;
     let forest = climate.g;
-    let cold = cover.y;
-    let a = vec4(0.0, 0.0, cover.x, 0.0);
+    let cold = min(cover.x, 1.0);
+    let snow = max(cover.x - 1.0, 0.0);
+    let marsh = max(climate.b, 0.0);
+    let salt = max(-climate.b, 0.0);
+    let a = vec4(0.0, 0.0, snow, marsh);
     let b = vec4(climate.r, forest * (1.0 - cold), forest * cold, (1.0 - forest) * cold * 0.8);
-    let c = vec4(climate.b, 0.0, 0.0, 0.0);
+    // (c.b: how near the ocean, for the beaches.)
+    let c = vec4(smoothstep(0.75, 1.0, climate.r), salt, cover.y, 0.0);
     let wet = climate.a;
 
     // The view direction in face coordinates (for the grass parallax): from the screen space

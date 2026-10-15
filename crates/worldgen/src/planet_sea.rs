@@ -29,12 +29,24 @@ const OPEN_WATER: (f32, f32) = (0.3, 0.55);
 const SWELL_WIND: (f32, f32) = (4., 11.);
 
 /// The wave field of every cell of the planet's grid: (travel time, depth, exposure, wind
-/// speed).
+/// speed). Land below sea level not open to the sea (dry basins) has depth -1: no sea there.
+/// (Shores dipping under the water line along the coast stay sea.)
 pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     let grid = &planet.grid;
     let cells = grid.len();
     let sea = &planet.sea;
     let depth: Vec<f32> = planet.heights.iter().map(|h| (-h).max(0.)).collect();
+    // The sea reaches the land below its level connected to it.
+    let mut reached = sea.clone();
+    let mut queue: std::collections::VecDeque<usize> = (0..cells).filter(|&i| sea[i]).collect();
+    while let Some(i) = queue.pop_front() {
+        for (j, _) in grid.neighbours(i) {
+            if !reached[j] && planet.heights[j] < 0. {
+                reached[j] = true;
+                queue.push_back(j);
+            }
+        }
+    }
     let speed: Vec<f32> = depth.iter().map(|d| (d / DEEP).sqrt().clamp(MIN_SPEED, 1.)).collect();
 
     // Travel time from the shore (land counts as shore).
@@ -100,7 +112,10 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     let exposure = grid.blur(&grid.blur(&exposure, 3), 3);
 
     (0..cells)
-        .map(|i| [travel[i].min(MAX_TRAVEL), depth[i].min(MAX_DEPTH), exposure[i], wind[i].1])
+        .map(|i| {
+            let depth = if reached[i] { depth[i].min(MAX_DEPTH) } else if planet.heights[i] < 0. { -1. } else { 0. };
+            [travel[i].min(MAX_TRAVEL), depth, exposure[i], wind[i].1]
+        })
         .collect()
 }
 

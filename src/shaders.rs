@@ -60,7 +60,7 @@ pub type PlanetWaterMaterial = ExtendedMaterial<StandardMaterial, PlanetWaterSha
 
 /// The planet's terrain: the flat map's toon ground on the sphere (`planet_terrain.wesl`).
 /// Meshes carry the face's cell coordinates (UV0), and the ground materials from the climate:
-/// colour = (dryness, forest, desert, wet bed), UV1 = (snow, cold).
+/// colour = (dryness, forest, marsh / -salt flat, wet bed), UV1 = (cold + snow, coast).
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct PlanetTerrainShader {

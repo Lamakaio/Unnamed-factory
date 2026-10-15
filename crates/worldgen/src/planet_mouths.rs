@@ -78,7 +78,7 @@ fn for_cells_around(
 }
 
 /// Choose and shape the mouth of every river ending in the sea. Deltas raise land in `heights`
-/// (updating `sea`) and add their distributaries to `rivers`. `shore` is the signed distance to
+/// (updating `sea`, wet: `wetland`) and add their distributaries to `rivers`. `shore` is the signed distance to
 /// the shore (cells, positive on land).
 pub fn shape_mouths(
     grid: &SphereGrid,
@@ -88,6 +88,7 @@ pub fn shape_mouths(
     shore: &[f32],
     heights: &mut [f32],
     sea: &mut [bool],
+    wetland: &mut [f32],
     rivers: &mut Vec<PlanetRiver>,
 ) {
     let original = rivers.len();
@@ -126,6 +127,7 @@ pub fn shape_mouths(
                     shore,
                     heights,
                     sea,
+                    wetland,
                     &mut rivers[index],
                     index,
                     last_join,
@@ -196,6 +198,7 @@ fn build_delta(
     shore: &[f32],
     heights: &mut [f32],
     sea: &mut [bool],
+    wetland: &mut [f32],
     river: &mut PlanetRiver,
     index: usize,
     last_join: usize,
@@ -241,7 +244,7 @@ fn build_delta(
         direction,
         length,
     );
-    raise_delta_land(grid, frame, noise.layer(60 + index as u32), heights, sea, &channels, length);
+    raise_delta_land(grid, frame, noise.layer(60 + index as u32), heights, sea, wetland, &channels, length);
 
     // Water falls from the apex level to just under the sea at the full delta length.
     let level = |travelled: f32| apex.level + (-0.1 - apex.level) * (travelled / length).min(1.);
@@ -264,13 +267,15 @@ fn build_delta(
 }
 
 /// The delta land around the channels (`mouths::raise_delta_land`): wide near the apex,
-/// narrowing to levees along the outer channels, open at each tip.
+/// narrowing to levees along the outer channels, open at each tip. The new land is wetland,
+/// and so is the old along the channels.
 fn raise_delta_land(
     grid: &SphereGrid,
     frame: &Frame,
     noise: Noise,
     heights: &mut [f32],
     sea: &mut [bool],
+    wetland: &mut [f32],
     channels: &[Channel],
     length: f32,
 ) {
@@ -280,7 +285,10 @@ fn raise_delta_land(
     };
     for_cells_around(grid, frame, first.position, length * 1.6, |i, p| {
         let mut best: f32 = 0.;
+        // Distance to the nearest channel, in levee widths.
+        let mut near = f32::MAX;
         for point in &points {
+            near = near.min(p.distance(point.position) / (2. * point.width + 1.));
             let t = (point.travelled / length).min(1.);
             let reach = (0.45 * length * (1. - t).powf(1.5) + 1.5 * point.width + 1.)
                 * smoothstep(0., 3. * point.width + 2., point.to_tip);
@@ -294,6 +302,8 @@ fn raise_delta_land(
         }
         if best > 0. {
             let wobble = 1. + 0.3 * noise.fbm(p / 5., 2);
+            let wet = if sea[i] { 1. } else { (1. - near).max(0.) };
+            wetland[i] = wetland[i].max(wet);
             heights[i] = heights[i].max(0.08 + best * wobble);
             sea[i] = heights[i] <= 0.;
         }

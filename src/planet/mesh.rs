@@ -75,8 +75,8 @@ struct Builder<'a> {
     camera: Vec3,
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
-    /// Ground materials (see `PlanetTerrainShader`): (dryness, forest, desert, wet bed), and
-    /// (snow, cold); the face's cell coordinates.
+    /// Ground materials (see `PlanetTerrainShader`): (dryness, forest, marsh / -salt, wet bed),
+    /// and (cold + snow, coast); the face's cell coordinates.
     colors: Vec<[f32; 4]>,
     covers: Vec<[f32; 2]>,
     uvs: Vec<[f32; 2]>,
@@ -177,12 +177,22 @@ impl Builder<'_> {
     }
 }
 
-/// Ground materials at a point: (dryness, forest, desert, wet bed) and (snow, cold).
+/// Ground materials at a point (see `PlanetTerrainShader`): (dryness, forest, marsh / -salt,
+/// wet bed) and (cold + snow, coast).
 fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4], [f32; 2]) {
     let wet = surface.wetness(face, p);
+    let marsh = surface.marsh.bilinear(face, p);
+    // Beaches only along the ocean (not round dry basins below sea level).
+    let coast = smoothstep(0.02, 0.15, surface.ocean.bilinear(face, p));
     let Some(weights) = &surface.weights else {
-        return ([0.3, 0., 0., wet], [0., 0.]);
+        return ([0.3, 0., marsh, wet], [0., coast]);
     };
-    let w = weights.each_ref().map(|field| field.bilinear(face, p));
-    ([w[0], w[1], w[2], wet], [w[3], w[4]])
+    let [dryness, forest, _, snow, cold] = weights.each_ref().map(|field| field.bilinear(face, p));
+    // (Snow only where it is cold: the two share a channel, snow above 1.)
+    ([dryness, forest, marsh, wet], [cold.min(1.) + snow, coast])
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
 }

@@ -22,7 +22,6 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::{
     WorldgenSettings,
-    flow::{FlowGraph, priority_flood},
     grid::Grid,
     noise::{Noise, hash, smoothstep},
     par,
@@ -38,6 +37,11 @@ const CONTINENTAL_BIAS: f32 = 0.22;
 const RIFT_SUBSIDENCE: f32 = 0.3;
 /// Drainage area (cells) from which fine detail fades around rivers.
 const CALM_RIVER_AREA: f32 = 150.;
+/// Low flat ground along streams is wet: slopes under this, draining this much (mean cell
+/// areas), below this height (world units).
+const WET_SLOPE: f32 = 0.1;
+const WET_DRAINAGE: f32 = 40.;
+const WET_HEIGHT: f32 = 4.;
 /// Uplift of the low swells over all land (relative, like the provinces' uplift).
 const PLAIN_SWELLS: f32 = 0.08;
 /// Distances to the coast are only needed this far (cells) inland and out at sea: beyond,
@@ -146,6 +150,10 @@ pub struct Planet {
     pub drainage: Vec<f32>,
     /// Depth of the lake water over each cell (0: no lake), from filling the basins.
     pub lake_depth: Vec<f32>,
+    /// Wet ground (0..1): closed flats and dry basins, lake shores, floodplains, delta land;
+    /// and the closed flats and basins alone (salt flats where dry). See `planet_lakes`.
+    pub wetland: Vec<f32>,
+    pub basins: Vec<f32>,
     /// The rivers (see `planet_rivers`).
     pub rivers: Vec<crate::planet_rivers::PlanetRiver>,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
@@ -790,15 +798,34 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             heights[i] = terrain::smooth_min(heights[i], ramp, 1.).max(-0.3);
         }
     }
-    let filled = priority_flood(&grid, &heights, &sea, 1e-4);
-    let drainage = FlowGraph::new(&grid, &filled, &sea).accumulate(|i| grid.area(i));
-    // Lakes: where the filled surface stands clearly above the ground.
-    let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
+    // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
+    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
+        crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
     let (mut rivers, valley) =
-        crate::planet_rivers::extract(&grid, radius, &heights, &filled, &sea, &lake_depth);
+        crate::planet_rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
     // Floodplains: flat valley floors where rivers meander.
     let floodplain = flatten_floodplains(&grid, radius, &mut heights, &lake_depth, &valley);
+    // Wet ground: floodplains, and low flat ground along the larger streams (poorly drained
+    // valley floors and plains).
+    // (Slopes of the general lie of the land: on smoothed heights; near streams: their mask
+    // spread a few cells.)
+    let smooth = grid.blur(&heights, 2);
+    let streams: Vec<f32> = drainage.iter().map(|&d| if d >= WET_DRAINAGE { 1. } else { 0. }).collect();
+    let near_stream = grid.blur(&streams, 3);
+    for i in 0..cells {
+        let slope = grid
+            .neighbours(i)
+            .map(|(j, d)| (smooth[j] - smooth[i]).abs() / d)
+            .sum::<f32>()
+            / grid.neighbours(i).count() as f32;
+        let flat_valley = smoothstep(WET_SLOPE, WET_SLOPE * 0.4, slope)
+            * smoothstep(0.03, 0.15, near_stream[i])
+            * smoothstep(WET_HEIGHT, WET_HEIGHT * 0.5, heights[i]);
+        wetland[i] = wetland[i].max(0.9 * floodplain[i]).max(0.8 * flat_valley);
+    }
+    let wetland = grid.blur(&wetland, 1);
+    let mut wetland = wetland;
     // Deltas and estuaries at the river mouths (deltas build land out into the sea).
     crate::planet_mouths::shape_mouths(
         &grid,
@@ -808,6 +835,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         &shore,
         &mut heights,
         &mut sea,
+        &mut wetland,
         &mut rivers,
     );
     // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
@@ -815,7 +843,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         .map(|i| {
             let river = smoothstep(CALM_RIVER_AREA * 0.5, CALM_RIVER_AREA, drainage[i]);
             let lake = smoothstep(0.02, 0.1, lake_depth[i]);
-            river.max(lake).max(floodplain[i])
+            river.max(lake).max(floodplain[i]).max(basins[i])
         })
         .collect();
     let calm: Vec<f32> = grid.blur(&calm, 2).iter().map(|c| (c * 3.).min(1.)).collect();
@@ -830,6 +858,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         range: shape.range,
         drainage,
         lake_depth,
+        wetland,
+        basins,
         rivers,
         ruggedness,
         calm,

@@ -237,6 +237,10 @@ fn fragment(
     let wind_dir = select(wind.xy, wind_v / max(wind_speed, 1e-4), wind_speed > 1e-3);
     var sea: Sea;
     sea = sea_waves(xz, time, footprint, wind_dir);
+    // No sea over land below sea level (dry basins: their depth is -1).
+    if planet.z > 0.0 && sea.depth < -0.5 {
+        discard;
+    }
     if sea.depth >= 0.0 {
         // The baked depth is smoother; the prepass is exact at the shore.
         depth = max(min(depth, 0.3), sea.depth);

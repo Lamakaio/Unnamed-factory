@@ -265,8 +265,10 @@ fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>
     let reached = rows[leave..].iter().position(|row| match river.end {
         RiverEnd::Lake(_) => in_lake(row),
         RiverEnd::Sea => {
-            let bank = |side: f32| ground_at(surface, row.edge(side).normalize()) <= 0.02;
-            (bank(-1.) && bank(1.)) || ground_at(surface, row.center.normalize()) < -OPEN_WATER_DEPTH
+            let at_sea = |p: Vec3| surface.ocean_at(p.normalize()) > 0.5;
+            let bank = |side: f32| ground_at(surface, row.edge(side).normalize()) <= 0.02 && at_sea(row.edge(side));
+            (bank(-1.) && bank(1.))
+                || ground_at(surface, row.center.normalize()) < -OPEN_WATER_DEPTH && at_sea(row.center)
         }
         RiverEnd::Junction(_) => false,
     });

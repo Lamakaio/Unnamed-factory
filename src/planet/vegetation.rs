@@ -9,8 +9,8 @@
 //!   LOD0 models are spawned around the camera, as on the flat map.
 //!
 //! Biomes come from the climate's ground weights (forests where the forest weight, through a
-//! clearings noise, is high enough; conifers where it is cold), beaches near the sea and rock
-//! on steep slopes. Everything stands upright on the sphere.
+//! clearings noise, is high enough; conifers where it is cold), marsh on wetlands (nothing on
+//! salt flats), beaches along the ocean and rock on steep slopes. Everything stands upright on the sphere.
 
 use std::{f32::consts::FRAC_PI_2, sync::Arc};
 
@@ -404,7 +404,14 @@ fn place(
             let species = species_index(name);
             let kind = SPECIES[species as usize].kind;
             let height = surface.height(chunk.face, p);
-            let lowest = if kind == Kind::Rock { 0.03 } else { 0.12 };
+            // (Land below sea level is fine away from the ocean.)
+            let lowest = if surface.ocean.bilinear(chunk.face, p) < 0.02 {
+                f32::MIN
+            } else if kind == Kind::Rock {
+                0.03
+            } else {
+                0.12
+            };
             if height < lowest
                 || surface.wetness(chunk.face, p) > 0.02
                 || 1. - normal(surface, chunk.face, p).dot(radial) > kind.max_steepness()
@@ -473,11 +480,21 @@ fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
 /// the forest weight is middling. Sea and lakes have no vegetation.
 fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves: f32) -> Biome {
     let height = surface.heights.bilinear(face, p);
-    if height <= 0. || surface.lake_depth.bilinear(face, p) > 0.02 {
+    let ocean = surface.ocean.bilinear(face, p);
+    if ocean > 0.5 || height <= 0. && ocean > 0.02 || surface.lake_depth.bilinear(face, p) > 0.02 {
         return Biome::Sea;
     }
-    if height < BEACH_HEIGHT {
+    // (Beaches only along the ocean: dry basins below sea level are land.)
+    if height < BEACH_HEIGHT && ocean > 0.02 {
         return Biome::Beach;
+    }
+    // Wetlands: marsh, or bare salt flats.
+    let marsh = surface.marsh.bilinear(face, p);
+    if marsh > 0.5 {
+        return Biome::Marsh;
+    }
+    if marsh < -0.5 {
+        return Biome::Sea;
     }
     let slope = Vec2::new(
         surface.heights.bilinear(face, p + Vec2::X) - surface.heights.bilinear(face, p - Vec2::X),

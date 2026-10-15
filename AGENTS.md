@@ -333,11 +333,27 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   patches of 16² quads, cell ≤ 0.004 × distance, ≥ 0.5 cell; skirts toward the centre;
   drawn with `PlanetTerrainMaterial`, `planet_terrain.wesl`: the flat map's toon ground generated
   from `map_material.wesl` with face cell coordinates (UV0) for its patterns, radial heights and
-  up, and ground materials from the climate per vertex: colour = (dryness, forest, desert, wet
-  bed), UV1 = (snow, cold), see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
+  up, and ground materials from the climate per vertex (see Lakes below for the channels),
+  see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
   Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
   resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
+  Lakes (`planet_lakes.rs::shape_lakes`, after the coasts, before the rivers): sea patches
+  cut off from the ocean (under `SEA_MIN_SHARE` of the cells) become land below sea level, a
+  dry basin (its lowest cell a sink in the routing base) while under `LOWLAND_MAX_INFLOW`
+  drains in; every depression is a lake only from `LAKE_MIN_CELLS`, `LAKE_MIN_DEPTH` and
+  `LAKE_AREA_PER_INFLOW` × its inflow (big rivers end only in very large lakes or the sea),
+  else filled flat (wet, a closed flat). Kept lakes get their own basin: the blurred mask
+  rounds the outline, the bed deepens from the shore (`SHORE_DEPTH` + `DEPTH_SLOPE` × cells,
+  at most ∝ √cells), banks rise just above the level (not across streams, nor on the outlet's
+  path); twice, then a last fill of leftover hollows. `Planet::wetland` (closed flats, dry
+  basins, lake shores, floodplains, low flat ground near streams, delta land) and
+  `Planet::basins`; `PlanetSurface::marsh` is marsh where the climate is wet (not frozen),
+  negative (salt flats) on closed flats where it is dry. `PlanetSurface::ocean` (the sea mask,
+  blurred) tells the ocean from land below sea level: rivers end, beaches form and vegetation
+  stops only along it; the sea's wave field has depth -1 over basins not open to the sea and
+  the water shader discards there. Terrain vertices: colour = (dryness, forest, marsh / -salt,
+  wet bed), UV1 = (cold + snow, coast); the shader takes deserts from dryness.
   Floodplains (`planet.rs::flatten_floodplains`, as on the flat map): `planet_rivers::extract`
   also returns the un-meandered valley points (level, floodplain half-width where the river
   meanders); the cells around are lowered to water + 0.4 (lake shores kept above their lake),
