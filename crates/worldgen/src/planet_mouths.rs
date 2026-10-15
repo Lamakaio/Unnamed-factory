@@ -300,6 +300,7 @@ fn build_delta(
                 })
                 .collect(),
             end: RiverEnd::Sea,
+            branch_of: None,
         })
         .collect()
 }

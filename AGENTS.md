@@ -340,7 +340,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `RIVER_MIN_AREA`)^`RIVER_WIDTH.1`, some 20× from the smallest to the largest; tributaries end
   on their parent's final path `JOIN_LEAD` points downstream of the nearest, the move eased
   over `JOIN_BLEND` points; rivers run through the lakes they enter or leave, to or from the
-  deepest cell at the lake's level, as on the flat map: `through_lakes`) get their water levels clamped
+  deepest cell at the lake's level, as on the flat map: `through_lakes`; rivers split on
+  flat land: `split_on_flats` gives wide rivers on flat stretches without tributaries a side
+  channel (`PlanetRiver::branch_of`, ending in `Junction` of the same river) round a low
+  island, capped on the river's edge at both ends by `planet/water.rs` (its rows backwards
+  for the start); rivers left with one point after the coast cut are kept, so indices hold) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
   Lakes (`planet_lakes.rs::shape_lakes`, after the coasts, before the rivers): sea patches
   cut off from the ocean (under `SEA_MIN_SHARE` of the cells) become land below sea level, a

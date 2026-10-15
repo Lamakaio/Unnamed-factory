@@ -51,6 +51,9 @@ pub struct ValleyPoint {
 pub struct PlanetRiver {
     pub points: Vec<PlanetRiverPoint>,
     pub end: RiverEnd,
+    /// A side channel of a river splitting on flat land: it leaves this river (index) and
+    /// rejoins it (`end`).
+    pub branch_of: Option<usize>,
 }
 
 /// Extract the rivers from the heights, the depression-filled surface they drain on, the sea
@@ -119,6 +122,8 @@ pub fn extract(
     let mut rivers = Vec::with_capacity(traced.len());
     let mut valley = Vec::new();
     let mut output_index: Vec<Option<usize>> = Vec::with_capacity(traced.len());
+    // How flat the valley is at each point of each river (for the side channels).
+    let mut flats: Vec<Vec<f32>> = Vec::with_capacity(traced.len());
     for river in &traced {
         let point = |i: usize| grid.direction(i) * radius;
         let mut path: Vec<(Vec3, f32, f32)> =
@@ -197,9 +202,9 @@ pub fn extract(
             join_parent(&mut points, &rivers[parent]);
         }
         output_index.push(Some(rivers.len()));
-        rivers.push(PlanetRiver { points, end: river.end });
+        flats.push(flatness);
+        rivers.push(PlanetRiver { points, end: river.end, branch_of: None });
     }
-    through_lakes(grid, radius, filled, lake_depth, &mut rivers);
     // Junctions point at output indices (short rivers were dropped).
     for river in &mut rivers {
         if let RiverEnd::Junction(parent) = river.end {
@@ -209,7 +214,91 @@ pub fn extract(
             };
         }
     }
+    split_on_flats(radius, &flats, &mut rivers);
+    through_lakes(grid, radius, filled, lake_depth, &mut rivers);
     (rivers, valley)
+}
+
+/// Rivers split on flat land (anabranches): wide enough rivers on flat valley stretches get a
+/// side channel leaving them and rejoining them downstream round a low island; not where a
+/// tributary joins (it would cross the side channel), and only some stretches.
+const SPLIT_MIN_WIDTH: f32 = 0.8;
+const SPLIT_FLATNESS: f32 = 0.7;
+/// Length of a split (channel widths, and at least world units), and how far apart they are
+/// at least (widths).
+const SPLIT_LENGTH: (f32, f32, f32) = (14., 24., 10.);
+const SPLIT_SPACING: f32 = 30.;
+/// Share of splittable stretches that split.
+const SPLIT_CHANCE: f32 = 0.5;
+/// Width of the side channel (share of the river's) and of the island between the two
+/// (river widths, at its widest).
+const SPLIT_SHARE: f32 = 0.6;
+const ISLAND: (f32, f32) = (0.8, 1.6);
+
+fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>) {
+    let count = rivers.len();
+    // Where tributaries join each river (point indices).
+    let mut joins: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for river in rivers.iter() {
+        if let RiverEnd::Junction(parent) = river.end
+            && let Some(end) = river.points.last()
+        {
+            let main = &rivers[parent].points;
+            if let Some(k) = (0..main.len())
+                .max_by(|&a, &b| main[a].direction.dot(end.direction).total_cmp(&main[b].direction.dot(end.direction)))
+            {
+                joins[parent].push(k);
+            }
+        }
+    }
+    let random = |river: usize, k: usize, salt: u32| {
+        crate::noise::hash(0x5_9117 ^ salt, river as u32, k as u32) as f32 / u32::MAX as f32
+    };
+    for index in 0..count {
+        let main = rivers[index].points.clone();
+        let flat = &flats[index];
+        let mut k = 0;
+        while k < main.len() {
+            let width = main[k].width;
+            let length = ((SPLIT_LENGTH.0 + (SPLIT_LENGTH.1 - SPLIT_LENGTH.0) * random(index, k, 1)) * width)
+                .max(SPLIT_LENGTH.2);
+            let steps = (length / SPACING) as usize;
+            let end = k + steps;
+            let fits = end + 4 < main.len()
+                && k > 4
+                && width >= SPLIT_MIN_WIDTH
+                && (k..=end).all(|j| flat[j] >= SPLIT_FLATNESS)
+                && !joins[index].iter().any(|&j| j + 6 >= k && j <= end + 6);
+            if !fits {
+                k += 2;
+                continue;
+            }
+            if random(index, k, 2) < SPLIT_CHANCE {
+                let side = if random(index, k, 3) < 0.5 { -1. } else { 1. };
+                let island = (ISLAND.0 + (ISLAND.1 - ISLAND.0) * random(index, k, 4)) * width;
+                let branch_width = width * SPLIT_SHARE;
+                // Off to the side at most the half widths and the island, easing in and out.
+                let reach = width / 2. + branch_width / 2. + island;
+                let points = (k..=end)
+                    .map(|j| {
+                        let t = (j - k) as f32 / steps as f32;
+                        let p = main[j];
+                        let (before, after) = (main[j - 1].direction, main[j + 1].direction);
+                        let across = (after - before).cross(p.direction).normalize_or_zero();
+                        let offset = reach * (std::f32::consts::PI * t).sin().max(0.).powf(0.7) * side;
+                        PlanetRiverPoint {
+                            direction: (p.direction * radius + across * offset).normalize(),
+                            width: branch_width * (0.6 + 0.4 * (std::f32::consts::PI * t).sin().max(0.)),
+                            depth: p.depth * SPLIT_SHARE.sqrt(),
+                            ..p
+                        }
+                    })
+                    .collect();
+                rivers.push(PlanetRiver { points, end: RiverEnd::Junction(index), branch_of: Some(index) });
+            }
+            k = end + (SPLIT_SPACING * width / SPACING) as usize;
+        }
+    }
 }
 
 /// Tributaries join their parent this many points downstream of the nearest (so they meet at

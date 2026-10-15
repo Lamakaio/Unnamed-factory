@@ -499,6 +499,23 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
             }
             None => {}
         }
+        // A side channel (a river splitting on flat land) leaves its river on its ribbon edge
+        // too: the cap of its rows taken backwards.
+        if let Some(main) = river.branch_of.and_then(|main| all_rows.get(main)).filter(|r| r.len() >= 2) {
+            let backwards: Vec<Row> = rows.iter().rev().copied().collect();
+            let up = backwards[backwards.len() - 1].center.normalize();
+            let (east, north) = up.any_orthonormal_pair();
+            let project = |p: Vec3| Vec2::new(p.dot(east), p.dot(north));
+            let cap = junction_cap(&backwards, &parent_edge(main, &backwards, true), project)
+                .or_else(|| junction_cap(&backwards, &parent_edge(main, &backwards, false), project));
+            if let Some((full_rows, outline)) = cap {
+                fan(&mut water, &backwards[full_rows - 1], &outline);
+                rows.drain(..rows.len() - full_rows);
+            }
+            if rows.len() < 2 {
+                continue;
+            }
+        }
         let parent = match river.end {
             RiverEnd::Junction(parent) => Some(&all_rows[parent]).filter(|rows| rows.len() >= 2),
             _ => None,
@@ -884,6 +901,11 @@ pub fn spawn(
         .filter(|spring| matches!(spring.kind, PlanetSpringKind::Pond { .. }))
         .count();
     info!("{} springs: {ponds} ponds, {} hillside", surface.springs().len(), surface.springs().len() - ponds);
+    info!(
+        "{} rivers, {} side channels (splitting on flat land)",
+        surface.rivers.len(),
+        surface.rivers.iter().filter(|river| river.branch_of.is_some()).count()
+    );
     if let Some(mesh) = ponds_mesh(surface) {
         spawn("Ponds".into(), mesh, &still);
     }

@@ -231,7 +231,8 @@ impl PlanetSurface {
                 river.end = crate::RiverEnd::Sea;
             }
         }
-        rivers.retain(|river| river.points.len() >= 2);
+        // (Rivers left with a single point stay: removing them would shift the indices other
+        // rivers join by.)
         surface.channels = Channels::new(&rivers, surface.radius);
         let springs = find_springs(
             &rivers,
