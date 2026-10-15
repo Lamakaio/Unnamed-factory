@@ -151,7 +151,7 @@ pub struct Planet {
     /// Depth of the lake water over each cell (0: no lake), from filling the basins.
     pub lake_depth: Vec<f32>,
     /// Wet ground (0..1): closed flats and dry basins, lake shores, floodplains, delta land;
-    /// and the closed flats and basins alone (salt flats where dry). See `planet_lakes`.
+    /// and the dry basins alone (no outlet: salt flats where dry). See `planet_lakes`.
     pub wetland: Vec<f32>,
     pub basins: Vec<f32>,
     /// The rivers (see `planet_rivers`).
@@ -799,12 +799,14 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         }
     }
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
-    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, mut basins } =
+    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
         crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
+    lap("  lakes", &mut timings);
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
     let (mut rivers, valley) =
         crate::planet_rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
     // Floodplains: flat valley floors where rivers meander.
+    lap("  rivers", &mut timings);
     let floodplain = flatten_floodplains(&grid, radius, &mut heights, &lake_depth, &valley);
     // Wet ground: floodplains, and low flat ground along the larger streams (poorly drained
     // valley floors and plains).
@@ -826,6 +828,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     let wetland = grid.blur(&wetland, 1);
     let mut wetland = wetland;
+    lap("  floodplains, wetlands", &mut timings);
     let sea_before_mouths = sea.clone();
     // Deltas and estuaries at the river mouths (deltas build land out into the sea).
     crate::planet_mouths::shape_mouths(
@@ -842,10 +845,11 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // The floodplains and mouths reshaped the ground: settle the water again (the routing
     // base: the sea as it is now, and the dry basins' sinks).
     let base: Vec<bool> = (0..cells).map(|i| sea[i] || base[i] && !sea_before_mouths[i]).collect();
+    lap("  mouths", &mut timings);
     let (drainage, lake_depth, flats) = crate::planet_lakes::settle(&grid, &mut heights, &base, &lake_depth);
+    lap("  settle", &mut timings);
     for i in flats {
         wetland[i] = 1.;
-        basins[i] = 1.;
     }
     // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
     let calm: Vec<f32> = (0..cells)

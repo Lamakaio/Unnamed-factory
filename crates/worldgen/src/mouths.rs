@@ -224,6 +224,7 @@ fn build_delta(
         apex,
         direction,
         length,
+        MAX_TURN,
     );
     raise_delta_land(
         settings,
@@ -278,6 +279,7 @@ pub(crate) fn grow_channels(
     apex: RiverPoint,
     direction: Vec2,
     length: f32,
+    max_turn: f32,
 ) -> Vec<Channel> {
     // (start, heading, width, travelled, forks left)
     let forks = if apex.width > 2.5 { 4 } else { 3 };
@@ -318,8 +320,8 @@ pub(crate) fn grow_channels(
                 .normalize();
             // Never turn back inland.
             let off = direction.angle_to(heading);
-            if off.abs() > MAX_TURN {
-                heading = Vec2::from_angle(MAX_TURN * off.signum()).rotate(direction);
+            if off.abs() > max_turn {
+                heading = Vec2::from_angle(max_turn * off.signum()).rotate(direction);
             }
             position += heading * SPACING;
             s += SPACING;

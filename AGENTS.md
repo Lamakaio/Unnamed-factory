@@ -358,8 +358,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   rounds the outline, the bed deepens from the shore (`SHORE_DEPTH` + `DEPTH_SLOPE` × cells,
   at most ∝ √cells), banks rise just above the level (not across streams, nor on the outlet's
   path); twice, then a last fill of leftover hollows. Lakes over their cap (`LAKE_MAX_CELLS`,
-  a range: each lake its own) first drain through a gorge cut from the deepest cell along
-  the drainage until lower ground, at the level where they fit (exposed beds: closed flats).
+  a range: each lake its own) first drain through a gorge cut at the level where they fit:
+  across the old bed by a least-cost path (low ground, a winding noise: `GORGE_*`) to the
+  outlet, then down it until lower ground (exposed beds: wet ground). Outlines are rounded by
+  `LAKE_ROUNDING` blur passes. Salt-flat potential (`basins`) is only the dry basins (no
+  outlet); filled hollows and drained beds are wetland.
   After the floodplains and mouths reshape the ground, `planet_lakes::settle` fills the new
   hollows outside lakes and recomputes the drainage and lake depths (they were stale: lake
   levels sloped where a mouth's sediment plain had lowered a lake). `Planet::wetland` (closed flats, dry
@@ -383,7 +386,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
   cells walked on the sphere's grid; deltas rarer than estuaries; distributaries never cross
   land above `DELTA_MAX_GROUND` (forks left without branches go too), grow toward the sea mask
-  (not land below sea level), delta land sinks to a bar toward the tips (`TIP_TRIM`), the sea
+  (not land below sea level), fan at most `MAX_TURN` (tighter than the flat map's: sideways
+  channels cut across to the next bay; `grow_channels` takes the limit), channels mostly over
+  old land are dropped (`MAX_OVERLAND`), delta land sinks to a bar toward the tips (`TIP_TRIM`), the sea
   floor round it is raised into a sloping front (`FRONT_*`) and the whole smoothed, and each
   tip gets a path to the open sea if land closes it in): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;

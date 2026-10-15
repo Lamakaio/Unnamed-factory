@@ -26,6 +26,12 @@ const DELTA_MIN_WIDTH: f32 = 1.5;
 /// plus this many channel widths), to a bar this deep: no islands at the tips.
 const TIP_TRIM: (f32, f32) = (4., 4.);
 const TIP_BAR: f32 = -0.12;
+/// Largest angle (radians) between a distributary and the delta's direction: the planet's
+/// deltas fan less than the flat map's (sideways channels cut across to the next bay).
+const MAX_TURN: f32 = 0.8;
+/// Distributaries run over the sea (the delta's new land) for the most part: those with more
+/// than this share of their points over the old land are dropped.
+const MAX_OVERLAND: f32 = 0.5;
 /// Distributaries never cross land higher than this (world units): they would cut a canyon
 /// through it (the channel and its forks are dropped).
 const DELTA_MAX_GROUND: f32 = 1.2;
@@ -254,12 +260,23 @@ fn build_delta(
         },
         direction,
         length,
+        MAX_TURN,
     );
     // Channels over high ground (headlands, hills) are dropped, with their forks.
     let high = |channel: &Channel| {
         channel.points.iter().any(|p| heights[grid.cell_at(frame.direction(p.position))] > DELTA_MAX_GROUND)
     };
-    let mut dropped: Vec<bool> = channels.iter().map(high).collect();
+    // ...and so are channels running mostly over the land (not the delta's new land: across a
+    // headland, from one sea to another).
+    let overland = |channel: &Channel| {
+        let on_land = channel
+            .points
+            .iter()
+            .filter(|p| p.travelled > 3. * p.width && !sea[grid.cell_at(frame.direction(p.position))])
+            .count();
+        on_land as f32 > MAX_OVERLAND * channel.points.len() as f32
+    };
+    let mut dropped: Vec<bool> = channels.iter().map(|c| high(c) || overland(c)).collect();
     loop {
         let mut changed = false;
         for (k, channel) in channels.iter().enumerate() {

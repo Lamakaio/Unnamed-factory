@@ -42,11 +42,17 @@ const LAKE_AREA_PER_INFLOW: f32 = 0.01;
 /// through the rim (sloping down this much per cell) until the lake is no bigger.
 const LAKE_MAX_CELLS: (usize, usize) = (500, 2500);
 const GORGE_SLOPE: f32 = 0.002;
+/// Cost of a gorge's path over the old bed: per unit above the new level, and the noise's
+/// (both on top of the length).
+const GORGE_HIGH_COST: f32 = 2.;
+const GORGE_WINDING: f32 = 3.;
 /// Lake beds: depth at the shore and its increase per cell from it, and the deepest point
 /// (`LAKE_MAX_DEPTH` × √cells, clamped).
 const SHORE_DEPTH: f32 = 0.25;
 const DEPTH_SLOPE: f32 = 0.3;
 const LAKE_MAX_DEPTH: (f32, f32, f32) = (0.15, 0.8, 6.);
+/// Blur passes rounding lake outlines (arms narrower than about twice this go).
+const LAKE_ROUNDING: usize = 4;
 /// Banks: cells this close outside a lake are kept this far above it (plus a rise per cell).
 const BANK_CELLS: f32 = 3.;
 const BANK_HEIGHT: (f32, f32) = (0.1, 0.12);
@@ -66,8 +72,7 @@ pub struct Hydrology {
     pub base: Vec<bool>,
     /// Wet ground (0..1): closed flats and dry basins, lake shores.
     pub wetland: Vec<f32>,
-    /// Closed flats and dry basins (0..1), where water stands or evaporates: salt flats in
-    /// dry climates.
+    /// Dry basins (0..1): no outlet, the water evaporates: salt flats in dry climates.
     pub basins: Vec<f32>,
 }
 
@@ -147,7 +152,8 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
         let drainage = graph.accumulate(area);
         (filled, graph, drainage)
     };
-    let (_, _, drainage) = flow(heights, &base);
+    // (Only with dry basins: a flood of the whole planet is not free.)
+    let drainage = if lowlands.is_empty() { Vec::new() } else { flow(heights, &base).2 };
     for (patch, sink) in &lowlands {
         if drainage[*sink] > LOWLAND_MAX_INFLOW {
             base[*sink] = false;
@@ -158,12 +164,16 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
         }
     }
 
+    let mut wetland = vec![0f32; cells];
     // Big lakes: a gorge through the rim, from the deepest point along the drainage (over the
     // lake, then down its outlet) until lower ground, at the level where the lake is small
     // enough.
     {
-        let (filled, graph, _) = flow(heights, &base);
+        let (filled, graph, drainage) = flow(heights, &base);
         let under: Vec<bool> = (0..cells).map(|i| !base[i] && filled[i] - heights[i] > LAKE_EPS).collect();
+        // (Gorges wind with the low ground and a noise.)
+        let noise = crate::noise::Noise::new(0x6047E);
+        let radius = 2. * grid.n() as f32 / std::f32::consts::PI;
         for lake in components(grid, &under) {
             let deepest = *lake.iter().min_by(|&&a, &&b| heights[a].total_cmp(&heights[b])).unwrap();
             let roll = crate::noise::hash(0x1A4E, deepest as u32, 0) as f32 / u32::MAX as f32;
@@ -198,10 +208,48 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
             // The exposed bed: flat, wet ground.
             for &i in &lake {
                 if heights[i] >= level {
-                    basins[i] = basins[i].max(0.6);
+                    wetland[i] = wetland[i].max(0.5);
                 }
             }
-            let (mut i, mut floor) = (deepest, level);
+            // Across the old bed, from the deepest point to the outlet: the cheapest way, through
+            // low ground (above the new level costs), winding with a noise.
+            let outlet = *lake.iter().max_by(|&&a, &&b| drainage[a].total_cmp(&drainage[b])).unwrap();
+            let cost = |j: usize| {
+                1. + GORGE_HIGH_COST * (heights[j] - level).max(0.)
+                    + GORGE_WINDING * (0.5 + 0.5 * noise.fbm3(grid.direction(j) * radius / 7., 2))
+            };
+            let mut best = std::collections::HashMap::from([(deepest, (0f32, deepest))]);
+            let mut heap = std::collections::BinaryHeap::from([std::cmp::Reverse((0u32, deepest))]);
+            while let Some(std::cmp::Reverse((_, i))) = heap.pop() {
+                if i == outlet {
+                    break;
+                }
+                let here = best[&i].0;
+                for (j, d) in grid.neighbours(i) {
+                    if !in_lake.contains(&j) {
+                        continue;
+                    }
+                    let total = here + d * cost(j);
+                    if best.get(&j).is_none_or(|b| total < b.0) {
+                        best.insert(j, (total, i));
+                        heap.push(std::cmp::Reverse(((total * 1000.) as u32, j)));
+                    }
+                }
+            }
+            let mut path = vec![outlet];
+            while let Some(&(_, previous)) = best.get(path.last().unwrap())
+                && previous != *path.last().unwrap()
+            {
+                path.push(previous);
+            }
+            path.reverse();
+            let mut floor = level;
+            for &j in &path {
+                floor -= GORGE_SLOPE;
+                heights[j] = heights[j].min(floor);
+            }
+            // Then down the outlet until lower ground.
+            let mut i = outlet;
             for _ in 0..cells {
                 let next = graph.receivers[i];
                 if next == i || base[next] {
@@ -219,7 +267,6 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
 
     // Depressions: real lakes, or filled flats. (Twice: reshaping the lakes may leave new
     // hollows next to them.)
-    let mut wetland = vec![0f32; cells];
     for _ in 0..2 {
         let (filled, graph, drainage) = flow(heights, &base);
         let under: Vec<bool> = (0..cells).map(|i| !base[i] && filled[i] - heights[i] > LAKE_EPS).collect();
@@ -236,7 +283,7 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
             } else {
                 for &i in &lake {
                     heights[i] = filled[i];
-                    basins[i] = 1.;
+                    wetland[i] = 1.;
                 }
             }
         }
@@ -250,7 +297,7 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
                 mask[i] = 1.;
             }
         }
-        let rounded: Vec<bool> = grid.blur(&mask, 2).iter().map(|&m| m > 0.5).collect();
+        let rounded: Vec<bool> = grid.blur(&mask, LAKE_ROUNDING).iter().map(|&m| m > 0.5).collect();
         // Cells of the rounded outlines take the level of the nearest lake.
         let mut queue: VecDeque<usize> = (0..cells).filter(|&i| lake_of[i] != u32::MAX).collect();
         while let Some(i) = queue.pop_front() {
@@ -318,11 +365,11 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
     for hollow in components(grid, &under).into_iter().filter(|c| c.len() < LAKE_MIN_CELLS) {
         for i in hollow {
             heights[i] = filled[i];
-            basins[i] = 1.;
             wetland[i] = 1.;
         }
     }
-    let (filled, _, drainage) = flow(heights, &base);
+    // (Filled to the flooded surface, the filled hollows flood the same: no second flood.)
+    let drainage = FlowGraph::new(grid, &filled, &base).accumulate(area);
     let lake_depth = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     Hydrology { filled, drainage, lake_depth, base, wetland, basins }
 }
@@ -349,7 +396,7 @@ pub fn settle(
             flats.push(i);
         }
     }
-    let filled = priority_flood(grid, heights, base, 1e-4);
+    // (Filled to the flooded surface, the filled hollows flood the same: no second flood.)
     let drainage = FlowGraph::new(grid, &filled, base).accumulate(|i| grid.area(i));
     let lake_depth = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     (drainage, lake_depth, flats)

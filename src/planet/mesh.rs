@@ -23,7 +23,8 @@ const SKIRT_CELLS: f32 = 2.;
 /// Step for normals, in cells.
 const NORMAL_STEP: f32 = 0.25;
 
-/// Distance from the camera to the nearest point of a chunk (at sea level, roughly).
+/// Distance from the camera to the nearest point of a chunk (on the cells' ground, roughly:
+/// high ground is nearer the camera than sea level).
 pub fn distance_to_chunk(surface: &PlanetSurface, chunk: &PlanetChunk, camera: Vec3) -> f32 {
     let half = CHUNK_CELLS as f32 / 2.;
     let center = chunk.center();
@@ -34,7 +35,8 @@ pub fn distance_to_chunk(surface: &PlanetSurface, chunk: &PlanetChunk, camera: V
     } else {
         center
     };
-    let point = surface.direction(chunk.face, nearest) * surface.radius;
+    let ground = surface.heights.bilinear(chunk.face, nearest).max(0.);
+    let point = surface.direction(chunk.face, nearest) * (surface.radius + ground);
     let corner_slack = if face == chunk.face { 0. } else { half * 1.5 };
     (camera.distance(point) - corner_slack).max(1.)
 }
