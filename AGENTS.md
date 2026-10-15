@@ -336,7 +336,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   up, and ground materials from the climate per vertex (see Lakes below for the channels),
   see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
   Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
-  resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
+  resampled every 0.5 cells, meandering on flat valleys; width `RIVER_WIDTH.0` × (area /
+  `RIVER_MIN_AREA`)^`RIVER_WIDTH.1`, some 20× from the smallest to the largest; tributaries end
+  on their parent's final path `JOIN_LEAD` points downstream of the nearest, the move eased
+  over `JOIN_BLEND` points; rivers run through the lakes they enter or leave, to or from the
+  deepest cell at the lake's level, as on the flat map: `through_lakes`) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
   Lakes (`planet_lakes.rs::shape_lakes`, after the coasts, before the rivers): sea patches
   cut off from the ocean (under `SEA_MIN_SHARE` of the cells) become land below sea level, a
@@ -365,7 +369,8 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   and hillside spouts (a raised row in the notch, whitewater below); `planet/vegetation.rs`
   puts the flat map's rock outcrop round each spout.
   Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
-  cells walked on the sphere's grid): deltas (distributaries from `mouths::grow_channels`,
+  cells walked on the sphere's grid; deltas rarer than estuaries; distributaries never cross
+  land above `DELTA_MAX_GROUND`, delta land sinks to a bar toward the tips: `TIP_TRIM`): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
   `planet/water.rs` draws the water with the flat map's toon water on the sphere

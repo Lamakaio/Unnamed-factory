@@ -843,7 +843,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         .map(|i| {
             let river = smoothstep(CALM_RIVER_AREA * 0.5, CALM_RIVER_AREA, drainage[i]);
             let lake = smoothstep(0.02, 0.1, lake_depth[i]);
-            river.max(lake).max(floodplain[i]).max(basins[i])
+            // (Wetlands are flat: floodplains, closed flats, delta land.)
+            river.max(lake).max(wetland[i]).max(basins[i])
         })
         .collect();
     let calm: Vec<f32> = grid.blur(&calm, 2).iter().map(|c| (c * 3.).min(1.)).collect();

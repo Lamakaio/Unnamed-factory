@@ -15,8 +15,10 @@ const SPACING: f32 = 0.5;
 /// units, as on the flat map), meander amplitude (channel widths) and the valley slope above
 /// which rivers don't meander.
 pub const RIVER_MIN_AREA: f32 = 400.;
-const RIVER_WIDTH: f32 = 0.5;
-const RIVER_DEPTH: f32 = 0.4;
+/// Width and depth of the smallest rivers, and how they grow with the area drained (power of
+/// the area: the largest rivers are some 20 times wider than the smallest).
+const RIVER_WIDTH: (f32, f32) = (0.25, 0.64);
+const RIVER_DEPTH: (f32, f32) = (0.25, 0.5);
 const MEANDER_AMPLITUDE: f32 = 1.5;
 const MEANDER_MAX_SLOPE: f32 = 0.05;
 /// Lake depth from which a cell is under a lake (rivers end there).
@@ -139,9 +141,10 @@ pub fn extract(
             path[i].1 = path[i].1.min(path[i - 1].1);
         }
         let length = path.len();
-        let widths: Vec<f32> = path.iter().map(|p| RIVER_WIDTH * (p.2 / RIVER_MIN_AREA).sqrt()).collect();
+        let widths: Vec<f32> =
+            path.iter().map(|p| RIVER_WIDTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_WIDTH.1)).collect();
         let depths: Vec<f32> =
-            path.iter().map(|p| RIVER_DEPTH * (p.2 / RIVER_MIN_AREA).powf(0.4)).collect();
+            path.iter().map(|p| RIVER_DEPTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_DEPTH.1)).collect();
         // Meanders where the valley is flat, about 12 channel widths long.
         let slope: Vec<f32> = (0..length)
             .map(|i| {
@@ -157,7 +160,7 @@ pub fn extract(
             })
             .collect();
         let mut phase = 0f32;
-        let points = (0..length)
+        let mut points: Vec<PlanetRiverPoint> = (0..length)
             .map(|i| {
                 let (position, level, _) = path[i];
                 let wavelength = (12. * widths[i]).max(8.);
@@ -187,9 +190,16 @@ pub fn extract(
                 }
             })
             .collect();
+        // Tributaries end exactly on their parent's (final) path.
+        if let RiverEnd::Junction(parent) = river.end
+            && let Some(&Some(parent)) = output_index.get(parent)
+        {
+            join_parent(&mut points, &rivers[parent]);
+        }
         output_index.push(Some(rivers.len()));
         rivers.push(PlanetRiver { points, end: river.end });
     }
+    through_lakes(grid, radius, filled, lake_depth, &mut rivers);
     // Junctions point at output indices (short rivers were dropped).
     for river in &mut rivers {
         if let RiverEnd::Junction(parent) = river.end {
@@ -200,6 +210,152 @@ pub fn extract(
         }
     }
     (rivers, valley)
+}
+
+/// Tributaries join their parent this many points downstream of the nearest (so they meet at
+/// an angle leaning downstream, as real confluences do), the move spread over this many
+/// points of their end (as on the flat map, `rivers::JOIN_LEAD`).
+const JOIN_LEAD: usize = 2;
+const JOIN_BLEND: usize = 8;
+
+/// Move a tributary's end onto its parent's path, easing the points before it along.
+fn join_parent(points: &mut [PlanetRiverPoint], parent: &PlanetRiver) {
+    let n = points.len();
+    let end = points[n - 1].direction;
+    let Some(nearest) = (0..parent.points.len()).max_by(|&a, &b| {
+        parent.points[a].direction.dot(end).total_cmp(&parent.points[b].direction.dot(end))
+    }) else {
+        return;
+    };
+    let target = parent.points[(nearest + JOIN_LEAD).min(parent.points.len() - 1)];
+    let shift = target.direction - end;
+    let blend = JOIN_BLEND.min(n - 1);
+    for j in 0..=blend {
+        let t = 1. - j as f32 / blend.max(1) as f32;
+        let k = n - 1 - j;
+        points[k].direction = (points[k].direction + shift * t * t * (3. - 2. * t)).normalize();
+    }
+    points[n - 1].level = target.level.min(points[n.saturating_sub(2)].level);
+}
+
+/// Lead rivers through the lakes they flow into or out of, to or from the lake's deepest
+/// point, at its level (as on the flat map, `lakes::extend_through_lakes`): their channels are
+/// carved through the bed, and they clearly join the lake rather than stop at its edge.
+fn through_lakes(
+    grid: &SphereGrid,
+    radius: f32,
+    filled: &[f32],
+    lake_depth: &[f32],
+    rivers: &mut [PlanetRiver],
+) {
+    let in_lake = |i: usize| lake_depth[i] >= LAKE;
+    // Each lake's cells (their lake's id), and its deepest cell.
+    let mut lake_of = vec![u32::MAX; lake_depth.len()];
+    let mut deepest = Vec::new();
+    for start in 0..lake_depth.len() {
+        if !in_lake(start) || lake_of[start] != u32::MAX {
+            continue;
+        }
+        let id = deepest.len() as u32;
+        let mut queue = std::collections::VecDeque::from([start]);
+        lake_of[start] = id;
+        let mut best = start;
+        while let Some(i) = queue.pop_front() {
+            if lake_depth[i] > lake_depth[best] {
+                best = i;
+            }
+            for (j, _) in grid.neighbours(i) {
+                if in_lake(j) && lake_of[j] == u32::MAX {
+                    lake_of[j] = id;
+                    queue.push_back(j);
+                }
+            }
+        }
+        deepest.push(best);
+    }
+    // The lake cell at or next to a direction.
+    let lake_cell_near = |direction: Vec3| {
+        let cell = grid.cell_at(direction);
+        std::iter::once(cell)
+            .chain(grid.neighbours(cell).map(|(j, _)| j))
+            .find(|&j| in_lake(j))
+    };
+    // Cells from `entry` to its lake's deepest, through the lake.
+    let path_to_deepest = |entry: usize| {
+        let lake = lake_of[entry];
+        let target = deepest[lake as usize];
+        let mut previous = std::collections::HashMap::from([(entry, entry)]);
+        let mut queue = std::collections::VecDeque::from([entry]);
+        while let Some(i) = queue.pop_front() {
+            if i == target {
+                break;
+            }
+            for (j, _) in grid.neighbours(i) {
+                if lake_of[j] == lake && !previous.contains_key(&j) {
+                    previous.insert(j, i);
+                    queue.push_back(j);
+                }
+            }
+        }
+        previous.contains_key(&target).then(|| {
+            let mut path = vec![target];
+            while *path.last().unwrap() != entry {
+                path.push(previous[path.last().unwrap()]);
+            }
+            path.reverse();
+            path
+        })
+    };
+    // River points along directions (smoothed), every `SPACING`, at a level.
+    let points_along = |mut route: Vec<Vec3>, like: PlanetRiverPoint, level: f32| {
+        for _ in 0..3 {
+            route = (0..route.len())
+                .map(|k| match k {
+                    0 => route[0],
+                    k if k + 1 == route.len() => route[k],
+                    k => (route[k - 1] + route[k] * 2. + route[k + 1]).normalize(),
+                })
+                .collect();
+        }
+        let mut points = Vec::new();
+        for pair in route.windows(2) {
+            let steps = ((pair[0].distance(pair[1]) * radius / SPACING).ceil() as usize).max(1);
+            for k in 0..steps {
+                let direction = pair[0].lerp(pair[1], k as f32 / steps as f32).normalize();
+                points.push(PlanetRiverPoint { direction, level, ..like });
+            }
+        }
+        points.push(PlanetRiverPoint { direction: *route.last().unwrap(), level, ..like });
+        points
+    };
+    for river in rivers.iter_mut() {
+        let (first, last) = (river.points[0], *river.points.last().unwrap());
+        // Into a lake: on to its deepest point.
+        let into = match river.end {
+            RiverEnd::Lake(_) => lake_cell_near(last.direction),
+            _ => None,
+        };
+        if let Some(entry) = into
+            && let Some(path) = path_to_deepest(entry)
+        {
+            let level = filled[entry].min(last.level);
+            let mut route = vec![last.direction];
+            route.extend(path.iter().map(|&i| grid.direction(i)));
+            river.points.extend(points_along(route, last, level).into_iter().skip(1));
+        }
+        // Out of a lake (next to the source, not the one it flows into): from its deepest.
+        if let Some(entry) = lake_cell_near(first.direction)
+            && into.is_none_or(|into| lake_of[into] != lake_of[entry])
+            && let Some(path) = path_to_deepest(entry)
+        {
+            let mut route: Vec<Vec3> = path.iter().rev().map(|&i| grid.direction(i)).collect();
+            route.push(first.direction);
+            let mut points = points_along(route, first, filled[entry].max(first.level));
+            points.pop();
+            points.extend(river.points.iter().copied());
+            river.points = points;
+        }
+    }
 }
 
 /// Chaikin corner cutting on the sphere (positions kept at `radius`).

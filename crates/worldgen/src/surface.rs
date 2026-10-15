@@ -207,7 +207,8 @@ impl PlanetSurface {
                 let lowest = [-0.5f32, 0., 0.5]
                     .map(|side| {
                         let q = (up * surface.radius + across * side * point.width).normalize();
-                        surface.uncarved_height(q)
+                        // (In a lake, its water: rivers run through lakes at their level.)
+                        surface.uncarved_height(q) + surface.lake_depth_at(q)
                     })
                     .into_iter()
                     .fold(f32::MAX, f32::min);

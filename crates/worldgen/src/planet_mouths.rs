@@ -19,8 +19,16 @@ use crate::{
     sphere::SphereGrid,
 };
 
-/// River width (world units) from which mouths can build deltas (`WorldgenSettings`).
-const DELTA_MIN_WIDTH: f32 = 2.;
+/// River width (world units) from which mouths can build deltas (the flat map's
+/// `WorldgenSettings::delta_min_width`, for the planet's narrower rivers).
+const DELTA_MIN_WIDTH: f32 = 1.5;
+/// Delta land sinks under the sea toward the channels' tips, over this distance (a constant
+/// plus this many channel widths), to a bar this deep: no islands at the tips.
+const TIP_TRIM: (f32, f32) = (4., 4.);
+const TIP_BAR: f32 = -0.12;
+/// Distributaries never cross land higher than this (world units): they would cut a canyon
+/// through it (the channel and its forks are dropped).
+const DELTA_MAX_GROUND: f32 = 1.2;
 /// Spacing of river points (world units, about cells on the planet).
 const SPACING: f32 = crate::mouths::SPACING;
 
@@ -150,9 +158,10 @@ fn choose(grid: &SphereGrid, frame: &Frame, seed: u64, heights: &[f32], width: f
     });
     let flat = count == 0. || sum / count < 3.;
     match (large, flat) {
-        (true, true) if roll < 0.55 => Mouth::Delta,
+        // (Estuaries are more common than deltas on Earth.)
+        (true, true) if roll < 0.25 => Mouth::Delta,
         (true, true) if roll < 0.85 => Mouth::Estuary,
-        (true, false) if roll < 0.4 => Mouth::Estuary,
+        (true, false) if roll < 0.5 => Mouth::Estuary,
         (false, _) if width >= DELTA_MIN_WIDTH * 0.6 && roll < 0.2 => Mouth::Estuary,
         _ => Mouth::Plain,
     }
@@ -225,6 +234,7 @@ fn build_delta(
         .unwrap_or(count - 1)
         .max(last_join)
         .clamp(1, count - 1);
+    let original = river.points.clone();
     river.points.truncate(apex_index + 1);
     let apex = river.points[apex_index];
     let apex_local = frame.local(apex.direction);
@@ -244,6 +254,34 @@ fn build_delta(
         direction,
         length,
     );
+    // Channels over high ground (headlands, hills) are dropped, with their forks.
+    let high = |channel: &Channel| {
+        channel.points.iter().any(|p| heights[grid.cell_at(frame.direction(p.position))] > DELTA_MAX_GROUND)
+    };
+    let mut dropped: Vec<bool> = channels.iter().map(high).collect();
+    loop {
+        let mut changed = false;
+        for (k, channel) in channels.iter().enumerate() {
+            let start = channel.points[0].position;
+            let from_dropped = channels.iter().enumerate().any(|(j, parent)| {
+                dropped[j] && j != k && parent.points.last().is_some_and(|end| end.position.distance(start) < 1e-3)
+            });
+            if from_dropped && !dropped[k] {
+                dropped[k] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let channels: Vec<Channel> =
+        channels.into_iter().zip(dropped).filter(|(_, dropped)| !dropped).map(|(c, _)| c).collect();
+    if !channels.iter().any(|c| c.open) {
+        // No way to the sea left: an ordinary mouth.
+        river.points = original;
+        return Vec::new();
+    }
     raise_delta_land(grid, frame, noise.layer(60 + index as u32), heights, sea, wetland, &channels, length);
 
     // Water falls from the apex level to just under the sea at the full delta length.
@@ -285,6 +323,8 @@ fn raise_delta_land(
     };
     for_cells_around(grid, frame, first.position, length * 1.6, |i, p| {
         let mut best: f32 = 0.;
+        // How far from the tips the land of the best point is (1: away from them).
+        let mut emerged: f32 = 0.;
         // Distance to the nearest channel, in levee widths.
         let mut near = f32::MAX;
         for point in &points {
@@ -297,14 +337,19 @@ fn raise_delta_land(
             }
             let d = p.distance(point.position) / reach;
             if d < 1. {
-                best = best.max((1. - d).sqrt() * (0.15 + 0.3 * (1. - t)));
+                let rise = (1. - d).sqrt() * (0.15 + 0.3 * (1. - t));
+                if rise > best {
+                    best = rise;
+                    emerged = smoothstep(0., TIP_TRIM.0 + TIP_TRIM.1 * point.width, point.to_tip);
+                }
             }
         }
         if best > 0. {
             let wobble = 1. + 0.3 * noise.fbm(p / 5., 2);
             let wet = if sea[i] { 1. } else { (1. - near).max(0.) };
             wetland[i] = wetland[i].max(wet);
-            heights[i] = heights[i].max(0.08 + best * wobble);
+            let land = 0.08 + best * wobble;
+            heights[i] = heights[i].max(TIP_BAR + (land - TIP_BAR) * emerged);
             sea[i] = heights[i] <= 0.;
         }
     });
