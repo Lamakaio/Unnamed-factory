@@ -1,5 +1,6 @@
 //! Planet climate previews: Köppen, annual precipitation and January / July temperature maps
-//! (equirectangular), and zonal means to check the patterns everyone knows.
+//! (equirectangular), and zonal means to check the patterns everyone knows (temperatures and
+//! rain; the prevailing wind's east / north components, mean speed and steadiness).
 //!
 //! `cargo run -p worldgen --release --example climate_preview -- <out_dir> [--n <cells>] [seeds...]`
 
@@ -71,6 +72,33 @@ fn main() {
                 if n_land > 0. { p_land / n_land } else { f32::NAN },
                 if n_sea > 0. { p_sea / n_sea } else { f32::NAN },
             );
+        }
+        // Zonal winds: the year's prevailing wind (east, north, m/s), its strength (mean speed)
+        // and steadiness (|mean| / mean speed), over the sea and over land.
+        println!("  lat   | sea: east north speed steady | land: east north speed steady");
+        for band in 0..17 {
+            let centre = -80. + band as f32 * 10.;
+            let mut sums = [[0f32; 5]; 2];
+            for c in 0..climate.grid.len() {
+                let d = climate.grid.direction(c);
+                if (d.y.asin().to_degrees() - centre).abs() > 5. {
+                    continue;
+                }
+                let north = (Vec3::Y - d * d.y).normalize();
+                let east = d.cross(north);
+                let w = climate.prevailing[c];
+                let sum = &mut sums[(climate.land[c] > 0.5) as usize];
+                sum[0] += w.dot(east);
+                sum[1] += w.dot(north);
+                sum[2] += climate.strength[c];
+                sum[3] += w.length() / climate.strength[c].max(1e-3);
+                sum[4] += 1.;
+            }
+            let column = |s: [f32; 5]| match s[4] > 0. {
+                true => format!("{:6.1} {:6.1} {:6.1} {:5.2}", s[0] / s[4], s[1] / s[4], s[2] / s[4], s[3] / s[4]),
+                false => format!("{:>26}", "-"),
+            };
+            println!("  {centre:+3.0}  | {} | {}", column(sums[0]), column(sums[1]));
         }
         // Köppen shares on land.
         let mut shares = std::collections::HashMap::new();

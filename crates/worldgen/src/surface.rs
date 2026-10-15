@@ -13,7 +13,7 @@ use crate::{
     heightmap::catmull_rom,
     noise::{Noise, smoothstep},
     planet::Planet,
-    planet_climate::PlanetClimate,
+    planet_climate::{PlanetClimate, WindField},
     planet_rivers::PlanetRiver,
     sphere::{FACES, SphereGrid},
 };
@@ -113,6 +113,8 @@ pub struct PlanetSurface {
     pub ground: Option<[FaceField; 3]>,
     /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
     pub weights: Option<[FaceField; 5]>,
+    /// The climate's prevailing winds (see [`PlanetSurface::wind_at`]).
+    wind: Option<std::sync::Arc<WindField>>,
     /// The rivers, their water levels kept under the surface across their channel.
     pub rivers: Vec<PlanetRiver>,
     channels: Channels,
@@ -147,6 +149,7 @@ impl PlanetSurface {
             })
         });
         let mut surface = Self {
+            wind: climate.map(|climate| std::sync::Arc::new(climate.wind_field())),
             weights,
             ground,
             rivers: Vec::new(),
@@ -308,6 +311,47 @@ impl PlanetSurface {
         self.grid.face_coords(direction)
     }
 
+    /// The wind at continuous cell coordinates of a face: the climate's prevailing wind
+    /// (tangent vector, m/s) and strength (mean speed, m/s), stronger on ground standing above
+    /// its surroundings (ridges, summits), weaker in hollows and valleys, and turned along
+    /// steep slopes rather than up them. A light westerly without a climate.
+    pub fn wind_at(&self, face: usize, p: Vec2) -> (Vec3, f32) {
+        let direction = self.direction(face, p);
+        let Some(field) = &self.wind else {
+            let east = Vec3::Y.cross(direction).normalize_or_zero();
+            return (east * 5., 5.);
+        };
+        let (mut wind, strength) = field.at(direction);
+        let height = self.heights.bilinear(face, p);
+        if height <= 0. {
+            return (wind, strength);
+        }
+        // Exposure: height above the mean of a ring around.
+        let ring = (0..8)
+            .map(|k| {
+                let q = p + Vec2::from_angle(k as f32 * std::f32::consts::FRAC_PI_4) * WIND_RING;
+                self.heights.bilinear(face, q).max(0.)
+            })
+            .sum::<f32>()
+            / 8.;
+        let exposure = 1. + WIND_EXPOSURE.0 * ((height - ring) / WIND_EXPOSURE.1).tanh();
+        // Steep slopes: the wind blowing up them turns along them.
+        let tx = (self.direction(face, p + Vec2::X) - self.direction(face, p - Vec2::X)) * self.radius / 2.;
+        let ty = (self.direction(face, p + Vec2::Y) - self.direction(face, p - Vec2::Y)) * self.radius / 2.;
+        let dx = (self.heights.bilinear(face, p + Vec2::X) - self.heights.bilinear(face, p - Vec2::X)) / 2.;
+        let dy = (self.heights.bilinear(face, p + Vec2::Y) - self.heights.bilinear(face, p - Vec2::Y)) / 2.;
+        let slope = tx * (dx / tx.length_squared()) + ty * (dy / ty.length_squared());
+        let steepness = slope.length();
+        if steepness > 1e-4 {
+            let uphill = slope / steepness;
+            let up = wind.dot(uphill).max(0.);
+            let turned = up * smoothstep(WIND_STEEP.0, WIND_STEEP.1, steepness);
+            let along = direction.cross(uphill);
+            wind += -uphill * turned + along * turned * wind.dot(along).signum();
+        }
+        (wind * exposure, strength * exposure)
+    }
+
     /// Seed of the surface's details (for things placed on it).
     pub fn seed(&self) -> u32 {
         self.seed
@@ -437,6 +481,13 @@ impl Channels {
         wet
     }
 }
+
+/// Local wind: the ring (cells) the exposure compares a point's height with, the most the
+/// wind speeds up or slows down (share) and the height difference (world units) for most of
+/// it, and the slopes over which the wind turns along them instead of blowing up.
+const WIND_RING: f32 = 6.;
+const WIND_EXPOSURE: (f32, f32) = (0.5, 4.);
+const WIND_STEEP: (f32, f32) = (0.3, 1.);
 
 /// Distance from a river's axis where its banks end.
 fn reach(width: f32) -> f32 {

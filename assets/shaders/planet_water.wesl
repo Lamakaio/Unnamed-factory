@@ -1,8 +1,9 @@
 // Planet water (sea, lakes, rivers): the flat map's toon water (`water.wesl`) on the sphere.
 // Patterns use 2D coordinates from the mesh (vertex colour red/green: along / across a river,
 // or a cube face's cell coordinates for lakes and the sea), heights and up are radial
-// (`planet.x` is the sea level radius). No swell yet (the flat map's wave field is baked over
-// its continent): the sea has wind ripples and shore foam.
+// (`planet.x` is the sea level radius). The sea's wave field is a texture per cube face, by
+// cell (`worldgen::planet_sea`); lakes and the sea carry the local wind (UV0: direction ×
+// speed, m/s, in the pattern coordinates): ripples drift with it, stronger in strong wind.
 //
 // The flat map's description:
 //
@@ -35,9 +36,12 @@ import bevy_pbr::render::{
 import bevy_pbr::prepass::utils::prepass_depth;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
-// x: the sea level radius.
+// x: the sea level radius, y: cells along a face edge, z: 1 with a sea wave field.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
-// Prevailing wind direction (in the pattern coordinates).
+// The face's sea wave field: (travel time to the shore, depth, exposure, wind speed).
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var sea_field: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var sea_sampler: sampler;
+// Wind direction where the mesh carries none (in the pattern coordinates).
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var<uniform> wind: vec4<f32>;
 
 // Depth bands (linear colours) and the depths between them (world units).
@@ -142,11 +146,58 @@ struct Sea {
     chop: f32,
 }
 
-fn sea_waves(xz: vec2<f32>, time: f32, footprint: f32) -> Sea {
+fn sea_waves(xz: vec2<f32>, time: f32, footprint: f32, wind_dir: vec2<f32>) -> Sea {
     var out: Sea;
     out.chop = 0.6;
     out.swash = 0.04;
     out.depth = -1.0;
+    if planet.z <= 0.0 {
+        return out;
+    }
+    // The face's field, a texel per cell (cell centres at whole coordinates).
+    let uv = (xz + 0.5) / planet.y;
+    let field = textureSampleLevel(sea_field, sea_sampler, uv, 0.0);
+    let travel = field.x;
+    let depth = field.y;
+    let exposure = field.z;
+    out.depth = depth;
+    out.exposure = exposure;
+    out.travel = travel;
+
+    // Crests: isolines of the travel time, moving shoreward. They arrive a little obliquely
+    // with the wind, and slowly out of step along the coast.
+    let oblique = dot(xz, wind_dir) * 0.08 + value_noise(xz * 0.03) * 1.5;
+    // Crests are where the phase is a whole number: their travel time decreases over time.
+    let phase = travel / WAVE_LENGTH + time / WAVE_PERIOD + oblique;
+    let u = fract(phase);
+    let reach = 1.0 - smoothstep(SWELL_REACH.x, SWELL_REACH.y, travel);
+    // A sharp front and a trailing back, wider in the shallows (steeper, slower waves).
+    let shallow = 1.0 - smoothstep(0.2, 3.0, depth);
+    let back = mix(0.18, 0.4, shallow);
+    let front = saturate((1.0 - u) / max(fwidth(phase) * 1.5, 1e-3));
+    let band = front * (1.0 - smoothstep(0.0, back, u));
+    // Crests come in segments (more continuous on exposed shores and in the shallows).
+    let segments = fbm2(xz * 0.22 + wind_dir * time * 0.15) * 0.5 + 0.5;
+    let continuity = 0.15 + 0.35 * exposure + 0.25 * shallow;
+    let crest = band * smoothstep(1.0 - continuity, 1.2 - continuity, segments);
+    let swell = reach * (0.35 + 0.65 * exposure);
+    out.crest = crisp(0.5, crest * swell);
+
+    // Breakers: crests turn to foam in the shallows, trailing lacy foam behind.
+    let breaking = (1.0 - smoothstep(BREAK_DEPTH * 0.4, BREAK_DEPTH, depth / max(exposure, 0.2)))
+        * (1.0 - smoothstep(SURF_ZONE * 0.5, SURF_ZONE, travel));
+    // Lace: foam with holes, more of them further behind the breaking front.
+    let lace = value_noise(xz * 4.0 + vec2(time * 0.2, 0.0)) * 0.5 + 0.5
+        + value_noise(xz * 9.0 - vec2(0.0, time * 0.3)) * 0.25;
+    let behind = smoothstep(0.0, 0.5, u);
+    let trail = front * (1.0 - behind) * step(behind * 0.9 + 0.15, lace);
+    out.foam = crisp(0.45, max(crest * step(behind * 1.6, lace), trail) * breaking * exposure
+        * reach);
+
+    // Swash: the foam line runs up the beach as each wave arrives.
+    let arrive = 0.5 + 0.5 * sin(6.2832 * (time / WAVE_PERIOD + oblique));
+    out.swash = 0.03 + (0.04 + 0.12 * arrive * arrive) * exposure;
+    out.chop = mix(0.6, 0.25, reach * shallow);
     return out;
 }
 
@@ -178,8 +229,18 @@ fn fragment(
     shore_thickness = smoothed_thickness(in.position, surface_z, clamp(SHORE_SMOOTH / pixel, 1.0, 12.0));
 }
     var depth = thickness * max(dot(to_eye, radial), 0.2);
+    // The local wind (lakes and the sea; rivers carry their flow there instead).
+    var wind_v = wind.xy * 6.0;
+@if(VERTEX_UVS_A)
+    wind_v = in.uv;
+    let wind_speed = length(wind_v);
+    let wind_dir = select(wind.xy, wind_v / max(wind_speed, 1e-4), wind_speed > 1e-3);
     var sea: Sea;
-    sea.depth = -1.0;
+    sea = sea_waves(xz, time, footprint, wind_dir);
+    if sea.depth >= 0.0 {
+        // The baked depth is smoother; the prepass is exact at the shore.
+        depth = max(min(depth, 0.3), sea.depth);
+    }
 
     // Depth bands, their edges wobbling.
     let wobble = value_noise(xz * 0.6 + vec2(time * 0.05, 0.0));
@@ -262,7 +323,9 @@ fn fragment(
             swash = sea.swash;
             chop = sea.chop;
         }
-        crest = max(crest, ripples(xz, wind.xy, time, footprint, chop));
+        // Ripples grow with the wind (calm belts glassy, storm belts choppy).
+        chop *= 0.3 + 0.9 * smoothstep(2.0, 11.0, wind_speed);
+        crest = max(crest, ripples(xz, wind_dir, time, footprint, min(chop, 1.0)));
     }
 
     // Glints: where two drifting noise layers are both high.

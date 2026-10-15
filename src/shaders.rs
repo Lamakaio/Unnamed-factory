@@ -30,16 +30,22 @@ const PLANET_WATER_SHADER_ASSET_PATH: &str = "shaders/planet_water.wesl";
 
 /// The planet's water: the flat map's toon water on the sphere (`planet_water.wesl`). Meshes
 /// carry 2D pattern coordinates in vertex colour red/green; rivers also their flow velocity
-/// (UV0, in those coordinates) and (whitewater, opacity) (UV1).
+/// (UV0, in those coordinates) and (whitewater, opacity) (UV1), lakes and the sea the wind
+/// (UV0: direction × speed in m/s, in those coordinates).
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
 pub struct PlanetWaterShader {
     #[uniform(100)]
     pub tint: LinearRgba,
-    /// x: the sea level radius.
+    /// x: the sea level radius, y: cells along a face edge, z: 1 with a sea wave field.
     #[uniform(101)]
     pub planet: Vec4,
-    /// Prevailing wind direction (in the pattern coordinates).
+    /// The sea wave field of one cube face, by cell (see `worldgen::planet_sea`): travel time
+    /// to the shore, depth, exposure, wind speed.
+    #[texture(102)]
+    #[sampler(103)]
+    pub sea: Option<Handle<Image>>,
+    /// Wind direction (in the pattern coordinates) where the mesh doesn't carry its own.
     #[uniform(104)]
     pub wind: Vec4,
 }

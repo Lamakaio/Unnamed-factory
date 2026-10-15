@@ -12,7 +12,10 @@
 //! - Wind: the thermal equator (ITCZ) per longitude; pressure belts placed around it (low at
 //!   the ITCZ, highs near 30°, lows near 60°, polar highs), plus warm land lowering pressure
 //!   (monsoons); wind down the pressure gradient, turned by Coriolis (trades, westerlies,
-//!   polar easterlies).
+//!   polar easterlies). The terrain slows it (friction over land), blocks the part blowing up
+//!   mountain slopes and turns some of it along them, and high ground is windier. The year's
+//!   prevailing wind (mean vector) and strength (mean speed, storms included: their winds
+//!   spread with the temperature gradient) are kept: they set the swell.
 //! - Moisture: evaporation from the sea (and, less, from wet land), carried by the wind
 //!   (semi-Lagrangian), raining out where air rises over mountains or converges, or is
 //!   saturated; sinking air (diverging winds) stays dry. Rain shadows emerge.
@@ -65,8 +68,27 @@ const DIFFUSION: f32 = 0.4;
 const LAND_DECOUPLING: f32 = 0.75;
 /// Gauss–Seidel sweeps per step of the (implicit) heat transport.
 const TRANSPORT_SWEEPS: usize = 12;
-/// Wind speed (m/s) per unit of pressure gradient (per radian; the belts span ±1).
-const WIND_SCALE: f32 = 3.;
+/// Surface wind speed (m/s) per unit of pressure gradient (per radian; the belts span ±1),
+/// and its share left at the poles (polar highs are weak: the polar easterlies are light).
+const WIND_SCALE: f32 = 1.8;
+const POLAR_WIND: f32 = 0.55;
+/// Storm winds (m/s, their spread about the mean) per unit of north–south temperature
+/// gradient (K per radian): storms grow where the temperature changes fast with latitude
+/// (baroclinicity),
+/// the mid-latitudes, so their winds there are strong but unsteady.
+const STORMINESS: f32 = 0.22;
+/// Moisture travels with the lower troposphere's wind, faster than the surface's.
+const ALOFT: f32 = 1.67;
+/// Surface wind speed left over land by friction (over the sea: all of it). The wind aloft,
+/// which carries the moisture, doesn't feel it.
+const LAND_FRICTION: f32 = 0.55;
+/// Mountain slopes (m/m, at the climate grid's scale) over which the wind blowing up them is
+/// blocked, the share blocked, and the share of that turned along the slope instead.
+const BLOCKING_SLOPE: (f32, f32) = (0.002, 0.012);
+const BLOCKED: f32 = 0.7;
+const DEFLECTED: f32 = 0.5;
+/// Extra wind speed on high ground (share, reached at this altitude in m).
+const ALTITUDE_GAIN: (f32, f32) = (0.3, 3000.);
 /// Lapse rate (K/m).
 const LAPSE: f32 = 0.0065;
 /// Strength of the ocean current anomalies (W/m²).
@@ -94,6 +116,10 @@ pub struct PlanetClimate {
     pub land: Vec<f32>,
     /// January and July winds (tangent vectors, m/s), for previews.
     pub wind: [Vec<Vec3>; 2],
+    /// The year's prevailing wind (mean of the monthly winds: tangent vectors, m/s) and
+    /// strength (mean of the monthly speeds, m/s). Their ratio is how steady the wind is.
+    pub prevailing: Vec<Vec3>,
+    pub strength: Vec<f32>,
 }
 
 /// Latitude (radians) of a unit direction.
@@ -204,15 +230,18 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
     // Winds and rain, month by month.
     let mut months = vec![[Month::default(); 12]; cells];
     let mut wind_out = [vec![Vec3::ZERO; cells], vec![Vec3::ZERO; cells]];
+    let (mut prevailing, mut strength) = (vec![Vec3::ZERO; cells], vec![0f32; cells]);
     let mut land_wetness = vec![0.5f32; cells];
     for pass in 0..2 {
         for month in 0..12 {
             let t: Vec<f32> = (0..cells).map(|i| monthly_t[i][month]).collect();
-            let wind = winds(&grid, &directions, &latitudes, &longitudes, &t, &land);
+            let wind = winds(&grid, &directions, &latitudes, &longitudes, &t, &land, &altitude);
+            let aloft: Vec<Vec3> = wind.iter().map(|w| w.1 * ALOFT).collect();
+            let wind: Vec<Vec3> = wind.iter().map(|w| w.0).collect();
             let precipitation = rain(
                 &grid,
                 &directions,
-                &wind,
+                &aloft,
                 &t,
                 &land,
                 &land_wetness,
@@ -221,6 +250,13 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
             if pass == 1 {
                 for i in 0..cells {
                     months[i][month] = Month { temperature: t[i], precipitation: precipitation[i] };
+                }
+                for i in 0..cells {
+                    let storms = STORMINESS
+                        * gradient(&grid, &directions, &t, i).y.abs()
+                        * (1. - (1. - LAND_FRICTION) * land[i]);
+                    prevailing[i] += wind[i] / 12.;
+                    strength[i] += (wind[i].length_squared() + storms * storms).sqrt() / 12.;
                 }
                 if month == 0 {
                     wind_out[0] = wind.clone();
@@ -241,6 +277,8 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
         elevation,
         land,
         wind: wind_out,
+        prevailing,
+        strength,
     }
 }
 
@@ -299,7 +337,8 @@ fn gradient(grid: &SphereGrid, directions: &[Vec3], values: &[f32], i: usize) ->
     Vec2::new((nn * eh - en * nh) / det, (ee * nh - en * eh) / det)
 }
 
-/// Surface winds (tangent vectors, m/s) for a month's temperatures.
+/// Winds (tangent vectors, m/s) for a month's temperatures: at the surface, and aloft (the
+/// same without the land's friction).
 fn winds(
     grid: &SphereGrid,
     directions: &[Vec3],
@@ -307,7 +346,8 @@ fn winds(
     longitudes: &[f32],
     t: &[f32],
     land: &[f32],
-) -> Vec<Vec3> {
+    altitude: &[f32],
+) -> Vec<(Vec3, Vec3)> {
     let cells = grid.len();
     // The thermal equator per longitude band: the warmest latitude within 35° of the equator
     // (zonal means per 2° band), smoothed along the longitudes.
@@ -376,9 +416,25 @@ fn winds(
         // isobars, friction keeping some flow toward low pressure).
         let lat = latitudes[i];
         let turn = -lat.signum() * 70f32.to_radians() * smoothstep(0., 12f32.to_radians(), lat.abs());
-        let flow = Vec2::from_angle(turn).rotate(down);
+        let polar = 1. - (1. - POLAR_WIND) * smoothstep(60f32.to_radians(), 75f32.to_radians(), lat.abs());
+        let mut flow = Vec2::from_angle(turn).rotate(down) * WIND_SCALE * polar;
+        // Mountains: the wind blowing up a steep slope is partly blocked, and some of it turns
+        // along the slope (going round the range).
+        let slope = gradient(grid, directions, altitude, i) / EARTH_RADIUS;
+        let steepness = slope.length();
+        if steepness > 1e-6 {
+            let uphill = slope / steepness;
+            let up = flow.dot(uphill).max(0.);
+            let blocked = up * BLOCKED * smoothstep(BLOCKING_SLOPE.0, BLOCKING_SLOPE.1, steepness);
+            let along = uphill.perp() * flow.dot(uphill.perp()).signum();
+            flow += -uphill * blocked + along * blocked * DEFLECTED;
+        }
+        // High ground is windier.
+        flow *= 1. + ALTITUDE_GAIN.0 * smoothstep(0., ALTITUDE_GAIN.1, altitude[i]);
         let (east, north) = frame(directions[i]);
-        (east * flow.x + north * flow.y) * WIND_SCALE
+        let aloft = east * flow.x + north * flow.y;
+        // Friction over land.
+        (aloft * (1. - (1. - LAND_FRICTION) * land[i]), aloft)
     })
 }
 
@@ -663,9 +719,50 @@ impl PlanetClimate {
         )
     }
 
+    /// The prevailing winds and strengths, to sample anywhere (see [`WindField`]).
+    pub fn wind_field(&self) -> WindField {
+        WindField {
+            grid: SphereGrid::new(self.grid.n()),
+            prevailing: self.prevailing.clone(),
+            strength: self.strength.clone(),
+        }
+    }
+
     /// The Köppen class at a direction and altitude (world units).
     pub fn koppen_at(&self, direction: Vec3, height: f32) -> Koppen {
         let (t, p) = self.months_at(direction, height);
         Koppen::classify(t, p, direction.y >= 0.)
+    }
+}
+
+/// The year's prevailing wind and wind strength of the climate cells (see `PlanetClimate`).
+pub struct WindField {
+    grid: SphereGrid,
+    prevailing: Vec<Vec3>,
+    strength: Vec<f32>,
+}
+
+impl WindField {
+    /// The prevailing wind (tangent vector, m/s) and wind strength (mean speed, m/s) in a
+    /// direction, bilinear between the climate cells.
+    pub fn at(&self, direction: Vec3) -> (Vec3, f32) {
+        let (face, p) = self.grid.face_coords(direction);
+        let last = (self.grid.n() - 1) as f32;
+        let p = p.clamp(Vec2::ZERO, Vec2::splat(last));
+        let (x0, z0) = (p.x.floor(), p.y.floor());
+        let (fx, fz) = (p.x - x0, p.y - z0);
+        let (x0, z0) = (x0 as usize, z0 as usize);
+        let (x1, z1) = ((x0 + 1).min(last as usize), (z0 + 1).min(last as usize));
+        let (mut wind, mut strength) = (Vec3::ZERO, 0.);
+        for (c, w) in [
+            (self.grid.index(face, x0, z0), (1. - fx) * (1. - fz)),
+            (self.grid.index(face, x1, z0), fx * (1. - fz)),
+            (self.grid.index(face, x0, z1), (1. - fx) * fz),
+            (self.grid.index(face, x1, z1), fx * fz),
+        ] {
+            wind += self.prevailing[c] * w;
+            strength += self.strength[c] * w;
+        }
+        (wind.reject_from(direction), strength)
     }
 }

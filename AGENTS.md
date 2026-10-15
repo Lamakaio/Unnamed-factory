@@ -298,7 +298,15 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
     were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,
     ice albedo, ocean/land heat capacity, implicit diffusive transport weaker over land,
     rule-based ocean current anomalies), winds from pressure belts around the ITCZ (plus warm
-    land lows) turned by Coriolis, moisture evaporated, advected semi-Lagrangian and rained out
+    land lows) turned by Coriolis; mountains block the wind blowing up them (turning part of
+    it along the slope), high ground is windier, land friction slows the surface wind (not the
+    wind aloft, `ALOFT` × faster, that carries the moisture). `WIND_SCALE` / `POLAR_WIND` are
+    calibrated on Earth's mean surface winds (trades ~8 m/s, westerlies ~9, polar easterlies
+    ~5 over the sea); `PlanetClimate::prevailing` (the year's mean wind) and `strength` (mean
+    speed with storm winds, spread `STORMINESS` × the north–south temperature gradient: the
+    westerlies' storm track is strong but unsteady), sampled with `WindField::at`;
+    `PlanetSurface::wind_at(face, p)` adds the local terrain (exposure against a ring of
+    heights, turning along steep slopes). Moisture evaporated, advected semi-Lagrangian and rained out
     by terrain uplift, convergence and saturation (sinking air dry). `Koppen::classify`, and
     `PlanetClimate::koppen_at(direction, height)` (bilinear months, lapse rate with
     `meters_per_unit` = 100). Tuned on the zonal means printed by `climate_preview`
@@ -347,7 +355,13 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   face as on the flat map (BFS over the cell samples from the lakes: lower ground, up to
   `SHORE_STEPS` onto the shore, just into river channels; marching squares on
   level + `SHORE_MARGIN` - ground, clipped to the face; samples one past the edges); the sea is a per-face grid at sea level, subdivided so it sags less than
-  `SEA_SAG`. `planet/vegetation.rs` places the flat map's trees, rocks and ground cover
+  `SEA_SAG`. Each face of the sea has its wave field (`worldgen::planet_sea::sea_field`, the
+  flat map's `map::sea` on the sphere's grid: Dijkstra travel time from the shore, stopped at
+  `MAX_TRAVEL`, depth, exposure from the local wind's direction and strength, wind speed; a
+  `Rgba16Float` texture per face, a texel per cell, `PlanetWaterShader::sea`), and the shader's
+  swell (`sea_waves`) runs on it as on the flat map. Lakes and the sea carry the local wind in
+  UV0 (direction × m/s, pattern coordinates): ripples drift with it and grow with its speed.
+  `planet/vegetation.rs` places the flat map's trees, rocks and ground cover
   (`map::vegetation`'s species, rules, models and LODs, shared through
   `VegetationModelsPlugin`; instances carry a full rotation, upright on the sphere) on each
   terrain chunk's face cells: large things within `PLACE_DISTANCE` (merged LOD2, dropped past

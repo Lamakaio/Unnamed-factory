@@ -37,6 +37,7 @@ mod par;
 pub mod planet;
 pub mod planet_climate;
 mod planet_mouths;
+pub mod planet_sea;
 pub mod planet_rivers;
 mod rivers;
 mod terrain;

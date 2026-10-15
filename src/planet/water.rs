@@ -8,7 +8,12 @@
 //! - lakes: per face, outlined by marching squares where the ground rises above the water (a
 //!   lake covers its extent, the lower ground connected to it and a little of the shore, not
 //!   ground beyond its rim), reaching just into the river channels at its edge;
-//! - the sea: a sphere at sea level, built face by face.
+//! - the sea: a sphere at sea level, built face by face, each face with its wave field
+//!   (`worldgen::planet_sea`, a texture by cell: swell crests along the travel time to the
+//!   shore, bigger where they come with a strong wind).
+//!
+//! Lakes and the sea carry the local wind (UV0, see `PlanetSurface::wind_at`): ripples drift
+//! with it, and are stronger the stronger it blows.
 //!
 //! Patterns use 2D coordinates in vertex colour red/green: along / across a river (so its
 //! flow pattern follows it across cube faces; a junction cap uses its tributary's), the face's
@@ -18,12 +23,16 @@ use std::collections::{HashMap, VecDeque};
 
 use bevy::{
     asset::RenderAssetUsages,
+    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     light::NotShadowCaster,
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
 };
+use half::f16;
 use worldgen::{
-    RiverEnd, RiverPoint, planet_rivers::PlanetRiver, sphere::FACES, surface::PlanetSurface,
+    RiverEnd, RiverPoint, planet::Planet, planet_rivers::PlanetRiver, planet_sea::sea_field,
+    sphere::FACES, surface::PlanetSurface,
 };
 
 use crate::{
@@ -45,8 +54,8 @@ const FADE_STEP: f32 = 0.5;
 /// A junction cap looks for its parent's edge this far (world units) around the junction.
 const CAP_SEARCH: f32 = 30.;
 
-/// A mesh being built: positions, pattern coordinates (vertex colour), flow velocity (UV0)
-/// and (whitewater, opacity) (UV1).
+/// A mesh being built: positions, pattern coordinates (vertex colour), flow velocity or wind
+/// (UV0) and (whitewater, opacity) (UV1, rivers only).
 #[derive(Default)]
 struct Water {
     positions: Vec<[f32; 3]>,
@@ -66,6 +75,7 @@ impl Water {
     }
 
     fn build(self, rivers: bool) -> Mesh {
+        // (UV0: the flow on rivers, the wind elsewhere; UV1 tells the shader it is a river.)
         let normals: Vec<[f32; 3]> =
             self.positions.iter().map(|p| Vec3::from(*p).normalize_or_zero().to_array()).collect();
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -73,11 +83,9 @@ impl Water {
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
             .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.coords)
             .with_inserted_indices(Indices::U32(self.indices));
-        // (UV1 tells the shader it is a river.)
+        mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.flow);
         if rivers {
-            mesh = mesh
-                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.flow)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, self.flow_b);
+            mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, self.flow_b);
         }
         mesh
     }
@@ -685,7 +693,7 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
             let height = surface.radius + level - LAKE_SINK;
             let first = water.positions.len() as u32;
             for &p in &polygon {
-                water.vertex(surface.direction(face, p) * height, p, Vec2::ZERO, 0., 1.);
+                water.vertex(surface.direction(face, p) * height, p, wind(surface, face, p), 0., 1.);
             }
             for k in 1..polygon.len() as u32 - 1 {
                 water.indices.extend([first, first + k, first + k + 1]);
@@ -705,7 +713,7 @@ fn sea_mesh(surface: &PlanetSurface, face: usize) -> Mesh {
     for z in 0..=segments {
         for x in 0..=segments {
             let p = Vec2::new(x as f32, z as f32) / segments as f32 * n - 0.5;
-            water.vertex(surface.direction(face, p) * surface.radius, p, Vec2::ZERO, 0., 1.);
+            water.vertex(surface.direction(face, p) * surface.radius, p, wind(surface, face, p), 0., 1.);
         }
     }
     let row = segments as u32 + 1;
@@ -718,27 +726,82 @@ fn sea_mesh(surface: &PlanetSurface, face: usize) -> Mesh {
     water.build(false)
 }
 
-/// Spawn the sea, rivers and lakes.
+/// The local wind in a face's cell coordinates (direction × speed in m/s).
+fn wind(surface: &PlanetSurface, face: usize, p: Vec2) -> Vec2 {
+    let (wind, strength) = surface.wind_at(face, p);
+    let wind = wind.normalize_or_zero() * strength;
+    // World units per cell along each face axis.
+    let along = |axis: Vec2| {
+        (surface.direction(face, p + axis) - surface.direction(face, p - axis)) * surface.radius / 2.
+    };
+    let (ex, ey) = (along(Vec2::X), along(Vec2::Y));
+    Vec2::new(wind.dot(ex) / ex.length_squared(), wind.dot(ey) / ey.length_squared())
+}
+
+/// The sea wave field of each face as texture data (`Rgba16Float`, a texel per cell).
+pub fn sea_textures(planet: &Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
+    let field = sea_field(planet, surface);
+    let per_face = surface.n * surface.n;
+    field
+        .chunks(per_face)
+        .map(|face| {
+            let mut data = Vec::with_capacity(per_face * 8);
+            for texel in face {
+                for value in texel {
+                    data.extend(f16::from_f32(*value).to_le_bytes());
+                }
+            }
+            data
+        })
+        .collect()
+}
+
+/// Spawn the sea (with each face's wave field), rivers and lakes.
 pub fn spawn(
     commands: &mut Commands,
     surface: &PlanetSurface,
+    sea: Vec<Vec<u8>>,
     meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
     materials: &mut Assets<PlanetWaterMaterial>,
 ) {
-    let material = materials.add(PlanetWaterMaterial {
-        base: StandardMaterial {
-            alpha_mode: AlphaMode::Blend,
-            double_sided: true,
-            cull_mode: None,
-            ..default()
-        },
-        extension: PlanetWaterShader {
-            tint: LinearRgba::WHITE,
-            planet: Vec4::new(surface.radius, 0., 0., 0.),
-            wind: Vec4::new(1., 0., 0., 0.),
-        },
-    });
-    let mut spawn = |name: String, mesh: Mesh| {
+    let n = surface.n as u32;
+    let mut material = |sea: Option<Handle<Image>>| {
+        materials.add(PlanetWaterMaterial {
+            base: StandardMaterial {
+                alpha_mode: AlphaMode::Blend,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            },
+            extension: PlanetWaterShader {
+                tint: LinearRgba::WHITE,
+                planet: Vec4::new(surface.radius, n as f32, sea.is_some() as u32 as f32, 0.),
+                sea,
+                wind: Vec4::new(1., 0., 0., 0.),
+            },
+        })
+    };
+    let still = material(None);
+    let sea_materials: Vec<_> = sea
+        .into_iter()
+        .map(|data| {
+            let mut image = Image::new(
+                Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+                TextureDimension::D2,
+                data,
+                TextureFormat::Rgba16Float,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::ClampToEdge,
+                address_mode_v: ImageAddressMode::ClampToEdge,
+                ..ImageSamplerDescriptor::linear()
+            });
+            material(Some(images.add(image)))
+        })
+        .collect();
+    let mut spawn = |name: String, mesh: Mesh, material: &Handle<PlanetWaterMaterial>| {
         commands.spawn((
             Name::new(name),
             Mesh3d(meshes.add(mesh)),
@@ -749,12 +812,12 @@ pub fn spawn(
         ));
     };
     let start = std::time::Instant::now();
-    spawn("Rivers".into(), rivers_mesh(surface));
+    spawn("Rivers".into(), rivers_mesh(surface), &still);
     for face in 0..FACES {
         if let Some(mesh) = lakes_mesh(surface, face) {
-            spawn(format!("Lakes {face}"), mesh);
+            spawn(format!("Lakes {face}"), mesh, &still);
         }
-        spawn(format!("Sea {face}"), sea_mesh(surface, face));
+        spawn(format!("Sea {face}"), sea_mesh(surface, face), sea_materials.get(face).unwrap_or(&still));
     }
     info!("Planet water meshed in {:.1?}", start.elapsed());
 }

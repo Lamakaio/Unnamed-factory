@@ -66,7 +66,13 @@ someone else's work, add it here (and mention it in the code comment where it is
   ice-albedo feedback); daily mean insolation (standard formula, e.g. Wikipedia,
   *Insolation*); circulation cells and ITCZ placement and rule-based ocean currents in the
   spirit of World Orogen (R. Aguilar) and the worldbuilding literature; Köppen–Geiger
-  classification thresholds (Wikipedia, *Köppen climate classification*).
+  classification thresholds (Wikipedia, *Köppen climate classification*). Wind strength:
+  surface winds calibrated on Earth's zonal mean winds (trades, westerlies, polar easterlies:
+  climatology as in any meteorology textbook, e.g. Wallace & Hobbs, *Atmospheric Science*),
+  the storm spread tied to the north–south temperature gradient (baroclinic instability,
+  E. T. Eady 1949, as the measure of where mid-latitude storms grow), land friction, and
+  terrain blocking and speed-up on exposed ground (the idea behind terrain-following wind
+  models such as WindNinja, simplified to a ring of heights and the local slope).
 - **Planet design** (`docs/living-world.md`, `planet.rs`): rigid plates with Euler-pole
   rotations and boundary classification after Y. Cortial, A. Peytavie, É. Galin, É. Guérin,
   *Procedural Tectonic Planets*, Computer Graphics Forum 2019; tectonics.js (Carl Davidson);

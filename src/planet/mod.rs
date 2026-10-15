@@ -71,10 +71,12 @@ impl Plugin for PlanetPlugin {
 #[derive(Resource)]
 pub struct PlanetWorld {
     pub surface: Arc<PlanetSurface>,
+    /// The sea wave field of each face (texture data), until the water is spawned.
+    sea: Vec<Vec<u8>>,
 }
 
 #[derive(Resource)]
-struct Generation(Task<PlanetSurface>);
+struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>)>);
 
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -86,6 +88,9 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
         });
         let climate = simulate(&planet, &ClimateSettings::default());
         let surface = PlanetSurface::new(&planet, Some(&climate));
+        let sea_start = Instant::now();
+        let sea = water::sea_textures(&planet, &surface);
+        info!("Sea wave field in {:.1?}", sea_start.elapsed());
         info!(
             "Planet generated in {:.1?} ({} cells, radius {:.0}): {:?}",
             start.elapsed(),
@@ -93,7 +98,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             surface.radius,
             planet.timings
         );
-        surface
+        (surface, sea)
     });
     commands.insert_resource(Generation(task));
 }
@@ -103,12 +108,13 @@ fn finish_generation(
     mut generation: ResMut<Generation>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some(surface) = check_ready(&mut generation.0) else {
+    let Some((surface, sea)) = check_ready(&mut generation.0) else {
         return;
     };
     commands.remove_resource::<Generation>();
     commands.insert_resource(PlanetWorld {
         surface: Arc::new(surface),
+        sea,
     });
     next_state.set(AppState::InGame);
 }
@@ -148,11 +154,13 @@ struct TerrainMaterial(Handle<PlanetTerrainMaterial>);
 
 fn spawn_planet(
     mut commands: Commands,
-    world: Res<PlanetWorld>,
+    mut world: ResMut<PlanetWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     mut terrain_materials: ResMut<Assets<PlanetTerrainMaterial>>,
     mut water_materials: ResMut<Assets<PlanetWaterMaterial>>,
 ) {
+    let sea = std::mem::take(&mut world.sea);
     let surface = &world.surface;
     let material = terrain_materials.add(PlanetTerrainMaterial {
         base: StandardMaterial {
@@ -186,7 +194,7 @@ fn spawn_planet(
             }
         }
     }
-    water::spawn(&mut commands, surface, &mut meshes, &mut water_materials);
+    water::spawn(&mut commands, surface, sea, &mut meshes, &mut images, &mut water_materials);
 }
 
 /// Look at the planet from orbit, with the planet camera; space has no atmosphere nor fog
