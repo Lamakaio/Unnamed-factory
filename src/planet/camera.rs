@@ -51,24 +51,50 @@ pub struct PlanetCamera {
 }
 
 /// Replace the flat map's orbit controller with the planet camera, looking at `focus` from
-/// `distance` (straight down unless `pitch` says otherwise).
+/// `distance` (straight down unless `pitch` says otherwise), facing `heading` (radians east
+/// of north; north by default).
 pub fn take_over(
     commands: &mut Commands,
     camera: Entity,
     focus: Vec3,
     distance: f32,
     pitch: Option<f32>,
+    heading: Option<f32>,
 ) {
     let focus = focus.normalize();
-    let forward = (Vec3::Y - focus * focus.y)
-        .try_normalize()
-        .unwrap_or(Vec3::X.reject_from(focus).normalize());
+    let (east, north) = east_north(focus);
+    let heading = heading.unwrap_or(0.);
+    let forward = north * heading.cos() + east * heading.sin();
     commands.entity(camera).remove::<PanOrbitCamera>().insert(PlanetCamera {
         focus,
         forward,
         distance,
         pitch: pitch.unwrap_or(std::f32::consts::FRAC_PI_2),
     });
+}
+
+/// East and north unit tangents at a unit direction (north falls back near the poles).
+pub fn east_north(direction: Vec3) -> (Vec3, Vec3) {
+    let north = (Vec3::Y - direction * direction.y)
+        .try_normalize()
+        .unwrap_or(Vec3::X.reject_from(direction).normalize());
+    (direction.cross(north), north)
+}
+
+/// The view as `UF_PLANET_CAMERA` takes it: longitude, latitude, distance, pitch, heading
+/// (degrees, world units).
+pub fn describe(camera: &PlanetCamera) -> String {
+    let f = camera.focus;
+    let (east, north) = east_north(f);
+    let heading = camera.forward.dot(east).atan2(camera.forward.dot(north));
+    format!(
+        "{:.2},{:.2},{:.1},{:.1},{:.1}",
+        f.z.atan2(f.x).to_degrees(),
+        f.y.clamp(-1., 1.).asin().to_degrees(),
+        camera.distance,
+        camera.pitch.to_degrees(),
+        heading.to_degrees()
+    )
 }
 
 /// Turn the mouse and keyboard into camera motion.
@@ -81,8 +107,11 @@ pub fn control(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     over_ui: PointerOverUi,
+    inspector: Res<super::inspect::Inspector>,
 ) {
     let mut camera = camera.into_inner();
+    // (Keys typed into an issue report don't move the camera.)
+    let pressed = |key: KeyCode| !inspector.typing() && keys.pressed(key);
     let radius = world.surface.radius;
     let over_ui = over_ui.get();
     // Zoom.
@@ -95,7 +124,7 @@ pub fn control(
             .clamp(MIN_DISTANCE, MAX_DISTANCE * radius);
     }
     // Turn with Q / E (key positions: the same keys on any layout).
-    let turn = keys.pressed(KeyCode::KeyE) as i32 as f32 - keys.pressed(KeyCode::KeyQ) as i32 as f32;
+    let turn = pressed(KeyCode::KeyE) as i32 as f32 - pressed(KeyCode::KeyQ) as i32 as f32;
     if turn != 0. {
         let up = camera.focus;
         camera.forward = Quat::from_axis_angle(up, -turn * KEY_TURN_SPEED * time.delta_secs()) * camera.forward;
@@ -113,8 +142,8 @@ pub fn control(
         pan += Vec2::new(-motion.delta.x, motion.delta.y) * PAN_SPEED * camera.distance;
     }
     let keys_pan = Vec2::new(
-        keys.pressed(KeyCode::ArrowRight) as i32 as f32 - keys.pressed(KeyCode::ArrowLeft) as i32 as f32,
-        keys.pressed(KeyCode::ArrowUp) as i32 as f32 - keys.pressed(KeyCode::ArrowDown) as i32 as f32,
+        pressed(KeyCode::ArrowRight) as i32 as f32 - pressed(KeyCode::ArrowLeft) as i32 as f32,
+        pressed(KeyCode::ArrowUp) as i32 as f32 - pressed(KeyCode::ArrowDown) as i32 as f32,
     );
     pan += keys_pan * KEY_PAN_SPEED * camera.distance * time.delta_secs();
     if pan != Vec2::ZERO {

@@ -2,3 +2,6 @@
 .cargo
 *.glb
 .vscode
+
+# Issue reports written in game (planet/inspect.rs)
+/issues/

@@ -395,6 +395,11 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   weights (forest weight through a groves noise, conifers where cold), beaches below
   `BEACH_HEIGHT`, rock on steep cells. Swaying models bend along the wind projected across
   their own up axis (`toon_sway.wesl`: a fixed world direction made tangent on the planet).
+  `planet/inspect.rs`: clicking the ground logs a report (position, heights, water, climate,
+  wind, nearest rivers and springs, the view as `UF_PLANET_CAMERA`, which now takes a 5th
+  value, the heading); "Report issue" (button or F6), a click and a description (Enter) write
+  `issues/issue-<n>.md` + `.png` (git-ignored: read them when the user points to issues).
+  `UF_PLANET_REPORT=lon,lat[;...]` logs the report of points at startup (for agents).
   `planet/grass.rs` builds the flat map's near grass blades on 1×1 tiles of face cells where
   the terrain draws grass (from the climate weights); each tile is turned upright with local x
   downwind (`PlanetSurface::wind_at`): `grass_blades.wesl` bends in the mesh's frame and takes

@@ -6,6 +6,7 @@
 
 mod camera;
 mod grass;
+mod inspect;
 mod mesh;
 mod vegetation;
 mod water;
@@ -19,7 +20,7 @@ use bevy::{
 };
 use worldgen::{
     planet::{PlanetSettings, generate_planet},
-    planet_climate::{ClimateSettings, simulate},
+    planet_climate::{ClimateSettings, PlanetClimate, simulate},
     sphere::FACES,
     surface::PlanetSurface,
 };
@@ -49,7 +50,11 @@ pub struct PlanetPlugin {
 impl Plugin for PlanetPlugin {
     fn build(&self, app: &mut App) {
         let (seed, n) = (self.seed as u64, self.n);
-        app.add_plugins((vegetation::PlanetVegetationPlugin, grass::PlanetGrassPlugin))
+        app.add_plugins((
+            vegetation::PlanetVegetationPlugin,
+            grass::PlanetGrassPlugin,
+            inspect::InspectPlugin,
+        ))
             .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
             .add_systems(Startup, move |commands: Commands| start_generation(commands, seed, n))
             .add_systems(
@@ -72,12 +77,14 @@ impl Plugin for PlanetPlugin {
 #[derive(Resource)]
 pub struct PlanetWorld {
     pub surface: Arc<PlanetSurface>,
+    /// The climate (for reports on the ground clicked).
+    pub climate: Arc<PlanetClimate>,
     /// The sea wave field of each face (texture data), until the water is spawned.
     sea: Vec<Vec<u8>>,
 }
 
 #[derive(Resource)]
-struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>)>);
+struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>, PlanetClimate)>);
 
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -103,7 +110,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             surface.radius,
             planet.timings
         );
-        (surface, sea)
+        (surface, sea, climate)
     });
     commands.insert_resource(Generation(task));
 }
@@ -113,12 +120,13 @@ fn finish_generation(
     mut generation: ResMut<Generation>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some((surface, sea)) = check_ready(&mut generation.0) else {
+    let Some((surface, sea, climate)) = check_ready(&mut generation.0) else {
         return;
     };
     commands.remove_resource::<Generation>();
     commands.insert_resource(PlanetWorld {
         surface: Arc::new(surface),
+        climate: Arc::new(climate),
         sea,
     });
     next_state.set(AppState::InGame);
@@ -212,8 +220,9 @@ fn view_planet(
     let mut focus = Vec3::new(0., 0.35, 1.);
     let mut distance = world.surface.radius * START_DISTANCE;
     let mut pitch = None;
-    // `UF_PLANET_CAMERA=longitude,latitude[,distance[,pitch]]` (degrees, world units): the
-    // starting view, for screenshots.
+    let mut heading = None;
+    // `UF_PLANET_CAMERA=longitude,latitude[,distance[,pitch[,heading]]]` (degrees, world
+    // units): the starting view, for screenshots (clicks log the current one).
     if let Ok(view) = std::env::var("UF_PLANET_CAMERA") {
         let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
         if let [longitude, latitude, ..] = values[..] {
@@ -227,11 +236,14 @@ fn view_planet(
         if let [_, _, d, ..] = values[..] {
             distance = d;
         }
-        if let [_, _, _, p] = values[..] {
+        if let [_, _, _, p, ..] = values[..] {
             pitch = Some(p.to_radians());
         }
+        if let [_, _, _, _, h] = values[..] {
+            heading = Some(h.to_radians());
+        }
     }
-    camera::take_over(&mut commands, *camera, focus, distance, pitch);
+    camera::take_over(&mut commands, *camera, focus, distance, pitch, heading);
     commands
         .entity(*camera)
         .remove::<(AtmosphereSettings, DistanceFog)>();
