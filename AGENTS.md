@@ -339,7 +339,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   resampled every 0.5 cells, meandering on flat valleys; width `RIVER_WIDTH.0` × (area /
   `RIVER_MIN_AREA`)^`RIVER_WIDTH.1`, some 20× from the smallest to the largest; tributaries end
   on their parent's final path `JOIN_LEAD` points downstream of the nearest, the move eased
-  over `JOIN_BLEND` points; rivers run through the lakes they enter or leave, to or from the
+  over `JOIN_BLEND` points (one running alongside its parent ends where it first touches
+  it); bends tighter than `MIN_BEND_RADIUS` widths are relaxed (`relax_bends`, as on the flat
+  map: meander offsets fold over on tight valley bends); channels are carved at least
+  `MIN_CARVED_WIDTH` wide (`surface.rs`: narrower ones showed as holes in the mesh); rivers run through the lakes they enter or leave, to or from the
   deepest cell at the lake's level, as on the flat map: `through_lakes`; rivers split on
   flat land: `split_on_flats` gives wide rivers on flat stretches without tributaries a side
   channel (`PlanetRiver::branch_of`, ending in `Junction` of the same river) round a low
@@ -354,7 +357,12 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   else filled flat (wet, a closed flat). Kept lakes get their own basin: the blurred mask
   rounds the outline, the bed deepens from the shore (`SHORE_DEPTH` + `DEPTH_SLOPE` × cells,
   at most ∝ √cells), banks rise just above the level (not across streams, nor on the outlet's
-  path); twice, then a last fill of leftover hollows. `Planet::wetland` (closed flats, dry
+  path); twice, then a last fill of leftover hollows. Lakes over their cap (`LAKE_MAX_CELLS`,
+  a range: each lake its own) first drain through a gorge cut from the deepest cell along
+  the drainage until lower ground, at the level where they fit (exposed beds: closed flats).
+  After the floodplains and mouths reshape the ground, `planet_lakes::settle` fills the new
+  hollows outside lakes and recomputes the drainage and lake depths (they were stale: lake
+  levels sloped where a mouth's sediment plain had lowered a lake). `Planet::wetland` (closed flats, dry
   basins, lake shores, floodplains, low flat ground near streams, delta land) and
   `Planet::basins`; `PlanetSurface::marsh` is marsh where the climate is wet (not frozen),
   negative (salt flats) on closed flats where it is dry. `PlanetSurface::ocean` (the sea mask,
@@ -374,7 +382,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   puts the flat map's rock outcrop round each spout.
   Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
   cells walked on the sphere's grid; deltas rarer than estuaries; distributaries never cross
-  land above `DELTA_MAX_GROUND`, delta land sinks to a bar toward the tips: `TIP_TRIM`): deltas (distributaries from `mouths::grow_channels`,
+  land above `DELTA_MAX_GROUND` (forks left without branches go too), grow toward the sea mask
+  (not land below sea level), delta land sinks to a bar toward the tips (`TIP_TRIM`), the sea
+  floor round it is raised into a sloping front (`FRONT_*`) and the whole smoothed, and each
+  tip gets a path to the open sea if land closes it in): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
   `planet/water.rs` draws the water with the flat map's toon water on the sphere

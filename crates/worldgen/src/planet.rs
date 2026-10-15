@@ -799,7 +799,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         }
     }
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
-    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
+    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, mut basins } =
         crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
     let (mut rivers, valley) =
@@ -826,6 +826,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     let wetland = grid.blur(&wetland, 1);
     let mut wetland = wetland;
+    let sea_before_mouths = sea.clone();
     // Deltas and estuaries at the river mouths (deltas build land out into the sea).
     crate::planet_mouths::shape_mouths(
         &grid,
@@ -838,6 +839,14 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         &mut wetland,
         &mut rivers,
     );
+    // The floodplains and mouths reshaped the ground: settle the water again (the routing
+    // base: the sea as it is now, and the dry basins' sinks).
+    let base: Vec<bool> = (0..cells).map(|i| sea[i] || base[i] && !sea_before_mouths[i]).collect();
+    let (drainage, lake_depth, flats) = crate::planet_lakes::settle(&grid, &mut heights, &base, &lake_depth);
+    for i in flats {
+        wetland[i] = 1.;
+        basins[i] = 1.;
+    }
     // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
     let calm: Vec<f32> = (0..cells)
         .map(|i| {

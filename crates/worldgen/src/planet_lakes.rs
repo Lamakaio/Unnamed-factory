@@ -6,6 +6,8 @@
 //! - Every other depression is a lake only if it is a real one: big, deep enough, and large
 //!   next to the water flowing into it (a big river needs a very large lake to end in).
 //!   Others are filled: flat, poorly drained ground the river crosses (wetland potential).
+//! - Lakes bigger than their cap (see [`LAKE_MAX_CELLS`]) drain through a gorge cut in their rim, down to
+//!   the level where they are no bigger: fewer huge lakes. Their exposed beds are flat, wet.
 //! - Kept lakes get a basin of their own instead of flooding whatever the erosion left: a
 //!   rounded outline (thin arms dropped, inlets filled in), a bowl deepening away from the
 //!   shore, banks just above the water, and the outlet left open.
@@ -36,6 +38,10 @@ const LAKE_EPS: f32 = 0.02;
 const LAKE_MIN_CELLS: usize = 40;
 const LAKE_MIN_DEPTH: f32 = 0.3;
 const LAKE_AREA_PER_INFLOW: f32 = 0.01;
+/// Lakes are at most this many cells (each its own cap in this range): bigger, a gorge is cut
+/// through the rim (sloping down this much per cell) until the lake is no bigger.
+const LAKE_MAX_CELLS: (usize, usize) = (500, 2500);
+const GORGE_SLOPE: f32 = 0.002;
 /// Lake beds: depth at the shore and its increase per cell from it, and the deepest point
 /// (`LAKE_MAX_DEPTH` × √cells, clamped).
 const SHORE_DEPTH: f32 = 0.25;
@@ -152,6 +158,65 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
         }
     }
 
+    // Big lakes: a gorge through the rim, from the deepest point along the drainage (over the
+    // lake, then down its outlet) until lower ground, at the level where the lake is small
+    // enough.
+    {
+        let (filled, graph, _) = flow(heights, &base);
+        let under: Vec<bool> = (0..cells).map(|i| !base[i] && filled[i] - heights[i] > LAKE_EPS).collect();
+        for lake in components(grid, &under) {
+            let deepest = *lake.iter().min_by(|&&a, &&b| heights[a].total_cmp(&heights[b])).unwrap();
+            let roll = crate::noise::hash(0x1A4E, deepest as u32, 0) as f32 / u32::MAX as f32;
+            let cap = LAKE_MAX_CELLS.0 + ((LAKE_MAX_CELLS.1 - LAKE_MAX_CELLS.0) as f32 * roll) as usize;
+            if lake.len() <= cap {
+                continue;
+            }
+            let in_lake: std::collections::HashSet<usize> = lake.iter().copied().collect();
+            // Cells of the lake under a level (connected to its deepest point).
+            let area_at = |level: f32| {
+                let mut seen = std::collections::HashSet::from([deepest]);
+                let mut queue = VecDeque::from([deepest]);
+                while let Some(i) = queue.pop_front() {
+                    for (j, _) in grid.neighbours(i) {
+                        if in_lake.contains(&j) && heights[j] < level && seen.insert(j) {
+                            queue.push_back(j);
+                        }
+                    }
+                }
+                seen.len()
+            };
+            let (mut low, mut high) = (heights[deepest], lake.iter().map(|&i| filled[i]).fold(f32::MIN, f32::max));
+            for _ in 0..24 {
+                let middle = (low + high) / 2.;
+                if area_at(middle) > cap {
+                    high = middle;
+                } else {
+                    low = middle;
+                }
+            }
+            let level = low;
+            // The exposed bed: flat, wet ground.
+            for &i in &lake {
+                if heights[i] >= level {
+                    basins[i] = basins[i].max(0.6);
+                }
+            }
+            let (mut i, mut floor) = (deepest, level);
+            for _ in 0..cells {
+                let next = graph.receivers[i];
+                if next == i || base[next] {
+                    break;
+                }
+                floor -= GORGE_SLOPE;
+                if !in_lake.contains(&next) && heights[next] < floor {
+                    break;
+                }
+                heights[next] = heights[next].min(floor);
+                i = next;
+            }
+        }
+    }
+
     // Depressions: real lakes, or filled flats. (Twice: reshaping the lakes may leave new
     // hollows next to them.)
     let mut wetland = vec![0f32; cells];
@@ -260,4 +325,32 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
     let (filled, _, drainage) = flow(heights, &base);
     let lake_depth = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     Hydrology { filled, drainage, lake_depth, base, wetland, basins }
+}
+
+/// After the terrain changed again (floodplains, river mouths): fill the hollows it left
+/// outside the lakes (closed flats), and the drainage and lake water on the result. `lakes`
+/// is the lake water before. Returns (drainage, lake depth, the cells filled).
+pub fn settle(
+    grid: &SphereGrid,
+    heights: &mut [f32],
+    base: &[bool],
+    lakes: &[f32],
+) -> (Vec<f32>, Vec<f32>, Vec<usize>) {
+    let cells = grid.len();
+    let filled = priority_flood(grid, heights, base, 1e-4);
+    let under: Vec<bool> = (0..cells).map(|i| !base[i] && filled[i] - heights[i] > LAKE_EPS).collect();
+    let mut flats = Vec::new();
+    for hollow in components(grid, &under) {
+        if hollow.iter().any(|&i| lakes[i] > LAKE_EPS) {
+            continue;
+        }
+        for i in hollow {
+            heights[i] = filled[i];
+            flats.push(i);
+        }
+    }
+    let filled = priority_flood(grid, heights, base, 1e-4);
+    let drainage = FlowGraph::new(grid, &filled, base).accumulate(|i| grid.area(i));
+    let lake_depth = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
+    (drainage, lake_depth, flats)
 }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use bevy_math::{IVec3, Vec2, Vec3};
 
-use crate::{RiverEnd, planet_rivers::PlanetRiver};
+use crate::planet_rivers::PlanetRiver;
 
 /// Ground flatter than this (slope around the source) gets a pond, steeper a hillside spring.
 const POND_MAX_SLOPE: f32 = 0.18;
@@ -101,12 +101,14 @@ impl PlanetSpring {
 }
 
 /// The springs of the planet's rivers. `ground(direction)` is the surface height (no channels),
-/// `lake_depth(direction)` the lake water there.
+/// `lake_depth(direction)` the lake water there, `ocean(direction)` the ocean (see
+/// `PlanetSurface::ocean`): sources by the sea are no springs.
 pub fn find_springs(
     rivers: &[PlanetRiver],
     radius: f32,
     ground: impl Fn(Vec3) -> f32,
     lake_depth: impl Fn(Vec3) -> f32,
+    ocean: impl Fn(Vec3) -> f32,
 ) -> Vec<PlanetSpring> {
     // River points by bucket, to tell sources on another river (lake outlets joining, delta
     // distributaries) from springs.
@@ -132,7 +134,8 @@ pub fn find_springs(
     let mut springs = Vec::new();
     for (index, river) in rivers.iter().enumerate() {
         let source = river.points[0];
-        if river.points.len() < 6 || source.level <= 0.3 || river.end == RiverEnd::Sea && source.level < 0.5 {
+        // (Low sources too, away from the sea: land below sea level has springs.)
+        if river.points.len() < 6 || source.level <= 0.05 || ocean(source.direction) > 0.02 {
             continue;
         }
         let up = source.direction;

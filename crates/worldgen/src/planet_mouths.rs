@@ -230,7 +230,7 @@ fn build_delta(
     // The apex: the last point over land.
     let apex_index = (0..count)
         .rev()
-        .find(|&k| heights[grid.cell_at(points[k].direction)] > 0.)
+        .find(|&k| !sea[grid.cell_at(points[k].direction)])
         .unwrap_or(count - 1)
         .max(last_join)
         .clamp(1, count - 1);
@@ -241,7 +241,8 @@ fn build_delta(
 
     let mut rng = StdRng::seed_from_u64(seed ^ (index as u64).wrapping_mul(0x9E37_79B9));
     let length = (14. + 7. * apex.width) * rng.random_range(0.8..1.2f32);
-    let is_sea = |p: Vec2| heights[grid.cell_at(frame.direction(p))] <= 0.;
+    // (The sea itself: land below sea level is no way out.)
+    let is_sea = |p: Vec2| sea[grid.cell_at(frame.direction(p))];
     let channels = grow_channels(
         &mut rng,
         noise.layer(40 + index as u32),
@@ -267,6 +268,23 @@ fn build_delta(
                 dropped[j] && j != k && parent.points.last().is_some_and(|end| end.position.distance(start) < 1e-3)
             });
             if from_dropped && !dropped[k] {
+                dropped[k] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Forks whose branches were all dropped would end on land: dropped too.
+    loop {
+        let mut changed = false;
+        for (k, channel) in channels.iter().enumerate() {
+            let end = channel.points.last().map(|p| p.position);
+            let continued = channels.iter().enumerate().any(|(j, child)| {
+                !dropped[j] && j != k && end.is_some_and(|end| child.points[0].position.distance(end) < 1e-3)
+            });
+            if !dropped[k] && !channel.open && !continued {
                 dropped[k] = true;
                 changed = true;
             }
@@ -322,8 +340,17 @@ fn raise_delta_land(
     let Some(first) = points.first() else {
         return;
     };
-    for_cells_around(grid, frame, first.position, length * 1.6, |i, p| {
+    // The sea before, and the cells the delta reshapes.
+    let mut region = Vec::new();
+    let mut was_sea = std::collections::HashMap::new();
+    for_cells_around(grid, frame, first.position, length * 1.6 + FRONT_REACH, |i, p| {
+        region.push((i, p));
+        was_sea.insert(i, sea[i]);
+    });
+    for &(i, p) in &region {
         let mut best: f32 = 0.;
+        // How far beyond the land the cell is (the delta front).
+        let mut beyond = f32::MAX;
         // How far from the tips the land of the best point is (1: away from them).
         let mut emerged: f32 = 0.;
         // Distance to the nearest channel, in levee widths.
@@ -336,6 +363,7 @@ fn raise_delta_land(
             if reach <= 0. {
                 continue;
             }
+            beyond = beyond.min(p.distance(point.position) - reach);
             let d = p.distance(point.position) / reach;
             if d < 1. {
                 let rise = (1. - d).sqrt() * (0.15 + 0.3 * (1. - t));
@@ -352,16 +380,76 @@ fn raise_delta_land(
             let land = 0.08 + best * wobble;
             heights[i] = heights[i].max(TIP_BAR + (land - TIP_BAR) * emerged);
             sea[i] = heights[i] <= 0.;
+        } else if sea[i] && beyond < FRONT_REACH {
+            // The delta front: sediment raising the sea floor round the delta, sloping down.
+            heights[i] = heights[i].max(FRONT_DEPTH.0 - FRONT_DEPTH.1 * beyond.max(0.));
         }
-    });
-    // Open every tip to the sea.
+    }
+    // Smoothed, so the new land and the front ease into each other and into the old ground
+    // (cell by cell, they meet in steps).
+    for _ in 0..FRONT_SMOOTHING {
+        let smoothed: Vec<f32> = region
+            .iter()
+            .map(|&(i, _)| {
+                let (sum, count) = grid
+                    .neighbours(i)
+                    .filter(|&(_, d)| d < 1.2)
+                    .fold((0., 0.), |(sum, count), (j, _)| (sum + heights[j], count + 1.));
+                0.5 * heights[i] + 0.5 * sum / count
+            })
+            .collect();
+        for (&(i, _), h) in region.iter().zip(smoothed) {
+            // (Hills the delta abuts stay as they were.)
+            if heights[i] < DELTA_MAX_GROUND {
+                heights[i] = h;
+                sea[i] = h <= 0. && was_sea[&i];
+            }
+        }
+    }
+    // Open every tip to the sea, by a path to the open sea if the land closes it in.
     for channel in channels.iter().filter(|channel| channel.open) {
         let Some(tip) = channel.points.last() else {
             continue;
         };
+        let mut opened = Vec::new();
         for_cells_around(grid, frame, tip.position, tip.width + 1.5, |i, _| {
             heights[i] = heights[i].min(-0.3);
             sea[i] = true;
+            opened.push(i);
         });
+        let open_sea = |i: usize| sea[i] && heights[i] < -0.05 && !opened.contains(&i) && was_sea.get(&i).is_none_or(|&s| s);
+        let start = grid.cell_at(frame.direction(tip.position));
+        let mut previous = std::collections::HashMap::from([(start, start)]);
+        let mut queue = std::collections::VecDeque::from([(start, 0)]);
+        let mut reached = None;
+        while let Some((i, steps)) = queue.pop_front() {
+            if open_sea(i) && grid.neighbours(i).all(|(j, _)| sea[j] || heights[j] < 0.) {
+                reached = Some(i);
+                break;
+            }
+            if steps >= TIP_PATH {
+                continue;
+            }
+            for (j, _) in grid.neighbours(i) {
+                if !previous.contains_key(&j) {
+                    previous.insert(j, i);
+                    queue.push_back((j, steps + 1));
+                }
+            }
+        }
+        let mut i = reached.unwrap_or(start);
+        while i != start {
+            heights[i] = heights[i].min(-0.3);
+            sea[i] = true;
+            i = previous[&i];
+        }
     }
 }
+
+/// The delta front: the sea floor this far beyond the delta land (world units) is raised to
+/// this depth, sloping down this much per unit; passes of smoothing over the delta; and how
+/// far a tip's path to the open sea may go (cells).
+const FRONT_REACH: f32 = 8.;
+const FRONT_DEPTH: (f32, f32) = (-0.2, 0.15);
+const FRONT_SMOOTHING: usize = 3;
+const TIP_PATH: usize = 25;

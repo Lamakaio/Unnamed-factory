@@ -195,11 +195,16 @@ pub fn extract(
                 }
             })
             .collect();
+        // Meanders offset along the valley's normal fold over on bends tighter than their
+        // amplitude: relax every bend tighter than the channel can carry.
+        relax_bends(&mut points, radius);
         // Tributaries end exactly on their parent's (final) path.
         if let RiverEnd::Junction(parent) = river.end
             && let Some(&Some(parent)) = output_index.get(parent)
         {
-            join_parent(&mut points, &rivers[parent]);
+            join_parent(&mut points, &rivers[parent], radius);
+            // (The move can kink the end: relax it again.)
+            relax_bends(&mut points, radius);
         }
         output_index.push(Some(rivers.len()));
         flats.push(flatness);
@@ -307,8 +312,19 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
 const JOIN_LEAD: usize = 2;
 const JOIN_BLEND: usize = 8;
 
-/// Move a tributary's end onto its parent's path, easing the points before it along.
-fn join_parent(points: &mut [PlanetRiverPoint], parent: &PlanetRiver) {
+/// Move a tributary's end onto its parent's path, easing the points before it along. A
+/// tributary running alongside its parent ends where it first touches it (the two ribbons
+/// would overlap all along).
+fn join_parent(points: &mut Vec<PlanetRiverPoint>, parent: &PlanetRiver, radius: f32) {
+    let touching = |point: &PlanetRiverPoint| {
+        parent.points.iter().any(|q| {
+            q.direction.distance(point.direction) * radius < (q.width + point.width) / 2.
+        })
+    };
+    // (Not in its first points: a tributary starting right by its parent keeps a little length.)
+    if let Some(first) = (4..points.len()).find(|&k| touching(&points[k])) {
+        points.truncate(first + 1);
+    }
     let n = points.len();
     let end = points[n - 1].direction;
     let Some(nearest) = (0..parent.points.len()).max_by(|&a, &b| {
@@ -443,6 +459,45 @@ fn through_lakes(
             points.pop();
             points.extend(river.points.iter().copied());
             river.points = points;
+        }
+    }
+}
+
+/// Smallest radius of a river bend, relative to the channel width (and at least this many
+/// cells), so the channel and its banks never fold over themselves (as on the flat map,
+/// `rivers::relax_bends`), and the most rounds of relaxing.
+const MIN_BEND_RADIUS: f32 = 1.2;
+const MIN_BEND_RADIUS_CELLS: f32 = 1.5;
+const RELAX_ROUNDS: usize = 200;
+
+/// Move points toward their neighbours' midpoint wherever the path turns more sharply than
+/// [`MIN_BEND_RADIUS`] allows (a curvature-limited Laplacian smoothing). The ends stay put.
+fn relax_bends(points: &mut [PlanetRiverPoint], radius: f32) {
+    let n = points.len();
+    if n < 3 {
+        return;
+    }
+    for _ in 0..RELAX_ROUNDS {
+        let mut moved = false;
+        for i in 1..n - 1 {
+            let (a, b, c) = (points[i - 1].direction, points[i].direction, points[i + 1].direction);
+            let (ab, bc) = ((b - a) * radius, (c - b) * radius);
+            let (la, lc) = (ab.length(), bc.length());
+            let target = (a + c).normalize();
+            if la < 1e-4 || lc < 1e-4 {
+                points[i].direction = target;
+                moved = true;
+                continue;
+            }
+            let turn = (ab / la).dot(bc / lc).clamp(-1., 1.).acos();
+            let bend = (la + lc) / 2. / turn.max(1e-4);
+            if bend < (MIN_BEND_RADIUS * points[i].width).max(MIN_BEND_RADIUS_CELLS) {
+                points[i].direction = b.lerp(target, 0.5).normalize();
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
         }
     }
 }

@@ -262,7 +262,7 @@ fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>
     rows.drain(..first);
     let leave = (leave - first).min(rows.len() - 1);
     // Into the water it reaches (searched from where it leaves its own lake).
-    let reached = rows[leave..].iter().position(|row| match river.end {
+    let in_end_water = |row: &Row| match river.end {
         RiverEnd::Lake(_) => in_lake(row),
         RiverEnd::Sea => {
             let at_sea = |p: Vec3| surface.ocean_at(p.normalize()) > 0.5;
@@ -271,7 +271,11 @@ fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>
                 || ground_at(surface, row.center.normalize()) < -OPEN_WATER_DEPTH && at_sea(row.center)
         }
         RiverEnd::Junction(_) => false,
-    });
+    };
+    // The water it ends in: the last stretch under it (searched back from the end: on its way
+    // a river may brush other water, or the ragged shore of the lake it left).
+    let tail = rows[leave..].iter().rev().take_while(|row| in_end_water(row)).count();
+    let reached = (tail > 0).then(|| rows.len() - leave - tail);
     match (reached, river.end) {
         (Some(start), RiverEnd::Lake(_)) => {
             let mut start = start + leave;

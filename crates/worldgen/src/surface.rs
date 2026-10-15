@@ -239,6 +239,7 @@ impl PlanetSurface {
             surface.radius,
             |d| surface.uncarved_height(d),
             |d| surface.lake_depth_at(d),
+            |d| surface.ocean_at(d),
         );
         surface.springs = Springs::new(springs, surface.radius);
         surface.rivers = rivers;
@@ -452,7 +453,8 @@ impl Channels {
                     a: p.direction * radius,
                     b: q.direction * radius,
                     level: (p.level, q.level),
-                    width: (p.width, q.width),
+                    // (Channels narrower than the terrain mesh shows come out as holes.)
+                    width: (p.width.max(MIN_CARVED_WIDTH), q.width.max(MIN_CARVED_WIDTH)),
                     depth: (p.depth, q.depth),
                 };
                 let reach = reach(p.width.max(q.width));
@@ -538,6 +540,9 @@ impl Channels {
 const WIND_RING: f32 = 6.;
 const WIND_EXPOSURE: (f32, f32) = (0.5, 4.);
 const WIND_STEEP: (f32, f32) = (0.3, 1.);
+
+/// Channels are carved at least this wide (world units).
+const MIN_CARVED_WIDTH: f32 = 0.6;
 
 /// Distance from a river's axis where its banks end.
 fn reach(width: f32) -> f32 {
