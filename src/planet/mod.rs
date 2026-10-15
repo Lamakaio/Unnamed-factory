@@ -87,8 +87,12 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             n,
             ..default()
         });
+        let stage = Instant::now();
         let climate = simulate(&planet, &ClimateSettings::default());
+        let climate_time = stage.elapsed();
+        let stage = Instant::now();
         let surface = PlanetSurface::new(&planet, Some(&climate));
+        info!("Climate in {climate_time:.1?}, surface in {:.1?}", stage.elapsed());
         let sea_start = Instant::now();
         let sea = water::sea_textures(&planet, &surface);
         info!("Sea wave field in {:.1?}", sea_start.elapsed());

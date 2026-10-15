@@ -338,6 +338,10 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
   resampled every 0.5 cells, meandering on flat valleys) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
+  Floodplains (`planet.rs::flatten_floodplains`, as on the flat map): `planet_rivers::extract`
+  also returns the un-meandered valley points (level, floodplain half-width where the river
+  meanders); the cells around are lowered to water + 0.4 (lake shores kept above their lake),
+  walking the grid with `planet_rivers::for_cells_within`, and calmed (no fine detail).
   Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
   cells walked on the sphere's grid): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;

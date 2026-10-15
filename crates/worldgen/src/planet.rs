@@ -795,8 +795,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // Lakes: where the filled surface stands clearly above the ground.
     let lake_depth: Vec<f32> = (0..cells).map(|i| (filled[i] - heights[i]).max(0.)).collect();
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
-    let mut rivers =
+    let (mut rivers, valley) =
         crate::planet_rivers::extract(&grid, radius, &heights, &filled, &sea, &lake_depth);
+    // Floodplains: flat valley floors where rivers meander.
+    let floodplain = flatten_floodplains(&grid, radius, &mut heights, &lake_depth, &valley);
     // Deltas and estuaries at the river mouths (deltas build land out into the sea).
     crate::planet_mouths::shape_mouths(
         &grid,
@@ -813,7 +815,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         .map(|i| {
             let river = smoothstep(CALM_RIVER_AREA * 0.5, CALM_RIVER_AREA, drainage[i]);
             let lake = smoothstep(0.02, 0.1, lake_depth[i]);
-            river.max(lake)
+            river.max(lake).max(floodplain[i])
         })
         .collect();
     let calm: Vec<f32> = grid.blur(&calm, 2).iter().map(|c| (c * 3.).min(1.)).collect();
@@ -941,4 +943,46 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: 
         }
     }
     distance
+}
+
+/// Lake shores within this distance (world units) stay above their lake's level when
+/// floodplains are flattened (as on the flat map, `LAKE_RIM`).
+const LAKE_RIM: f32 = 3.;
+
+/// Lower the valley floor to just above the water where rivers meander (as on the flat map,
+/// `flatten_floodplains`), so meanders have a flat floodplain to wind through; lake shores stay
+/// above their lake. Returns how much each cell is floodplain (0..1).
+fn flatten_floodplains(
+    grid: &SphereGrid,
+    radius: f32,
+    heights: &mut [f32],
+    lake_depth: &[f32],
+    valley: &[crate::planet_rivers::ValleyPoint],
+) -> Vec<f32> {
+    use crate::planet_rivers::for_cells_within;
+    let cells = grid.len();
+    // Lowest height allowed per cell: the level of any lake nearby.
+    let mut floor = vec![f32::MIN; cells];
+    for i in (0..cells).filter(|&i| lake_depth[i] > 0.05) {
+        let level = heights[i] + lake_depth[i] + 0.05;
+        for_cells_within(grid, radius, grid.direction(i), LAKE_RIM, |n, _| {
+            floor[n] = floor[n].max(level);
+        });
+    }
+    let mut plain = vec![0f32; cells];
+    // (Every other point: they are half a cell apart, the floodplains several cells wide.)
+    for point in valley.iter().step_by(2).filter(|p| p.floodplain > 0.) {
+        let reach = point.floodplain * 1.5 + 2.;
+        let target = point.level + 0.4;
+        for_cells_within(grid, radius, point.direction, reach, |i, distance| {
+            if lake_depth[i] > 0.05 || heights[i] <= target {
+                return;
+            }
+            let t = smoothstep(reach * 0.4, reach, distance);
+            let lowered = target + (heights[i] - target) * t;
+            heights[i] = heights[i].min(lowered.max(floor[i]));
+            plain[i] = plain[i].max(1. - t);
+        });
+    }
+    plain
 }

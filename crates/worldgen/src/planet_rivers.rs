@@ -7,7 +7,7 @@ use std::f32::consts::TAU;
 
 use bevy_math::Vec3;
 
-use crate::{RiverEnd, flow::FlowGraph, noise::smoothstep, sphere::SphereGrid};
+use crate::{RiverEnd, flow::FlowGraph, grid::Grid, noise::smoothstep, sphere::SphereGrid};
 
 /// Spacing of the output points, in cells.
 const SPACING: f32 = 0.5;
@@ -34,6 +34,16 @@ pub struct PlanetRiverPoint {
     pub depth: f32,
 }
 
+/// A point of a river's un-meandered valley path, to shape its floodplain (as on the flat
+/// map, `rivers::ValleyPoint`).
+#[derive(Clone, Copy, Debug)]
+pub struct ValleyPoint {
+    pub direction: Vec3,
+    pub level: f32,
+    /// Half-width of the floodplain (world units; 0 where the river doesn't meander).
+    pub floodplain: f32,
+}
+
 /// A river, from its source to its end (the sea, a lake, or its parent river).
 #[derive(Clone, Debug)]
 pub struct PlanetRiver {
@@ -42,7 +52,7 @@ pub struct PlanetRiver {
 }
 
 /// Extract the rivers from the heights, the depression-filled surface they drain on, the sea
-/// and the lakes (water depth over each cell).
+/// and the lakes (water depth over each cell), and their valley paths.
 pub fn extract(
     grid: &SphereGrid,
     radius: f32,
@@ -50,7 +60,7 @@ pub fn extract(
     filled: &[f32],
     sea: &[bool],
     lake_depth: &[f32],
-) -> Vec<PlanetRiver> {
+) -> (Vec<PlanetRiver>, Vec<ValleyPoint>) {
     let graph = FlowGraph::new(grid, filled, sea);
     let area = graph.accumulate(|i| grid.area(i));
     let n = heights.len();
@@ -105,6 +115,7 @@ pub fn extract(
     }
 
     let mut rivers = Vec::with_capacity(traced.len());
+    let mut valley = Vec::new();
     let mut output_index: Vec<Option<usize>> = Vec::with_capacity(traced.len());
     for river in &traced {
         let point = |i: usize| grid.direction(i) * radius;
@@ -159,6 +170,15 @@ pub fn extract(
                 let up = position.normalize();
                 let normal = tangent.cross(up).normalize_or_zero();
                 let offset = amplitude * (phase.sin() + 0.2 * (3. * phase).sin());
+                valley.push(ValleyPoint {
+                    direction: up,
+                    level,
+                    floodplain: if flatness[i] > 0.05 {
+                        amplitude.max(widths[i]) * 1.2 + widths[i]
+                    } else {
+                        0.
+                    },
+                });
                 PlanetRiverPoint {
                     direction: (position + normal * offset).normalize(),
                     level,
@@ -179,7 +199,7 @@ pub fn extract(
             };
         }
     }
-    rivers
+    (rivers, valley)
 }
 
 /// Chaikin corner cutting on the sphere (positions kept at `radius`).
@@ -220,4 +240,32 @@ fn resample(path: &[(Vec3, f32, f32)], spacing: f32) -> Vec<(Vec3, f32, f32)> {
         result.push(*path.last().unwrap());
     }
     result
+}
+
+/// Call `f(cell, distance)` for every cell whose centre lies within `radius` (world units) of
+/// `center` (a unit direction), walking the grid from the cell there.
+pub(crate) fn for_cells_within(
+    grid: &SphereGrid,
+    radius_of_planet: f32,
+    center: Vec3,
+    radius: f32,
+    mut f: impl FnMut(usize, f32),
+) {
+    let start = grid.cell_at(center);
+    let mut seen = std::collections::HashSet::from([start]);
+    let mut queue = std::collections::VecDeque::from([start]);
+    while let Some(i) = queue.pop_front() {
+        let distance = grid.direction(i).distance(center) * radius_of_planet;
+        if distance <= radius {
+            f(i, distance);
+        }
+        if distance > radius + 1.5 {
+            continue;
+        }
+        for (j, _) in grid.neighbours(i) {
+            if seen.insert(j) {
+                queue.push_back(j);
+            }
+        }
+    }
 }
