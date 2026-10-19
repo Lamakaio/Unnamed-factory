@@ -46,6 +46,8 @@ const GORGE_SLOPE: f32 = 0.002;
 /// (both on top of the length).
 const GORGE_HIGH_COST: f32 = 2.;
 const GORGE_WINDING: f32 = 3.;
+/// Most cells a gorge runs past the lake's old shore before reaching lower ground.
+const GORGE_MAX_BEYOND: usize = 20;
 /// Lake beds: depth at the shore and its increase per cell from it, and the deepest point
 /// (`LAKE_MAX_DEPTH` × √cells, clamped).
 const SHORE_DEPTH: f32 = 0.25;
@@ -205,12 +207,6 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
                 }
             }
             let level = low;
-            // The exposed bed: flat, wet ground.
-            for &i in &lake {
-                if heights[i] >= level {
-                    wetland[i] = wetland[i].max(0.5);
-                }
-            }
             // Across the old bed, from the deepest point to the outlet: the cheapest way, through
             // low ground (above the new level costs), winding with a noise.
             let outlet = *lake.iter().max_by(|&&a, &&b| drainage[a].total_cmp(&drainage[b])).unwrap();
@@ -244,23 +240,45 @@ pub fn shape_lakes(grid: &SphereGrid, heights: &mut [f32], sea: &mut [bool]) -> 
             }
             path.reverse();
             let mut floor = level;
+            let mut gorge: Vec<(usize, f32)> = Vec::new();
             for &j in &path {
                 floor -= GORGE_SLOPE;
-                heights[j] = heights[j].min(floor);
+                gorge.push((j, floor));
             }
-            // Then down the outlet until lower ground.
-            let mut i = outlet;
+            // Then down the outlet until lower ground: a lake whose outlet stays high for long (a
+            // trench across a plain to the sea) stays as it is.
+            let (mut i, mut beyond, mut reached) = (outlet, 0, false);
             for _ in 0..cells {
                 let next = graph.receivers[i];
                 if next == i || base[next] {
+                    reached = true;
                     break;
                 }
                 floor -= GORGE_SLOPE;
-                if !in_lake.contains(&next) && heights[next] < floor {
-                    break;
+                if !in_lake.contains(&next) {
+                    if heights[next] < floor {
+                        reached = true;
+                        break;
+                    }
+                    beyond += 1;
+                    if beyond > GORGE_MAX_BEYOND {
+                        break;
+                    }
                 }
-                heights[next] = heights[next].min(floor);
+                gorge.push((next, floor));
                 i = next;
+            }
+            if !reached {
+                continue;
+            }
+            for (j, floor) in gorge {
+                heights[j] = heights[j].min(floor);
+            }
+            // The exposed bed: flat, wet ground.
+            for &i in &lake {
+                if heights[i] >= level {
+                    wetland[i] = wetland[i].max(0.5);
+                }
             }
         }
     }

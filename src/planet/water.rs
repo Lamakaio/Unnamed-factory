@@ -54,6 +54,11 @@ use crate::{
 
 /// Lake depth from which a point is under a lake.
 const LAKE: f32 = 0.02;
+/// Ground carved this much (by river channels) counts as a river's for the lakes.
+const CARVED: f32 = 0.05;
+/// A tributary's junction cap fails where its outline steps up or down more than this between
+/// two points (across a fall): the tributary fades out instead.
+const CAP_MAX_RISE: f32 = 0.9;
 /// Largest sag of the sea's triangles below sea level (world units).
 const SEA_SAG: f32 = 0.02;
 /// Spacing of the rows added past a river's end while it fades.
@@ -546,6 +551,13 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         let project = |p: Vec3| Vec2::new(p.dot(east), p.dot(north));
         let cap = junction_cap(&rows, &parent_edge(parent, &rows, true), project)
             .or_else(|| junction_cap(&rows, &parent_edge(parent, &rows, false), project));
+        // (Not across a fall: the outline would fold over itself.)
+        let cap = cap.filter(|(_, outline)| {
+            (0..outline.len()).all(|k| {
+                let next = &outline[(k + 1) % outline.len()];
+                (outline[k].position.length() - next.position.length()).abs() < CAP_MAX_RISE
+            })
+        });
         match cap {
             Some((full_rows, outline)) => {
                 for pair in rows[..full_rows].windows(2) {
@@ -666,12 +678,16 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
             let depth = surface.lake_depth.bilinear(face, p);
             // (The ground before the channels are carved: carved banks round an outlet or an
             // inlet are lower than the lake, which would spill over them.)
-            let ground = surface.uncarved_height(surface.direction(face, p));
+            // The ground as drawn; the channels' carving (a river's bed and banks: lower than the
+            // lake round an outlet or an inlet) stops the lake like a river channel does.
+            let direction = surface.direction(face, p);
+            let ground = surface.height(face, p);
+            let carved = surface.uncarved_height(direction) - ground > CARVED;
             let sample = if depth >= LAKE {
                 Sample::Lake(surface.heights.bilinear(face, p) + depth)
             } else if depth > 0. {
                 Sample::Low
-            } else if surface.wetness(face, p) > 0. {
+            } else if carved || surface.wetness(face, p) > 0. {
                 Sample::River
             } else {
                 Sample::Shore
