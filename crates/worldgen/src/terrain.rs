@@ -11,7 +11,9 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    WorldgenSettings, par,
+    WorldgenSettings,
+    geology::Rock,
+    par,
     flow::FlowGraph,
     grid::Grid,
     noise::{hash, smoothstep},
@@ -40,6 +42,10 @@ pub(crate) struct Shape {
     pub subsidence: Vec<f32>,
     /// Overdeepening of glacial valleys along their course (0.4..1.6, per cell).
     pub glacial_noise: Vec<f32>,
+    /// What the ground is made of, and the strata offset of layered rocks (see `geology`):
+    /// they scale the erodibility and diffusion by the bed at each cell's height.
+    pub rock: Vec<Rock>,
+    pub strata: Vec<f32>,
 }
 
 impl Shape {
@@ -103,8 +109,8 @@ pub(crate) fn erode_timed(
         side_start.push(sides.len() as u32);
     }
     // (Lengths in cells of `cell_size`: the Laplacian divides by its square.)
-    let max_k =
-        shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * dt / settings.cell_size.powi(2);
+    let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * Rock::max_diffusion() * dt
+        / settings.cell_size.powi(2);
     for step in 0..settings.erosion_steps {
         let mut clock = Instant::now();
         let mut lap = |total: &mut Duration| {
@@ -137,8 +143,11 @@ pub(crate) fn erode_timed(
                 heights[i] = uplifted;
                 continue;
             }
+            // (The rock's bed at the cell's height: hard caprock, soft shale...)
+            let rock = shape.rock[i].hardness(heights[i] + shape.strata[i]).0;
             let f = settings.erodibility
                 * shape.erodibility[i]
+                * rock
                 * dt
                 * area[i].powf(settings.area_exponent)
                 / (graph.receiver_distance[i] * settings.cell_size);
@@ -187,7 +196,8 @@ pub(crate) fn erode_timed(
             // (Each cell from the previous substep only: on all cores.)
             par::for_each_mut(&mut updated, |c, new| {
                 let i = diffusing[c] as usize;
-                let k = shape.diffusion[i] * dt / substeps / settings.cell_size.powi(2);
+                let rock = shape.rock[i].hardness(heights[i] + shape.strata[i]).1;
+                let k = shape.diffusion[i] * rock * dt / substeps / settings.cell_size.powi(2);
                 let sides = &sides[side_start[c] as usize..side_start[c + 1] as usize];
                 let sum: f32 = sides.iter().map(|&j| heights[j as usize]).sum();
                 *new = heights[i] + k * (sum - sides.len() as f32 * heights[i]);

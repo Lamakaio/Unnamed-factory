@@ -26,6 +26,7 @@ use crate::{
     noise::{Noise, hash, smoothstep},
     par,
     sphere::SphereGrid,
+    geology::Rock,
     terrain::{self, Shape},
 };
 
@@ -156,6 +157,12 @@ pub struct Planet {
     pub basins: Vec<f32>,
     /// The rivers (see `planet_rivers`).
     pub rivers: Vec<crate::planet_rivers::PlanetRiver>,
+    /// The rock of each cell (`geology::Rock` ids) and its strata offset (erosion units), and
+    /// world units per erosion unit: a bed at erosion height `e` is at world height
+    /// `e * strata_scale` (strata height `height / strata_scale + offset`).
+    pub rock: Vec<u8>,
+    pub strata: Vec<f32>,
+    pub strata_scale: f32,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
     pub ruggedness: Vec<f32>,
     /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
@@ -555,6 +562,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
                 diffusion: 0.,
                 glacial_noise: 1.,
                 height: 0.,
+                rock: Rock::Basalt,
+                strata: 0.,
             };
         }
         let direction = grid.direction(i);
@@ -633,7 +642,13 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             * land.powf(1.5)
             + swells * land.sqrt();
         let range = (b.belt + foothills * 0.4).max(old * 0.6).min(1.);
+        let (rock, dip) = rock_of(b, old, [plains, hilly, plateau], hills.layer(12).fbm3(p / 90., 3));
+        // Strata surfaces `height + offset = const`: the offset is a smooth field whose slope
+        // is the dip (gentle on plateaus, steep in the foothills of ranges).
+        let strata = dip * STRATA_WAVELENGTH * hills.layer(13).fbm3(p / STRATA_WAVELENGTH, 2);
         Cell {
+            rock,
+            strata,
             uplift,
             // Rift floors sink in segments along the axis (a chain of basins, rift lakes), as
             // on the flat map.
@@ -668,6 +683,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         plateau_cap: pass2.iter().map(|c| c.plateau_cap).collect(),
         subsidence: pass2.iter().map(|c| c.subsidence).collect(),
         glacial_noise: pass2.iter().map(|c| c.glacial_noise).collect(),
+        rock: pass2.iter().map(|c| c.rock).collect(),
+        strata: pass2.iter().map(|c| c.strata).collect(),
     };
     Shaped {
         shape,
@@ -752,6 +769,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     summits.sort_by(f32::total_cmp);
     let reference = summits[(summits.len() - 1) * 99 / 100].max(1e-6);
+    let strata_scale = settings.max_height / reference;
     for i in 0..cells {
         if !sea[i] {
             heights[i] *= settings.max_height / reference;
@@ -869,6 +887,9 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         lake_depth,
         wetland,
         basins,
+        rock: shape.rock.iter().map(|&r| r as u8).collect(),
+        strata: shape.strata.clone(),
+        strata_scale,
         rivers,
         ruggedness,
         calm,
@@ -935,6 +956,8 @@ fn upsample(coarse: &SphereGrid, values: &[f32], fine: &SphereGrid) -> Vec<f32> 
 
 /// Per-cell results of the landform pass.
 struct Cell {
+    rock: Rock,
+    strata: f32,
     uplift: f32,
     subsidence: f32,
     provinces: [f32; 3],
@@ -981,6 +1004,50 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: 
         }
     }
     distance
+}
+
+/// Strata: the scale (cells) over which their dip turns.
+const STRATA_WAVELENGTH: f32 = 120.;
+
+/// The rock of a land cell and the dip of its strata, from its boundaries (belts, arcs, rifts),
+/// old ranges, provinces and a noise (`-1..1`, choosing between the rocks a province can have).
+fn rock_of(b: Boundary, old: f32, [plains, hilly, plateau]: [f32; 3], noise: f32) -> (Rock, f32) {
+    if b.arc > 0.3 || b.rift > 0.45 {
+        // Volcanic arcs, lava flows on rift floors.
+        return (Rock::Basalt, 0.);
+    }
+    if b.belt > 0.5 {
+        // The cores of young ranges.
+        return (Rock::Metamorphic, 0.);
+    }
+    if b.foothills > 0.3 || b.shoulders > 0.3 {
+        // Strata tilted up against the range: cuestas, hogbacks.
+        let rock = if noise > 0.15 { Rock::Limestone } else { Rock::Sandstone };
+        return (rock, 0.25 + 0.2 * b.foothills.max(b.shoulders));
+    }
+    if old > 0.3 {
+        // Worn ranges down to their roots.
+        return (if noise > -0.35 { Rock::Granite } else { Rock::Metamorphic }, 0.);
+    }
+    if plateau >= plains.max(hilly) {
+        // Flat-lying beds: mesas, stepped canyons.
+        return (if noise > 0.45 { Rock::Limestone } else { Rock::Sandstone }, 0.02);
+    }
+    if hilly >= plains {
+        let rock = match noise {
+            n if n > 0.15 => Rock::Granite,
+            n if n > -0.2 => Rock::Sandstone,
+            _ => Rock::Limestone,
+        };
+        return (rock, 0.08);
+    }
+    // Plains: shale lowlands, some limestone, and old shields (granite) here and there.
+    let rock = match noise {
+        n if n > 0.35 => Rock::Granite,
+        n if n > 0.2 => Rock::Limestone,
+        _ => Rock::Shale,
+    };
+    (rock, 0.03)
 }
 
 /// Lake shores within this distance (world units) stay above their lake's level when

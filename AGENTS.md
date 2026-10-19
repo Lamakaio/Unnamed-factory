@@ -127,8 +127,24 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   ridged / warp). Erosion, flow routing and blurs are generic over a `Grid` (`grid.rs`; the
   planet's is the cube-sphere, `sphere.rs`). `WorldgenSettings` holds the erosion and detail
   parameters (the former flat continent's, scaled by the planet).
+- **Rock types** (`geology.rs`, `Rock`): granite (cratons, old ranges' roots, some plains and
+  hills), metamorphic (young belts' cores), basalt (arcs, rifts, the sea floor), sandstone
+  (plateaus, foothills), shale (plains), limestone (patches) — `planet.rs::rock_of`, from the
+  boundaries, old ranges, provinces and a noise. Each scales the erodibility and diffusion
+  (`PROPERTIES`); sandstone, shale and limestone are layered: hard and soft beds
+  (`bedding`) along strata surfaces `height + offset = const`, the offset a smooth field
+  whose slope is the dip (`STRATA_WAVELENGTH`; ~0.02 on plateaus, steep in foothills:
+  cuestas), so erosion carves steps, mesas, wide valleys in soft rock, narrow gorges in hard
+  rock. `Planet::rock`, `strata`, `strata_scale` (world units per erosion unit, from the
+  height scaling). The game draws them: a rock field texture per face (`Rgba16Float`: rock
+  id, strata offset; `planet/mod.rs::rock_textures`, a terrain material per face) read by
+  `planet_terrain.wesl::rock_color` (palettes by rock, beds along the same strata surfaces,
+  irregular borders from a warped nearest cell); `planet/vegetation.rs::scatter_rocks`
+  strews rocks by rock type (`nature::scattered_rocks`) where the ground is steep, dry or
+  cold (in fields), `PlanetSurface::rock_at`.
 - **Erosion engine** (`terrain.rs::erode_timed`, from a `Shape` of per-cell uplift,
-  erodibility, diffusion, rain, provinces, ranges, subsidence, glacial noise):
+  erodibility, diffusion, rain, provinces, ranges, subsidence, glacial noise, rock and strata:
+  the rock's bed at each cell's height scales its erodibility and diffusion):
      implicitly from the outlets upstream (Braun & Willett 2013), plus hillslope diffusion.
      Each step does a Priority-Flood with epsilon (Barnes 2014; depressions are filled), then
      **stochastic D8** routing (random slope weights against grid-aligned valleys), then

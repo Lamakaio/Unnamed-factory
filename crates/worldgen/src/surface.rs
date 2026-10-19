@@ -114,6 +114,8 @@ pub struct PlanetSurface {
     pub ground: Option<[FaceField; 3]>,
     /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
     pub weights: Option<[FaceField; 5]>,
+    /// The rock of each cell (`geology::Rock` id; see [`PlanetSurface::rock_at`]).
+    pub rock: FaceField,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -176,6 +178,7 @@ impl PlanetSurface {
             weights,
             ground,
             ocean: FaceField::new(planet, &ocean),
+            rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
             channels: Channels::default(),
@@ -400,6 +403,11 @@ impl PlanetSurface {
     pub fn ocean_at(&self, direction: Vec3) -> f32 {
         let (face, p) = self.face_coords(direction);
         self.ocean.bilinear(face, p)
+    }
+
+    /// The rock at continuous cell coordinates of a face (the nearest cell's).
+    pub fn rock_at(&self, face: usize, p: Vec2) -> crate::geology::Rock {
+        crate::geology::Rock::from_id(self.rock.bilinear(face, p.round()).round() as u8)
     }
 
     /// The river springs (see `planet_springs`).

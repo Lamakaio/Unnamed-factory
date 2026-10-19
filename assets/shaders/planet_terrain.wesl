@@ -39,6 +39,11 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
 // x: the sea level radius.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
+// The face's rock field, by cell (`worldgen::geology`): rock id (red), strata offset (green,
+// erosion units). `planet.y` is the cells along a face edge, `planet.z` world units per
+// erosion unit (strata height = height / planet.z + offset), `planet.w` 1 with the field.
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var rock_field: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var rock_sampler: sampler;
 
 // Prevailing wind direction (in face coordinates).
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> wind: vec4<f32>;
@@ -125,12 +130,59 @@ fn patches(noise: f32, threshold: f32) -> f32 {
 }
 
 // Rock: two tones in bands (strata on cliffs) and patches on flat rock.
-fn rock_color(xz: vec2<f32>, height: f32, up: f32, footprint: f32) -> vec3<f32> {
+// Rock by type (`worldgen::geology::Rock`): two tones each, and their layering. Layered rocks
+// (sandstone, shale, limestone) show their beds along the strata surfaces (`level`: the same
+// surfaces erosion carved steps along): hard beds in one tone, soft ones in the other, with
+// fine bands; massive rocks have their own textures (granite speckles, metamorphic foliation,
+// basalt columns).
+const ROCK_LIGHT: array<vec3<f32>, 6> = array(
+    vec3(0.74, 0.69, 0.65), // granite
+    vec3(0.60, 0.60, 0.57), // metamorphic
+    vec3(0.38, 0.36, 0.36), // basalt
+    vec3(0.80, 0.53, 0.34), // sandstone (hard beds)
+    vec3(0.55, 0.50, 0.46), // shale (hard beds)
+    vec3(0.85, 0.82, 0.73), // limestone (hard beds)
+);
+const ROCK_DARK: array<vec3<f32>, 6> = array(
+    vec3(0.62, 0.56, 0.53),
+    vec3(0.48, 0.49, 0.48),
+    vec3(0.28, 0.27, 0.28),
+    vec3(0.66, 0.43, 0.33),
+    vec3(0.44, 0.40, 0.38),
+    vec3(0.70, 0.68, 0.62),
+);
+// Bed thickness (erosion units) and share of the hard beds (as in `geology::PROPERTIES`).
+const ROCK_BEDS: array<vec2<f32>, 6> = array(
+    vec2(0.0, 1.0), vec2(0.0, 1.0), vec2(0.0, 1.0), vec2(6.0, 0.4), vec2(4.0, 0.18), vec2(9.0, 0.7),
+);
+
+fn rock_color(xz: vec2<f32>, height: f32, up: f32, footprint: f32, rock: i32, level: f32) -> vec3<f32> {
+    let light = srgb(ROCK_LIGHT[rock].x, ROCK_LIGHT[rock].y, ROCK_LIGHT[rock].z);
+    let dark = srgb(ROCK_DARK[rock].x, ROCK_DARK[rock].y, ROCK_DARK[rock].z);
     let wobble = fbm(xz * 0.35 + vec2(height * 0.2, 0.0), 3, footprint * 0.35);
-    let strata = sin(height * 2.2 + wobble * 2.5);
     let flat_patches = fbm(xz * 0.6, 3, footprint * 0.6);
-    let pattern = mix(strata, flat_patches, smoothstep(0.6, 0.85, up));
-    return mix(srgb(0.52, 0.49, 0.47), srgb(0.62, 0.59, 0.55), patches(pattern, 0.1));
+    let beds = ROCK_BEDS[rock];
+    var pattern = 0.0;
+    if beds.x > 0.0 {
+        // Beds: hard (light) and soft (dark), fine bands within, slightly wavy.
+        let phase = fract(level / beds.x + wobble * 0.04);
+        let hard = 1.0 - smoothstep(beds.y - 0.04, beds.y + 0.04, phase);
+        let fine = sin(level / beds.x * 6.2832 * 3.0 + wobble * 2.0) * 0.35;
+        pattern = mix(-0.6 + fine, 0.6 + fine, hard);
+    } else if rock == 0 {
+        // Granite: blotches and speckles.
+        pattern = flat_patches + 0.5 * value_noise(xz * 6.0);
+    } else if rock == 2 {
+        // Basalt: vertical columns on cliffs.
+        let columns = value_noise(vec2(dot(xz, vec2(0.7, 0.7)) * 3.0, height * 0.3));
+        pattern = mix(columns, flat_patches, smoothstep(0.5, 0.8, up));
+    } else {
+        // Metamorphic: banded foliation.
+        pattern = sin(height * 2.2 + wobble * 2.5);
+    }
+    // Flat rock tops: patches rather than beds.
+    pattern = mix(pattern, flat_patches, smoothstep(0.7, 0.9, up) * 0.6);
+    return mix(dark, light, patches(pattern, 0.1));
 }
 
 // Grass carpet: the blades are a height field (peaks of value noise) filling a thin layer
@@ -253,6 +305,8 @@ fn ground(
     descent: f32,
     footprint: f32,
     time: f32,
+    rock_type: i32,
+    level: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -326,7 +380,7 @@ fn ground(
     let steep_value = steep + 0.06 * medium;
     let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
     let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
-    color = mix(color, rock_color(xz, height, up, footprint) * rock_tone, rock);
+    color = mix(color, rock_color(xz, height, up, footprint, rock_type, level) * rock_tone, rock);
 
     // Snow: settles on flat ground (steep rock stays bare), with a ragged edge and wind-blown
     // drifts.
@@ -420,7 +474,20 @@ fn fragment(
     }
     let descent = -dot(dir, n);
 
-    let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time)
+    // The rock under the ground: the nearest cell's (from a warped position: irregular
+    // borders), and the strata height along its beds.
+    var rock_type = 1;
+    var level = height;
+    if planet.w > 0.0 {
+        let n = i32(planet.y);
+        let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
+        let cell = clamp(vec2<i32>(floor(xz + warp + 0.5)), vec2(0), vec2(n - 1));
+        rock_type = clamp(i32(textureLoad(rock_field, cell, 0).r + 0.5), 0, 5);
+        let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
+        level = height / planet.z + offset;
+    }
+    let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
+        rock_type, level)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

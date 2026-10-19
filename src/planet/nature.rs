@@ -22,7 +22,7 @@ use bevy::{
     pbr::gltf::standard_material_from_gltf_material,
     prelude::*,
 };
-use worldgen::Biome;
+use worldgen::{Biome, geology::Rock};
 
 use crate::{
     AppState,
@@ -156,6 +156,11 @@ pub(super) const SPECIES: &[Species] = &[
     Species { name: "boulder_a", kind: Kind::Rock, scale: (0.6, 1.5) },
     Species { name: "boulder_b", kind: Kind::Rock, scale: (0.6, 1.5) },
     Species { name: "boulder_c", kind: Kind::Rock, scale: (0.6, 1.5) },
+    Species { name: "rock_large_a", kind: Kind::Rock, scale: (0.7, 1.6) },
+    Species { name: "rock_large_b", kind: Kind::Rock, scale: (0.7, 1.6) },
+    Species { name: "rock_small_a", kind: Kind::Rock, scale: (0.8, 2.) },
+    Species { name: "rock_small_b", kind: Kind::Rock, scale: (0.8, 2.) },
+    Species { name: "rock_small_c", kind: Kind::Rock, scale: (0.8, 2.) },
     Species { name: "bush_common", kind: Kind::Bush, scale: (0.9, 1.4) },
     Species { name: "bush_flowers", kind: Kind::Bush, scale: (0.9, 1.4) },
     Species { name: "pebbles_a", kind: Kind::Ground, scale: (1.0, 2.0) },
@@ -602,4 +607,53 @@ pub(super) fn spawn_lod0(
             entity.id()
         })
         .collect()
+}
+
+/// The rocks scattered over rocky ground, by rock type (shares of the rocks placed): rounded
+/// granite boulders, angular basalt blocks, sandstone towers, pale limestone, small shale
+/// rocks, metamorphic slabs.
+pub(super) fn scattered_rocks(rock: Rock) -> &'static [(&'static str, f32)] {
+    match rock {
+        Rock::Granite => &[
+            ("boulder_a", 0.25),
+            ("boulder_b", 0.25),
+            ("boulder_c", 0.2),
+            ("rock_large_a", 0.15),
+            ("rock_small_a", 0.15),
+        ],
+        Rock::Metamorphic => &[
+            ("rock_a", 0.2),
+            ("rock_b", 0.2),
+            ("rock_c", 0.2),
+            ("rock_tall_c", 0.15),
+            ("rock_small_b", 0.25),
+        ],
+        Rock::Basalt => &[
+            ("rock_tall_a", 0.25),
+            ("rock_tall_b", 0.25),
+            ("rock_d", 0.2),
+            ("rock_f", 0.2),
+            ("rock_small_c", 0.1),
+        ],
+        Rock::Sandstone => &[
+            ("rock_tall_d", 0.25),
+            ("rock_large_b", 0.25),
+            ("rock_e", 0.2),
+            ("rock_tall_a", 0.1),
+            ("rock_small_a", 0.2),
+        ],
+        Rock::Shale => &[
+            ("rock_small_a", 0.3),
+            ("rock_small_b", 0.3),
+            ("rock_small_c", 0.2),
+            ("stone_e", 0.2),
+        ],
+        Rock::Limestone => &[
+            ("stone_a", 0.3),
+            ("stone_c", 0.3),
+            ("stone_e", 0.15),
+            ("rock_large_a", 0.15),
+            ("rock_tall_d", 0.1),
+        ],
+    }
 }

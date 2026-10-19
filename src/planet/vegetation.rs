@@ -33,7 +33,8 @@ use super::{
         GROUND_CELL, GROUND_FADE, Instance, Kind, LARGE_CELL, LEVEL_MARGIN, LOD_FADE,
         LOD0_DISTANCE, MAX_TASKS, METERS_TO_WORLD, NEAR_DISTANCE, PATCH_CELL, PATCH_COVER,
         SPAWN_MARGIN, SPAWNS_PER_FRAME, SPECIES, StandIn, Vegetation, VegetationModelsPlugin,
-        ground_rules, large_rules, merged_mesh, patch_rules, spawn_lod0, species_index,
+        ground_rules, large_rules, merged_mesh, patch_rules, scattered_rocks, spawn_lod0,
+        species_index,
     },
 };
 use crate::AppState;
@@ -158,6 +159,7 @@ fn start_placement(
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let mut large = place(&surface, &chunk, LARGE_CELL, 1, large_rules, false);
             large.extend(spring_rocks(&surface, &chunk));
+            large.extend(scatter_rocks(&surface, &chunk));
             let far = merged_mesh(&stand_ins, &large, origin, false);
             Placed { large, far }
         });
@@ -434,6 +436,82 @@ fn place(
     }
     instances
 }
+
+/// Scattered rocks over rocky ground: one try per `ROCK_CELL`, kept with a chance from how
+/// rocky the ground is (steep, dry or cold ground; little in forests, none on wet ground, beaches
+/// or under water), the model chosen by the rock type (`nature::scattered_rocks`).
+fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
+    let cell_length = surface.radius * FRAC_PI_2 / surface.n as f32;
+    let per_chunk = (CHUNK_CELLS as f32 * cell_length / ROCK_CELL).round() as i64;
+    let step = CHUNK_CELLS as f32 / per_chunk as f32;
+    let seed = surface.seed() ^ 0x0C4F_5E7Du32 ^ (chunk.face as u32 + 1).wrapping_mul(0x85EB_CA6B);
+    let random = |x: i64, z: i64, k: u32| hash(seed.wrapping_add(k), x as u32, z as u32) as f32 / u32::MAX as f32;
+    let fields = Noise::new(seed ^ 0xF1E1D);
+    let first = (chunk.min / step).round().as_i64vec2();
+    let mut instances = Vec::new();
+    for gz in 0..per_chunk {
+        for gx in 0..per_chunk {
+            let (x, z) = (first.x + gx, first.y + gz);
+            let p = Vec2::new(x as f32 + random(x, z, 1), z as f32 + random(x, z, 2)) * step - 0.5;
+            let height = surface.heights.bilinear(chunk.face, p);
+            if height <= BEACH_HEIGHT
+                || surface.ocean.bilinear(chunk.face, p) > 0.02
+                || surface.lake_depth.bilinear(chunk.face, p) > 0.02
+                || surface.marsh.bilinear(chunk.face, p).abs() > 0.4
+            {
+                continue;
+            }
+            let slope = Vec2::new(
+                surface.heights.bilinear(chunk.face, p + Vec2::X) - surface.heights.bilinear(chunk.face, p - Vec2::X),
+                surface.heights.bilinear(chunk.face, p + Vec2::Y) - surface.heights.bilinear(chunk.face, p - Vec2::Y),
+            )
+            .length()
+                / (2. * cell_length);
+            let [_, forest, desert, _, cold] = surface
+                .weights
+                .as_ref()
+                .map_or([0.; 5], |w| w.each_ref().map(|f| f.bilinear(chunk.face, p)));
+            // Rocky ground, in fields (rock-strewn slopes and plains, clear stretches between).
+            let field = smoothstep(-0.3, 0.4, fields.fbm3(surface.direction(chunk.face, p) * surface.radius / 18., 2));
+            let rocky = (smoothstep(0.25, 1., slope) * 0.8 + desert * 0.5 + cold * 0.3 + 0.08)
+                * (1. - 0.8 * forest)
+                * field;
+            if random(x, z, 3) > ROCK_CHANCE * rocky {
+                continue;
+            }
+            let table = scattered_rocks(surface.rock_at(chunk.face, p));
+            let mut roll = random(x, z, 4);
+            let Some(&(name, _)) = table.iter().find(|(_, share)| {
+                roll -= share;
+                roll < 0.
+            }) else {
+                continue;
+            };
+            let radial = surface.direction(chunk.face, p);
+            if 1. - normal(surface, chunk.face, p).dot(radial) > Kind::Rock.max_steepness() {
+                continue;
+            }
+            let species = species_index(name);
+            let (low, high) = SPECIES[species as usize].scale;
+            let scale = METERS_TO_WORLD * (low + (high - low) * random(x, z, 5));
+            let ground = surface.height(chunk.face, p);
+            instances.push(Instance {
+                species,
+                // (Sunk a little into the ground.)
+                position: radial * (surface.radius + ground - 0.25 * scale),
+                rotation: Quat::from_rotation_arc(Vec3::Y, radial)
+                    * Quat::from_rotation_y(random(x, z, 6) * std::f32::consts::TAU),
+                scale,
+            });
+        }
+    }
+    instances
+}
+
+/// Scattered rocks: one try per this many world units, and the chance of a rock on fully rocky
+/// ground.
+const ROCK_CELL: f32 = 1.1;
+const ROCK_CHANCE: f32 = 0.35;
 
 /// Rock outcrops the hillside springs of a chunk spout from (`map::vegetation::spring_rocks`):
 /// a tall rock right behind the spout (hiding its top) and boulders on both sides.

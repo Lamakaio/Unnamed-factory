@@ -8,6 +8,7 @@
 //! former flat continent's, scaled by the planet.)
 
 pub(crate) mod detail;
+pub mod geology;
 mod flow;
 pub mod grid;
 pub mod sphere;

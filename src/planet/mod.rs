@@ -16,7 +16,10 @@ mod water;
 use std::{sync::Arc, time::Instant};
 
 use bevy::{
+    asset::RenderAssetUsages,
+    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
     prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use worldgen::{
@@ -82,10 +85,14 @@ pub struct PlanetWorld {
     pub climate: Arc<PlanetClimate>,
     /// The sea wave field of each face (texture data), until the water is spawned.
     sea: Vec<Vec<u8>>,
+    /// The rock field of each face (texture data), until the terrain materials exist, and world
+    /// units per erosion unit (see `Planet::strata_scale`).
+    rock: Vec<Vec<u8>>,
+    strata_scale: f32,
 }
 
 #[derive(Resource)]
-struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>, PlanetClimate)>);
+struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>, PlanetClimate, Vec<Vec<u8>>, f32)>);
 
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -103,6 +110,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
         info!("Climate in {climate_time:.1?}, surface in {:.1?}", stage.elapsed());
         let sea_start = Instant::now();
         let sea = water::sea_textures(&planet, &surface);
+        let rock = rock_textures(&planet);
         info!("Sea wave field in {:.1?}", sea_start.elapsed());
         info!(
             "Planet generated in {:.1?} ({} cells, radius {:.0}): {:?}",
@@ -111,7 +119,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             surface.radius,
             planet.timings
         );
-        (surface, sea, climate)
+        (surface, sea, climate, rock, planet.strata_scale)
     });
     commands.insert_resource(Generation(task));
 }
@@ -121,7 +129,7 @@ fn finish_generation(
     mut generation: ResMut<Generation>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some((surface, sea, climate)) = check_ready(&mut generation.0) else {
+    let Some((surface, sea, climate, rock, strata_scale)) = check_ready(&mut generation.0) else {
         return;
     };
     commands.remove_resource::<Generation>();
@@ -129,6 +137,8 @@ fn finish_generation(
         surface: Arc::new(surface),
         climate: Arc::new(climate),
         sea,
+        rock,
+        strata_scale,
     });
     next_state.set(AppState::InGame);
 }
@@ -162,9 +172,10 @@ struct ChunkMeshTask {
     camera: Vec3,
 }
 
-/// Material of the planet's terrain (`planet_terrain.wesl`).
+/// Materials of the planet's terrain (`planet_terrain.wesl`), by cube face (each with its
+/// rock field).
 #[derive(Resource)]
-struct TerrainMaterial(Handle<PlanetTerrainMaterial>);
+struct TerrainMaterial(Vec<Handle<PlanetTerrainMaterial>>);
 
 fn spawn_planet(
     mut commands: Commands,
@@ -175,20 +186,41 @@ fn spawn_planet(
     mut water_materials: ResMut<Assets<PlanetWaterMaterial>>,
 ) {
     let sea = std::mem::take(&mut world.sea);
+    let rock = std::mem::take(&mut world.rock);
     let surface = &world.surface;
-    let material = terrain_materials.add(PlanetTerrainMaterial {
-        base: StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.95,
-            ..default()
-        },
-        extension: PlanetTerrainShader {
-            tint: LinearRgba::WHITE,
-            planet: Vec4::new(surface.radius, 0., 0., 0.),
-            wind: Vec4::new(1., 0., 0., 0.),
-        },
-    });
-    commands.insert_resource(TerrainMaterial(material));
+    // A terrain material per face, with its rock field.
+    let n = surface.n as u32;
+    let materials = rock
+        .into_iter()
+        .map(|data| {
+            let mut image = Image::new(
+                Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+                TextureDimension::D2,
+                data,
+                TextureFormat::Rgba16Float,
+                RenderAssetUsages::RENDER_WORLD,
+            );
+            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::ClampToEdge,
+                address_mode_v: ImageAddressMode::ClampToEdge,
+                ..ImageSamplerDescriptor::linear()
+            });
+            terrain_materials.add(PlanetTerrainMaterial {
+                base: StandardMaterial {
+                    base_color: Color::WHITE,
+                    perceptual_roughness: 0.95,
+                    ..default()
+                },
+                extension: PlanetTerrainShader {
+                    tint: LinearRgba::WHITE,
+                    planet: Vec4::new(surface.radius, n as f32, world.strata_scale, 1.),
+                    rock: Some(images.add(image)),
+                    wind: Vec4::new(1., 0., 0., 0.),
+                },
+            })
+        })
+        .collect();
+    commands.insert_resource(TerrainMaterial(materials));
     let chunks_per_side = surface.n.div_ceil(CHUNK_CELLS);
     for face in 0..FACES {
         for cz in 0..chunks_per_side {
@@ -283,9 +315,9 @@ fn finish_chunk_meshes(
     mut commands: Commands,
     material: Res<TerrainMaterial>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut chunks: Query<(Entity, &mut ChunkState, &mut ChunkMeshTask, Option<&Mesh3d>)>,
+    mut chunks: Query<(Entity, &PlanetChunk, &mut ChunkState, &mut ChunkMeshTask, Option<&Mesh3d>)>,
 ) {
-    for (entity, mut state, mut task, mesh3d) in &mut chunks {
+    for (entity, chunk, mut state, mut task, mesh3d) in &mut chunks {
         let Some(mesh) = check_ready(&mut task.task) else {
             continue;
         };
@@ -298,10 +330,27 @@ fn finish_chunk_meshes(
             None => {
                 commands
                     .entity(entity)
-                    .insert((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.0.clone())));
+                    .insert((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.0[chunk.face].clone())));
             }
         }
         state.built_for = Some(task.camera);
         commands.entity(entity).remove::<ChunkMeshTask>();
     }
+}
+
+/// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id,
+/// strata offset.
+fn rock_textures(planet: &worldgen::planet::Planet) -> Vec<Vec<u8>> {
+    let per_face = planet.grid.n() * planet.grid.n();
+    (0..FACES)
+        .map(|face| {
+            let mut data = Vec::with_capacity(per_face * 8);
+            for i in face * per_face..(face + 1) * per_face {
+                for value in [planet.rock[i] as f32, planet.strata[i], 0., 0.] {
+                    data.extend(half::f16::from_f32(value).to_le_bytes());
+                }
+            }
+            data
+        })
+        .collect()
 }

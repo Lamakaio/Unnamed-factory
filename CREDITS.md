@@ -119,3 +119,9 @@ someone else's work, add it here (and mention it in the code comment where it is
   Nature MegaKit (free Standard version).
 - Level-of-detail stand-ins built from convex hulls of foliage clusters (`tools/nature`), and
   the dithered LOD cross-fade of Bevy's `VisibilityRange`.
+- **Rock types and layered erosion** (`geology.rs`, `terrain.rs`): erodibility and hillslope
+  diffusion varying with the bed at each cell's height along dipping strata surfaces, so the
+  stream-power erosion carves steps, mesas, cuestas and hogbacks: after A. M. Forte, K. X.
+  Whipple, A. Bookhagen, M. W. Rossi, *Complexities of landscape evolution during incision
+  through layered stratigraphy with contrasts in rock strength*, JGR Earth Surface 121, 2016;
+  rock types from plate setting as in introductory geology (cratons, orogens, arcs, basins).

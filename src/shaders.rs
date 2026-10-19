@@ -60,9 +60,14 @@ pub type PlanetWaterMaterial = ExtendedMaterial<StandardMaterial, PlanetWaterSha
 pub struct PlanetTerrainShader {
     #[uniform(100)]
     pub tint: LinearRgba,
-    /// x: the sea level radius.
+    /// x: the sea level radius, y: cells along a face edge, z: world units per erosion unit
+    /// (`Planet::strata_scale`), w: 1 with a rock field.
     #[uniform(101)]
     pub planet: Vec4,
+    /// The rock field of one cube face, by cell: rock id, strata offset (see `worldgen::geology`).
+    #[texture(102)]
+    #[sampler(103)]
+    pub rock: Option<Handle<Image>>,
     /// Prevailing wind direction (in face coordinates).
     #[uniform(108)]
     pub wind: Vec4,
