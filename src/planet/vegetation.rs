@@ -26,16 +26,17 @@ use worldgen::{
     surface::PlanetSurface,
 };
 
-use super::{CHUNK_CELLS, PlanetChunk, PlanetWorld, mesh::distance_to_chunk};
-use crate::{
-    AppState,
-    map::vegetation::{
+use super::{
+    CHUNK_CELLS, PlanetChunk, PlanetWorld,
+    mesh::distance_to_chunk,
+    nature::{
         GROUND_CELL, GROUND_FADE, Instance, Kind, LARGE_CELL, LEVEL_MARGIN, LOD_FADE,
         LOD0_DISTANCE, MAX_TASKS, METERS_TO_WORLD, NEAR_DISTANCE, PATCH_CELL, PATCH_COVER,
         SPAWN_MARGIN, SPAWNS_PER_FRAME, SPECIES, StandIn, Vegetation, VegetationModelsPlugin,
         ground_rules, large_rules, merged_mesh, patch_rules, spawn_lod0, species_index,
     },
 };
+use crate::AppState;
 
 /// Chunks closer than this to the camera get their large vegetation placed (merged LOD2 mesh);
 /// beyond [`DROP_DISTANCE`] they drop it.

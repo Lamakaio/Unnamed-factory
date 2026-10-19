@@ -546,7 +546,6 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         // (Erosion keeps the sea at its base level: none of this is used there.)
         if sea[i] {
             return Cell {
-                land: 0.,
                 uplift: 0.,
                 subsidence: 0.,
                 provinces: [1., 0., 0.],
@@ -635,7 +634,6 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             + swells * land.sqrt();
         let range = (b.belt + foothills * 0.4).max(old * 0.6).min(1.);
         Cell {
-            land,
             uplift,
             // Rift floors sink in segments along the axis (a chain of basins, rift lakes), as
             // on the flat map.
@@ -658,7 +656,6 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         }
     });
     let shape = Shape {
-        land: pass2.iter().map(|c| c.land).collect(),
         uplift: pass2.iter().map(|c| c.uplift).collect(),
         erodibility: pass2.iter().map(|c| c.erodibility).collect(),
         diffusion: pass2.iter().map(|c| c.diffusion).collect(),
@@ -666,12 +663,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         rain: (0..cells).map(|i| grid.area(i) * scale * scale).collect(),
         base_level: sea.clone(),
         heights: pass2.iter().map(|c| c.height).collect(),
-        sea_floor: vec![0.; cells],
         provinces: pass2.iter().map(|c| c.provinces).collect(),
         range: pass2.iter().map(|c| c.range).collect(),
         plateau_cap: pass2.iter().map(|c| c.plateau_cap).collect(),
         subsidence: pass2.iter().map(|c| c.subsidence).collect(),
-        rift: pass1.iter().map(|c| c.2.rift).collect(),
         glacial_noise: pass2.iter().map(|c| c.glacial_noise).collect(),
     };
     Shaped {
@@ -940,7 +935,6 @@ fn upsample(coarse: &SphereGrid, values: &[f32], fine: &SphereGrid) -> Vec<f32> 
 
 /// Per-cell results of the landform pass.
 struct Cell {
-    land: f32,
     uplift: f32,
     subsidence: f32,
     provinces: [f32; 3],

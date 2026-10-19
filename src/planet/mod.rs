@@ -2,19 +2,20 @@
 //! `worldgen::planet` in the background, then drawn as terrain chunks on the six cube faces
 //! (meshed in the background with a level of detail following the camera, see [`mesh`]) and
 //! water (see [`water`]), with the flat map's vegetation (see [`vegetation`]). The flat map
-//! (`map`) is not loaded in this mode.
+//! is gone (see `git log`).
 
 mod camera;
 mod grass;
 mod inspect;
 mod mesh;
+mod nature;
+mod river_profile;
 mod vegetation;
 mod water;
 
 use std::{sync::Arc, time::Instant};
 
 use bevy::{
-    pbr::AtmosphereSettings,
     prelude::*,
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
@@ -244,9 +245,6 @@ fn view_planet(
         }
     }
     camera::take_over(&mut commands, *camera, focus, distance, pitch, heading);
-    commands
-        .entity(*camera)
-        .remove::<(AtmosphereSettings, DistanceFog)>();
 }
 
 /// Start meshing the chunks that need it (no mesh yet, or the camera moved), nearest first.

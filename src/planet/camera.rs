@@ -8,7 +8,6 @@
 //! and tilts, the arrow keys move the focus, the wheel zooms.
 
 use bevy::{
-    camera_controller::pan_orbit_camera::prelude::component::PanOrbitCamera,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
 };
@@ -50,7 +49,7 @@ pub struct PlanetCamera {
     pub pitch: f32,
 }
 
-/// Replace the flat map's orbit controller with the planet camera, looking at `focus` from
+/// Take the camera over with the planet camera, looking at `focus` from
 /// `distance` (straight down unless `pitch` says otherwise), facing `heading` (radians east
 /// of north; north by default).
 pub fn take_over(
@@ -65,7 +64,7 @@ pub fn take_over(
     let (east, north) = east_north(focus);
     let heading = heading.unwrap_or(0.);
     let forward = north * heading.cos() + east * heading.sin();
-    commands.entity(camera).remove::<PanOrbitCamera>().insert(PlanetCamera {
+    commands.entity(camera).insert(PlanetCamera {
         focus,
         forward,
         distance,

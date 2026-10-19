@@ -1,5 +1,5 @@
 //! The planet's water, drawn with `PlanetWaterMaterial` (`planet_water.wesl`, the flat map's
-//! toon water on the sphere), as on the flat map (`map::water`):
+//! toon water on the sphere), as on the former flat map:
 //! - rivers: ribbons along the water line of the flat map's river profile (pools and falls of
 //!   varied slant, sloping chutes, domed steep stretches), with the flow speed and whitewater
 //!   for the flow map. They fade out where they reach the sea or go under their lake (carrying
@@ -42,15 +42,49 @@ use worldgen::{
     surface::PlanetSurface,
 };
 
-use crate::{
-    map::water::{
-        CONFLUENCE_FOAM, CONFLUENCE_REACH, DOME_DROP, DOME_SEGMENTS, DOME_SHAPE, DOME_SLOPE,
-        LAKE_FADE_INSIDE, LAKE_SINK, OPEN_WATER_DEPTH, OUTLET_FADE, OUTSIDE, RIVER_EDGE,
-        RIVER_FADE, RIVER_OFFSET, RIVER_OVERLAP, SHORE_MARGIN, SHORE_STEPS, clip_half_plane,
-        contour_cell, fall_split, river_profile,
-    },
-    shaders::{PlanetWaterMaterial, PlanetWaterShader},
+use super::river_profile::{
+    DOME_DROP, DOME_SEGMENTS, DOME_SHAPE, DOME_SLOPE, RIVER_OFFSET, RIVER_OVERLAP, fall_split,
+    river_profile,
 };
+use crate::shaders::{PlanetWaterMaterial, PlanetWaterShader};
+
+// Lake outlines, river fades and confluences, as on the flat map.
+/// Lake surfaces reach under the shore up to where the ground is this much above them.
+const SHORE_MARGIN: f32 = 0.03;
+
+/// Contour value in river channels outside a lake: just outside, so the outline reaches well
+/// into the channel (under the ribbon, which is then cut out exactly).
+const RIVER_EDGE: f32 = -0.01;
+
+/// Lake surfaces are drawn this far under their level: where a river fades into or out of a
+/// lake, its ribbon (at the lake's level, plus [`RIVER_OFFSET`]) stays clearly above it.
+const LAKE_SINK: f32 = 0.01;
+
+/// Lake surfaces cover the shore up to this many samples from the water.
+const SHORE_STEPS: u8 = 3;
+
+/// Contour value of the samples a lake must not cover (low ground beyond its rim, or another
+/// lake's): strongly outside, so the outline keeps close to the last sample it covers.
+const OUTSIDE: f32 = -1.;
+
+/// Rivers fade in (outlets) or out (inflows) over this distance (world units), this far inside
+/// their lake (they stay visible across the shore).
+const OUTLET_FADE: f32 = 1.;
+
+const LAKE_FADE_INSIDE: f32 = 1.;
+
+/// Rivers also start fading out where the water under them is this deep.
+const OPEN_WATER_DEPTH: f32 = 0.5;
+
+/// Rivers fade out over this distance (a constant plus this many widths) into the water they
+/// flow into.
+const RIVER_FADE: (f32, f32) = (1., 2.5);
+
+/// Whitewater where a tributary pours into its parent, fading downstream over this many
+/// tributary widths (plus a constant).
+const CONFLUENCE_FOAM: f32 = 0.55;
+
+const CONFLUENCE_REACH: (f32, f32) = (1.5, 3.);
 
 /// Lake depth from which a point is under a lake.
 const LAKE: f32 = 0.02;
@@ -216,7 +250,7 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
 }
 
 /// Fade a river out from row `start` on over `length`, carrying it on straight past its end
-/// if needed, and drop the rows past the fade (`map::water::fade_out`).
+/// if needed, and drop the rows past the fade (as the flat map did).
 fn fade_out(rows: &mut Vec<Row>, start: usize, length: f32) {
     let remaining = rows[rows.len() - 1].along - rows[start].along;
     if remaining < length && rows.len() >= 2 {
@@ -336,7 +370,7 @@ fn crossing(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> Option<(f32, f32)> {
     ((0.0..=1.).contains(&t) && (0.0..=1.).contains(&u)).then_some((t, u))
 }
 
-/// The end of a tributary on its parent's edge (`map::water::junction_cap`, in the plane
+/// The end of a tributary on its parent's edge (as the flat map did, in the plane
 /// tangent at the junction): the number of rows drawn as strips, then the outline to fill
 /// (from the last full row's left vertex along the tributary's left edge to the parent's
 /// edge, along that edge, and back along the right edge).
@@ -615,7 +649,7 @@ fn fan(water: &mut Water, row: &Row, outline: &[CapVertex]) {
 }
 
 /// A ribbon strip between two rows: flat across, or the top of an oval where domed (the edges
-/// sunk under the banks, the whole lowered a little: see `map::water`).
+/// sunk under the banks, the whole lowered a little: see `river_profile`).
 fn strip(water: &mut Water, a: &Row, b: &Row) {
     let segments = if a.dome > 0. || b.dome > 0. { DOME_SEGMENTS } else { 1 };
     let first = water.positions.len() as u32;
@@ -662,7 +696,7 @@ enum Sample {
     River,
 }
 
-/// Lake surfaces of one face, as on the flat map (`map::water::lakes_mesh`): on the cells'
+/// Lake surfaces of one face, as on the flat map: on the cells'
 /// samples, a lake covers its extent and the lower ground connected to it (never across the
 /// shore: that is its rim), and up to `SHORE_STEPS` samples onto the shore; the outline is the
 /// contour where the ground rises [`SHORE_MARGIN`] above the water, reaching just into river
@@ -953,4 +987,52 @@ pub fn spawn(
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0., 1.);
     t * t * (3. - 2. * t)
+}
+
+/// The part of a grid cell where `values` (at its corners, in order round it) are positive,
+/// cut along their linear interpolation (marching squares): one polygon, or two for a saddle
+/// whose center is outside.
+fn contour_cell(corners: [Vec2; 4], values: [f32; 4]) -> Vec<Vec<Vec2>> {
+    let cut = |a: usize, b: usize| {
+        let t = values[a] / (values[a] - values[b]);
+        corners[a].lerp(corners[b], t)
+    };
+    let inside = values.map(|v| v > 0.);
+    let saddle = inside[0] == inside[2] && inside[1] == inside[3] && inside[0] != inside[1];
+    if saddle && values.iter().sum::<f32>() <= 0. {
+        // Two separate corners.
+        return (0..4)
+            .filter(|&k| inside[k])
+            .map(|k| vec![cut(k, (k + 3) % 4), corners[k], cut(k, (k + 1) % 4)])
+            .collect();
+    }
+    let mut polygon = Vec::with_capacity(6);
+    for k in 0..4 {
+        let next = (k + 1) % 4;
+        if inside[k] {
+            polygon.push(corners[k]);
+        }
+        if inside[k] != inside[next] {
+            polygon.push(cut(k, next));
+        }
+    }
+    vec![polygon]
+}
+
+/// The part of a convex polygon where `sign * (b - a).perp_dot(p - a) > 0`, on one side of the
+/// line through `a` and `b` (Sutherland-Hodgman).
+fn clip_half_plane(polygon: &[Vec2], a: Vec2, b: Vec2, sign: f32) -> Vec<Vec2> {
+    let side = |p: Vec2| sign * (b - a).perp_dot(p - a);
+    let mut out = Vec::with_capacity(polygon.len() + 2);
+    for k in 0..polygon.len() {
+        let (p, q) = (polygon[k], polygon[(k + 1) % polygon.len()]);
+        let (sp, sq) = (side(p), side(q));
+        if sp > 0. {
+            out.push(p);
+        }
+        if (sp > 0.) != (sq > 0.) {
+            out.push(p.lerp(q, sp / (sp - sq)));
+        }
+    }
+    out
 }

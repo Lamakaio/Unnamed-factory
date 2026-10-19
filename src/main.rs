@@ -6,7 +6,6 @@
 mod camera;
 mod dev_tools;
 mod environment;
-mod map;
 mod planet;
 mod shaders;
 mod ui;
@@ -40,8 +39,6 @@ fn seed() -> u128 {
 
 fn main() {
     let seed = seed();
-    // `--planet`: the spherical planet (work in progress) instead of the flat map.
-    let planet = std::env::args().any(|arg| arg == "--planet");
     let mut app = App::new();
     app
         .add_plugins((
@@ -56,15 +53,11 @@ fn main() {
             shaders::ShadersPlugin,
             ui::UiPlugin,
         ));
-    if planet {
-        app.add_plugins(planet::PlanetPlugin {
-            seed,
-            n: argument("--n").unwrap_or(PLANET_CELLS),
-        });
-    } else {
-        app.add_plugins(map::MapPlugin { seed });
-    }
-    app.run();
+    app.add_plugins(planet::PlanetPlugin {
+        seed,
+        n: argument("--n").unwrap_or(PLANET_CELLS),
+    })
+    .run();
 }
 
 /// Top-level game state.

@@ -1,11 +1,8 @@
-//! Sun and atmosphere.
+//! The sun (the planet's camera keeps it lighting the side in view; F turns it).
 
 use bevy::{
     input::common_conditions::input_pressed,
-    light::{
-        Atmosphere, CascadeShadowConfigBuilder, DirectionalLightShadowMap,
-        atmosphere::ScatteringMedium, light_consts::lux,
-    },
+    light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, light_consts::lux},
     prelude::*,
 };
 
@@ -32,10 +29,7 @@ pub struct SunTurn(pub f32);
 /// Sun rotation speed while F is held, in radians per second.
 const SUN_ROTATION_SPEED: f32 = 1.;
 
-fn spawn_environment(
-    mut commands: Commands,
-    mut scattering_mediums: ResMut<Assets<ScatteringMedium>>,
-) {
+fn spawn_environment(mut commands: Commands) {
     commands.spawn((
         Name::new("Sun"),
         Sun,
@@ -55,12 +49,6 @@ fn spawn_environment(
         .build(),
         // Low afternoon sun from the side of the starting view, so relief casts shadows.
         Transform::from_xyz(0.0, 10.0, 0.0).looking_to(Vec3::new(0.75, -0.55, -0.35), Vec3::Y),
-    ));
-
-    // The atmosphere is its own entity; the camera only carries `AtmosphereSettings`.
-    commands.spawn((
-        Name::new("Atmosphere"),
-        Atmosphere::earth(scattering_mediums.add(ScatteringMedium::default())),
     ));
 }
 

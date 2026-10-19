@@ -1,91 +1,16 @@
-//! Stage D: fine surface detail. The eroded grid is upsampled (bicubic) to a finer grid and
-//! gullies are added on slopes: stripes running down the gradient, branching octave after
-//! octave (the "erosion noise" of Clay John / Fewes, as refined in runevision's erosion
-//! filter). Gullies are scaled by the province ruggedness and faded on flat ground, near rivers
-//! and around lakes.
+//! Fine surface detail: gullies on slopes, stripes running down the gradient, branching octave
+//! after octave (the "erosion noise" of Clay John / Fewes, as refined in runevision's erosion
+//! filter). The planet's surface (`surface.rs`) adds them on rugged land.
 
 use std::f32::consts::TAU;
 
 use bevy_math::Vec2;
 
-use crate::{
-    WorldgenSettings,
-    heightmap::Heightmap,
-    noise::{Noise, hash, smoothstep},
-};
-
-/// Build the fine surface. `coarse` is the eroded terrain; `ruggedness` and `calm` (1 where
-/// detail must vanish: rivers, lakes) are per coarse cell.
-pub fn refine(
-    settings: &WorldgenSettings,
-    coarse: &Heightmap,
-    ruggedness: &Heightmap,
-    calm: &Heightmap,
-) -> Heightmap {
-    let factor = settings.detail_resolution.max(1);
-    let size = coarse.size * factor;
-    let cell = coarse.cell / factor as f32;
-    let mut values = vec![0.; size * size];
-    let seed = settings.seed as u32 ^ 0xD37A;
-
-    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let rows_per_thread = size.div_ceil(threads);
-    std::thread::scope(|scope| {
-        for (chunk_index, chunk) in values.chunks_mut(rows_per_thread * size).enumerate() {
-            scope.spawn(move || {
-                for (k, value) in chunk.iter_mut().enumerate() {
-                    let index = chunk_index * rows_per_thread * size + k;
-                    let (x, z) = (index % size, index / size);
-                    let p = (Vec2::new(x as f32, z as f32) - (size / 2) as f32) * cell;
-                    *value = detailed_height(settings, coarse, ruggedness, calm, p, seed);
-                }
-            });
-        }
-    });
-    Heightmap { size, cell, values }
-}
-
-fn detailed_height(
-    settings: &WorldgenSettings,
-    coarse: &Heightmap,
-    ruggedness: &Heightmap,
-    calm: &Heightmap,
-    p: Vec2,
-    seed: u32,
-) -> f32 {
-    let height = coarse.bicubic(p);
-    if height <= 0. {
-        return height;
-    }
-    let strength = ruggedness.bilinear(p) * (1. - calm.bilinear(p).clamp(0., 1.));
-    if strength <= 0.01 {
-        return height;
-    }
-    let e = coarse.cell * 0.5;
-    let gradient = Vec2::new(
-        coarse.bicubic(p + Vec2::X * e) - coarse.bicubic(p - Vec2::X * e),
-        coarse.bicubic(p + Vec2::Y * e) - coarse.bicubic(p - Vec2::Y * e),
-    ) / (2. * e);
-    let noise = Noise::new(seed);
-    // Small irregular bumps everywhere it is rugged...
-    let roughness = noise.fbm(p / 5., 3) * 0.12;
-    // ...and gullies on slopes (not on flat ground, where water doesn't run fast enough to
-    // carve them), stronger in some places than others.
-    let slope_mask = smoothstep(0.12, 0.6, gradient.length());
-    let patchiness = smoothstep(-0.4, 0.5, noise.layer(1).fbm(p / 45., 3));
-    let gullies = if slope_mask > 0. {
-        gullies(p, gradient, seed, settings.detail_wavelength, settings.detail_octaves)
-            * slope_mask
-            * (0.3 + 0.7 * patchiness)
-    } else {
-        0.
-    };
-    height + (gullies + roughness) * settings.detail_amplitude * strength
-}
+use crate::noise::hash;
 
 /// Gully offset (about -1..1) at `p` for a slope `gradient`. Each octave's stripes follow the
 /// gradient including the previous octaves' gullies, so smaller gullies branch off larger ones.
-pub fn gullies(p: Vec2, gradient: Vec2, seed: u32, wavelength: f32, octaves: u32) -> f32 {
+pub(crate) fn gullies(p: Vec2, gradient: Vec2, seed: u32, wavelength: f32, octaves: u32) -> f32 {
     let mut total = 0.;
     let mut slope = gradient;
     let (mut amplitude, mut wavelength, mut weight) = (1., wavelength, 0.);
