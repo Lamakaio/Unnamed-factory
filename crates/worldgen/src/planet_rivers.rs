@@ -54,6 +54,8 @@ pub struct PlanetRiver {
     /// A side channel of a river splitting on flat land: it leaves this river (index) and
     /// rejoins it (`end`).
     pub branch_of: Option<usize>,
+    /// A delta's distributary (see `planet_mouths`).
+    pub distributary: bool,
 }
 
 /// Extract the rivers from the heights, the depression-filled surface they drain on, the sea
@@ -208,7 +210,7 @@ pub fn extract(
         }
         output_index.push(Some(rivers.len()));
         flats.push(flatness);
-        rivers.push(PlanetRiver { points, end: river.end, branch_of: None });
+        rivers.push(PlanetRiver { points, end: river.end, branch_of: None, distributary: false });
     }
     // Junctions point at output indices (short rivers were dropped).
     for river in &mut rivers {
@@ -299,7 +301,12 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
                         }
                     })
                     .collect();
-                rivers.push(PlanetRiver { points, end: RiverEnd::Junction(index), branch_of: Some(index) });
+                rivers.push(PlanetRiver {
+                    points,
+                    end: RiverEnd::Junction(index),
+                    branch_of: Some(index),
+                    distributary: false,
+                });
             }
             k = end + (SPLIT_SPACING * width / SPACING) as usize;
         }

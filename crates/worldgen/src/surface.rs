@@ -230,6 +230,10 @@ impl PlanetSurface {
                 river.points.truncate(k + 1);
                 river.end = crate::RiverEnd::Sea;
             }
+            // A distributary starting in the sea is a piece cut off its delta: none.
+            if river.distributary && reached.is_some_and(|k| k < 2) {
+                river.points.truncate(1);
+            }
         }
         // (Rivers left with a single point stay: removing them would shift the indices other
         // rivers join by.)
@@ -260,7 +264,7 @@ impl PlanetSurface {
     }
 
     /// Height in a direction, before the river channels are carved.
-    fn uncarved_height(&self, direction: Vec3) -> f32 {
+    pub fn uncarved_height(&self, direction: Vec3) -> f32 {
         let (face, p) = self.face_coords(direction);
         self.detailed_height(face, p, direction)
     }

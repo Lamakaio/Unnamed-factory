@@ -390,7 +390,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   channels cut across to the next bay; `grow_channels` takes the limit), channels mostly over
   old land are dropped (`MAX_OVERLAND`), delta land sinks to a bar toward the tips (`TIP_TRIM`), the sea
   floor round it is raised into a sloping front (`FRONT_*`) and the whole smoothed, and each
-  tip gets a path to the open sea if land closes it in): deltas (distributaries from `mouths::grow_channels`,
+  tip gets a path to the open sea if land closes it in; the new land keeps above the sea, and
+  a corridor of land runs along every channel but its tip; a fork's branches start
+  `FORK_GAP` past its end, which the dropping rules match by): deltas (distributaries from `mouths::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
   `planet/water.rs` draws the water with the flat map's toon water on the sphere
@@ -423,7 +425,9 @@ that read `Map` are gated with `run_if(in_state(AppState::InGame))`, and observe
   `planet/inspect.rs`: clicking the ground logs a report (position, heights, water, climate,
   wind, nearest rivers and springs, the view as `UF_PLANET_CAMERA`, which now takes a 5th
   value, the heading); "Report issue" (button or F6), a click and a description (Enter) write
-  `issues/issue-<n>.md` + `.png` (git-ignored: read them when the user points to issues).
+  `issues/issue-<n>.md` + `.png` (git-ignored: read them when the user points to issues; when
+  the user files new ones, move the previous batch to `issues/fixed/`, whose numbers are not
+  reused).
   `UF_PLANET_REPORT=lon,lat[;...]` logs the report of points at startup (for agents).
   `planet/grass.rs` builds the flat map's near grass blades on 1×1 tiles of face cells where
   the terrain draws grass (from the climate weights); each tile is turned upright with local x

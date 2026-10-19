@@ -26,6 +26,9 @@ const DELTA_MIN_WIDTH: f32 = 1.5;
 /// plus this many channel widths), to a bar this deep: no islands at the tips.
 const TIP_TRIM: (f32, f32) = (4., 4.);
 const TIP_BAR: f32 = -0.12;
+/// A fork's branches start a step past the end of the channel they fork from (`grow_channels`:
+/// `SPACING`): how far apart a branch's start and its parent's end may be.
+const FORK_GAP: f32 = SPACING * 1.2;
 /// Largest angle (radians) between a distributary and the delta's direction: the planet's
 /// deltas fan less than the flat map's (sideways channels cut across to the next bay).
 const MAX_TURN: f32 = 0.8;
@@ -282,7 +285,7 @@ fn build_delta(
         for (k, channel) in channels.iter().enumerate() {
             let start = channel.points[0].position;
             let from_dropped = channels.iter().enumerate().any(|(j, parent)| {
-                dropped[j] && j != k && parent.points.last().is_some_and(|end| end.position.distance(start) < 1e-3)
+                dropped[j] && j != k && parent.points.last().is_some_and(|end| end.position.distance(start) < FORK_GAP)
             });
             if from_dropped && !dropped[k] {
                 dropped[k] = true;
@@ -299,7 +302,7 @@ fn build_delta(
         for (k, channel) in channels.iter().enumerate() {
             let end = channel.points.last().map(|p| p.position);
             let continued = channels.iter().enumerate().any(|(j, child)| {
-                !dropped[j] && j != k && end.is_some_and(|end| child.points[0].position.distance(end) < 1e-3)
+                !dropped[j] && j != k && end.is_some_and(|end| child.points[0].position.distance(end) < FORK_GAP)
             });
             if !dropped[k] && !channel.open && !continued {
                 dropped[k] = true;
@@ -336,6 +339,7 @@ fn build_delta(
                 .collect(),
             end: RiverEnd::Sea,
             branch_of: None,
+            distributary: true,
         })
         .collect()
 }
@@ -364,6 +368,8 @@ fn raise_delta_land(
         region.push((i, p));
         was_sea.insert(i, sea[i]);
     });
+    // The new land (core of the levees, away from the tips), kept above the sea by smoothing.
+    let mut new_land = Vec::new();
     for &(i, p) in &region {
         let mut best: f32 = 0.;
         // How far beyond the land the cell is (the delta front).
@@ -397,6 +403,9 @@ fn raise_delta_land(
             let land = 0.08 + best * wobble;
             heights[i] = heights[i].max(TIP_BAR + (land - TIP_BAR) * emerged);
             sea[i] = heights[i] <= 0.;
+            if emerged > 0.5 && heights[i] > 0. {
+                new_land.push(i);
+            }
         } else if sea[i] && beyond < FRONT_REACH {
             // The delta front: sediment raising the sea floor round the delta, sloping down.
             heights[i] = heights[i].max(FRONT_DEPTH.0 - FRONT_DEPTH.1 * beyond.max(0.));
@@ -421,6 +430,23 @@ fn raise_delta_land(
                 heights[i] = h;
                 sea[i] = h <= 0. && was_sea[&i];
             }
+        }
+    }
+    for &i in &new_land {
+        heights[i] = heights[i].max(NEW_LAND_MIN);
+        sea[i] = false;
+    }
+    // A corridor of land along every channel but at its tip: a channel crossing open water
+    // would be cut there (rivers end where they reach the sea), its downstream part left alone.
+    for channel in channels {
+        for point in &channel.points {
+            if point.to_tip < TIP_TRIM.0 + TIP_TRIM.1 * point.width {
+                continue;
+            }
+            for_cells_around(grid, frame, point.position, point.width / 2. + CORRIDOR, |i, _| {
+                heights[i] = heights[i].max(NEW_LAND_MIN);
+                sea[i] = false;
+            });
         }
     }
     // Open every tip to the sea, by a path to the open sea if the land closes it in.
@@ -469,4 +495,10 @@ fn raise_delta_land(
 const FRONT_REACH: f32 = 8.;
 const FRONT_DEPTH: (f32, f32) = (-0.2, 0.15);
 const FRONT_SMOOTHING: usize = 3;
+/// Lowest the delta's new land goes once smoothed (thin levees would sink: their channels
+/// would be cut into pieces where they reach the sea).
+const NEW_LAND_MIN: f32 = 0.06;
+/// Land on both sides of a channel, beyond its half width (world units; the cells' heights are
+/// interpolated: a strip of a cell or two would dip under the water between them).
+const CORRIDOR: f32 = 2.;
 const TIP_PATH: usize = 25;

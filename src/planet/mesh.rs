@@ -17,7 +17,7 @@ const PATCH_RES: usize = 16;
 /// Allowed cell size (in cells of the planet's grid) per world unit of camera distance, and
 /// the finest cell size.
 const CELL_PER_DISTANCE: f32 = 0.004;
-const MIN_CELL: f32 = 0.25;
+const MIN_CELL: f32 = 0.125;
 /// Skirt depth, in patch cells.
 const SKIRT_CELLS: f32 = 2.;
 /// Step for normals, in cells.

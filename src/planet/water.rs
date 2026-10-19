@@ -60,10 +60,13 @@ const SEA_SAG: f32 = 0.02;
 const FADE_STEP: f32 = 0.5;
 /// A junction cap looks for its parent's edge this far (world units) around the junction.
 const CAP_SEARCH: f32 = 30.;
-/// Rivers fade in out of their pond over this distance; hillside springs foam on their first
-/// rows (as on the flat map).
+/// Rivers fade in out of their pond over this distance, inside it (opaque from its rim);
+/// hillside springs foam on their first rows (as on the flat map).
 const POND_FADE: f32 = 0.8;
 const SPRING_FOAM: [f32; 4] = [1., 0.8, 0.55, 0.3];
+/// Highest dome of a steep stretch (world units): the flat map's scale with the width, but
+/// wide rivers' domes would be far too round and sink their edges deep underground.
+const DOME_MAX: f32 = 0.5;
 
 /// A mesh being built: positions, pattern coordinates (vertex colour), flow velocity or wind
 /// (UV0) and (whitewater, opacity) (UV1, rivers only).
@@ -202,7 +205,7 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
         let run = (rows[b].along - rows[a].along).max(1e-3);
         let slope = (levels[a] - levels[b]).max(0.) / run;
         let ends = (k.min(n - 1 - k) as f32 / 3.).min(1.);
-        rows[k].dome = rows[k].half * smoothstep(DOME_SLOPE.0, DOME_SLOPE.1, slope) * ends;
+        rows[k].dome = rows[k].half.min(DOME_MAX) * smoothstep(DOME_SLOPE.0, DOME_SLOPE.1, slope) * ends;
     }
     rows
 }
@@ -477,10 +480,17 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         match surface.springs().iter().find(|spring| spring.river == index).map(|s| &s.kind) {
             // Out of a pond: fading in from its rim.
             Some(PlanetSpringKind::Pond { .. }) => {
-                let start = rows[0].along;
-                for row in &mut rows {
-                    row.fade *= smoothstep(0., POND_FADE, row.along - start);
-                }
+                let first = rows[0];
+                rows.insert(
+                    0,
+                    Row {
+                        center: first.center - first.forward * POND_FADE,
+                        along: first.along - POND_FADE,
+                        fade: 0.,
+                        dome: 0.,
+                        ..first
+                    },
+                );
             }
             // Out of the hillside: a spout from the notch, foaming.
             Some(PlanetSpringKind::Hillside) => {
@@ -654,7 +664,9 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
         *kinds.entry((x, z)).or_insert_with(|| {
             let p = at(x, z);
             let depth = surface.lake_depth.bilinear(face, p);
-            let ground = surface.height(face, p);
+            // (The ground before the channels are carved: carved banks round an outlet or an
+            // inlet are lower than the lake, which would spill over them.)
+            let ground = surface.uncarved_height(surface.direction(face, p));
             let sample = if depth >= LAKE {
                 Sample::Lake(surface.heights.bilinear(face, p) + depth)
             } else if depth > 0. {

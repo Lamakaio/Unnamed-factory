@@ -219,7 +219,11 @@ fn save_report(report: &str, text: &str) -> Option<PathBuf> {
         error!("Could not create {}: {error}", dir.display());
         return None;
     }
-    let number = (1..).find(|n| !dir.join(format!("issue-{n}.md")).exists())?;
+    // (Numbers of reports already fixed, moved to `issues/fixed`, are not reused.)
+    let number = (1..).find(|n| {
+        let name = format!("issue-{n}.md");
+        !dir.join(&name).exists() && !dir.join("fixed").join(&name).exists()
+    })?;
     let file = dir.join(format!("issue-{number}"));
     let contents = format!(
         "# Issue {number}\n\n{}\n\nScreenshot: issue-{number}.png (the spot marked in pink)\n\n```\n{report}\n```\n",
