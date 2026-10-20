@@ -140,6 +140,9 @@ someone else's work, add it here (and mention it in the code comment where it is
   geomorphology (e.g. A. Goudie, *Arid and Semi-Arid Geomorphology*, 2013); transverse dunes
   with a gentle stoss side and a steep slip face (R. A. Bagnold, *The Physics of Blown Sand
   and Desert Dunes*, 1941).
+- **Karst** (`surface.rs::karst`): tower karst in humid tropics, dolines elsewhere (D. Ford and
+  P. Williams, *Karst Hydrogeology and Geomorphology*, 2007); towers placed with cellular
+  (Worley) noise (S. Worley, *A Cellular Texture Basis Function*, SIGGRAPH 1996).
 - **Reefs and atolls** (`reefs.rs`): fringing reefs, barrier reefs round sinking volcanic
   islands and atolls on sunk ones, after C. Darwin, *The Structure and Distribution of Coral
   Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.

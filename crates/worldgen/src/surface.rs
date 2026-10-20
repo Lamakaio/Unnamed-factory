@@ -11,7 +11,7 @@ use crate::{
     detail::gullies,
     grid::Grid,
     heightmap::catmull_rom,
-    noise::{Noise, smoothstep},
+    noise::{Noise, hash, smoothstep},
     planet::Planet,
     planet_climate::{PlanetClimate, WindField},
     planet_rivers::PlanetRiver,
@@ -29,6 +29,32 @@ const DUNE_WAVELENGTH: f32 = 5.;
 const DUNE_LATITUDE: f32 = 0.45;
 const DUNE_HEIGHT: f32 = 0.6;
 const DUNE_CREST: f32 = 0.78;
+/// Karst: features this far apart (world units), towers this high, sinkholes this deep (world
+/// units) round this share of the features.
+const KARST_SPACING: f32 = 4.5;
+const KARST_TOWER: f32 = 2.6;
+const KARST_SINKHOLE: f32 = 0.5;
+const KARST_SINKHOLES: f32 = 0.35;
+
+/// Karst of each cell: towers (positive) where limestone meets the humid tropics and
+/// subtropics, sinkholes (negative) in other wet climates; none in dry or polar ones.
+fn karst(planet: &Planet, koppen: &[crate::planet_climate::Koppen]) -> Vec<f32> {
+    use crate::{geology::Rock, planet_climate::Koppen};
+    let raw: Vec<f32> = (0..planet.grid.len())
+        .map(|i| {
+            if planet.sea[i] || Rock::from_id(planet.rock[i]) != Rock::Limestone {
+                return 0.;
+            }
+            match koppen[i] {
+                Koppen::Af | Koppen::Am | Koppen::Aw | Koppen::Cwa | Koppen::Cfa => 1.,
+                Koppen::Cfb | Koppen::Cfc | Koppen::Csa | Koppen::Csb | Koppen::Dfa | Koppen::Dfb | Koppen::Dw => -1.,
+                _ => 0.,
+            }
+        })
+        .collect();
+    planet.grid.blur(&raw, 2)
+}
+
 /// Badlands' gullies are this much deeper.
 const BADLANDS_GULLIES: f32 = 1.5;
 /// Sand seas: in desert climates (BWh, BWk) where a noise (wavelength `ERG_WAVELENGTH`, world
@@ -190,6 +216,9 @@ pub struct PlanetSurface {
     /// (0..1); the rest of a hot or cold desert is stony (reg).
     pub erg: FaceField,
     pub badlands: FaceField,
+    /// Karst on limestone in wet climates (see [`karst`]): tower karst (positive, humid
+    /// tropics and subtropics) or sinkholes (negative, elsewhere), in the heights.
+    pub karst: FaceField,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -258,6 +287,10 @@ impl PlanetSurface {
             Some(koppen) => deserts(planet, koppen),
             None => (vec![0.; planet.grid.len()], vec![0.; planet.grid.len()]),
         };
+        let karst_cells = match &koppen_cells {
+            Some(koppen) => karst(planet, koppen),
+            None => vec![0.; planet.grid.len()],
+        };
         let marsh: Vec<f32> = marsh.iter().zip(&ice).map(|(m, i)| m * (1. - i)).collect();
         let weights = weights.map(|weights: Vec<[f32; 5]>| {
             [0, 1, 2, 3, 4].map(|k| {
@@ -276,6 +309,7 @@ impl PlanetSurface {
             ice: FaceField::new(planet, &ice),
             erg: FaceField::new(planet, &erg),
             badlands: FaceField::new(planet, &badlands),
+            karst: FaceField::new(planet, &karst_cells),
             volcanoes: planet.volcanoes.clone(),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
@@ -395,6 +429,9 @@ impl PlanetSurface {
         // Dunes on the sand seas.
         let erg = self.erg.bilinear(face, p);
         let height = if erg > 0.01 { height + self.dunes(direction) * erg * calm } else { height };
+        // Karst: towers or sinkholes.
+        let karst = self.karst.bilinear(face, p);
+        let height = if karst.abs() > 0.01 { height + self.karst_relief(direction, karst) * calm } else { height };
         // Badlands: dense gullies.
         let badlands = self.badlands.bilinear(face, p);
         let strength = self.ruggedness.bilinear(face, p).max(badlands) * calm;
@@ -424,6 +461,39 @@ impl PlanetSurface {
             }
         }
         height + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * self.detail_amplitude * strength
+    }
+
+    /// Karst relief (world units) in a direction: steep limestone towers with rounded tops
+    /// (`karst` positive), or round sinkholes (negative), scattered on a jittered lattice
+    /// (`KARST_SPACING`).
+    fn karst_relief(&self, direction: Vec3, karst: f32) -> f32 {
+        let q = direction * self.radius / KARST_SPACING;
+        let cell = q.floor().as_ivec3();
+        let seed = self.seed ^ 0x6A25;
+        let random = |c: IVec3, k: u32| {
+            hash(hash(seed ^ k, c.x as u32, c.y as u32), c.z as u32, k) as f32 / u32::MAX as f32
+        };
+        let mut relief = 0f32;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let c = cell + IVec3::new(dx, dy, dz);
+                    let feature = c.as_vec3() + Vec3::new(random(c, 1), random(c, 2), random(c, 3));
+                    let d = feature.distance(q);
+                    let size = random(c, 4);
+                    if karst > 0. {
+                        // Towers, of varied height and girth.
+                        let radius = 0.28 + 0.14 * size;
+                        let tower = smoothstep(radius, radius * 0.55, d).powf(0.6);
+                        relief = relief.max(KARST_TOWER * (0.4 + 0.6 * size) * tower);
+                    } else if size < KARST_SINKHOLES {
+                        let bowl = smoothstep(0.35, 0., d);
+                        relief = relief.min(-KARST_SINKHOLE * bowl * bowl);
+                    }
+                }
+            }
+        }
+        relief * karst.abs()
     }
 
     /// Dune height (world units) in a direction: transverse dunes, crests running north–south
