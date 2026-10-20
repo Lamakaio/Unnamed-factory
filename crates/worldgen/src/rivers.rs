@@ -72,8 +72,7 @@ pub fn extract(
     let n = heights.len();
     let is_river = |i: usize| area[i] >= RIVER_MIN_AREA && !sea[i] && lake_depth[i] < LAKE;
     let mut donors: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for i in 0..n {
-        let r = graph.receivers[i];
+    for (i, &r) in graph.receivers.iter().enumerate() {
         if r != i && is_river(i) && is_river(r) {
             donors[r].push(i);
         }

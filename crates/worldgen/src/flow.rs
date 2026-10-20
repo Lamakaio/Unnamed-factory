@@ -278,8 +278,7 @@ impl FlowGraph {
         }
         let mut fill = donor_count.clone();
         let mut donors = vec![0usize; donor_count[n] as usize];
-        for i in 0..n {
-            let r = receivers[i];
+        for (i, &r) in receivers.iter().enumerate() {
             if r != i {
                 donors[fill[r] as usize] = i;
                 fill[r] += 1;
@@ -411,7 +410,7 @@ fn route_depressions(
             }
         }
         // Minimum spanning tree (Kruskal).
-        let mut links: Vec<((u32, u32), (f32, u32, u32))> = passes.into_iter().collect();
+        let mut links: Vec<_> = passes.into_iter().collect();
         links.sort_by(|a, b| a.1.0.total_cmp(&b.1.0).then(a.0.cmp(&b.0)));
         let mut parent: Vec<u32> = (0..pits.len() as u32).collect();
         fn find(parent: &mut [u32], mut x: u32) -> u32 {

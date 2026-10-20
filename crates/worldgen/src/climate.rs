@@ -244,8 +244,8 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
                     }
                 }
                 if year == SPIN_UP_YEARS {
-                    for i in 0..cells {
-                        monthly_t[i][month] += temperature[i] / STEPS_PER_MONTH as f32;
+                    for (months, t) in monthly_t.iter_mut().zip(&temperature) {
+                        months[month] += t / STEPS_PER_MONTH as f32;
                     }
                 }
             }
@@ -440,12 +440,10 @@ fn winds(
     }
     let zonal_mean = |lat: f32| {
         let row = (lat.to_degrees() + 90.).round() as usize;
-        let (mut s, mut c) = (0., 0.);
-        for r in row.saturating_sub(3)..(row + 4).min(181) {
-            s += zonal[r].0;
-            c += zonal[r].1;
-        }
-        s / c.max(1.)
+        let (s, c) = zonal[row.saturating_sub(3)..(row + 4).min(181)]
+            .iter()
+            .fold((0., 0.), |(s, c), &(t, n)| (s + t, c + n));
+        s / f32::max(c, 1.)
     };
     // Pressure: belts relative to the thermal equator, lowered over warm land.
     let pressure: Vec<f32> = (0..cells)

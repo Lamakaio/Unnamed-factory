@@ -453,9 +453,7 @@ fn junction_cap(
     outline.push(left_hit);
     // Parent edge vertices strictly between the two crossings.
     if left_at < right_at {
-        for k in left_at.floor() as usize + 1..=right_at.floor() as usize {
-            outline.push(edge[k]);
-        }
+        outline.extend_from_slice(&edge[left_at.floor() as usize + 1..=right_at.floor() as usize]);
     } else {
         let mut k = left_at.floor() as usize;
         while k > right_at.floor() as usize {

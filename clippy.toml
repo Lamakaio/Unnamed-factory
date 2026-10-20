@@ -1,0 +1,3 @@
+# Bevy systems routinely take this many parameters (queries, resources, events), and the
+# world generation's stages as many fields.
+too-many-arguments-threshold = 10

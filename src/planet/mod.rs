@@ -93,16 +93,9 @@ pub struct PlanetWorld {
     strata_scale: f32,
 }
 
+/// The world being generated (in the background).
 #[derive(Resource)]
-struct Generation(
-    Task<(
-        PlanetSurface,
-        Vec<Vec<u8>>,
-        PlanetClimate,
-        Vec<Vec<u8>>,
-        f32,
-    )>,
-);
+struct Generation(Task<PlanetWorld>);
 
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -132,7 +125,13 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             surface.radius,
             planet.timings
         );
-        (surface, sea, climate, rock, planet.strata_scale)
+        PlanetWorld {
+            surface: Arc::new(surface),
+            climate: Arc::new(climate),
+            sea,
+            rock,
+            strata_scale: planet.strata_scale,
+        }
     });
     commands.insert_resource(Generation(task));
 }
@@ -142,17 +141,11 @@ fn finish_generation(
     mut generation: ResMut<Generation>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    let Some((surface, sea, climate, rock, strata_scale)) = check_ready(&mut generation.0) else {
+    let Some(world) = check_ready(&mut generation.0) else {
         return;
     };
     commands.remove_resource::<Generation>();
-    commands.insert_resource(PlanetWorld {
-        surface: Arc::new(surface),
-        climate: Arc::new(climate),
-        sea,
-        rock,
-        strata_scale,
-    });
+    commands.insert_resource(world);
     next_state.set(AppState::InGame);
 }
 

@@ -8,6 +8,11 @@ pub trait Grid: Sync {
     /// Number of cells; cells are indexed `0..len()`.
     fn len(&self) -> usize;
 
+    /// Whether there are no cells.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// The neighbours of cell `i` (up to 8), with their distance in cells (about 1 for
     /// side neighbours, √2 for diagonal ones).
     fn neighbours(&self, i: usize) -> impl Iterator<Item = (usize, f32)> + '_;

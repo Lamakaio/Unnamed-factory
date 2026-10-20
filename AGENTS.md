@@ -82,9 +82,12 @@ src/planet/             PlanetPlugin: generation task, chunks (mesh.rs, LOD), ca
 src/shaders.rs          materials: PlanetTerrain, PlanetWater, Toon, LodToon, SwayToon, GrassBlade
 src/ui.rs               loading text (BSN), `label()` text scene, PointerOverUi system param
 crates/worldgen/        world generation (no Bevy ECS), in pipeline order:
-                        tectonics.rs → planet.rs (shape, `terrain.rs` erosion, coasts) → fjords.rs, volcanoes.rs,
-                        reefs.rs, barriers.rs → lakes.rs → rivers.rs → mouths.rs (+ channels.rs) → climate.rs →
-                        surface.rs (glaciers.rs, deserts, karst, riparian; springs.rs) → sea.rs (wave field);
+                        tectonics.rs → planet/ (`generate_planet` in mod.rs runs the stages: shape.rs: plates,
+                        provinces, `Shaper`, `terrain.rs` erosion; coast.rs: world units, sea floor, shores; the
+                        features: fjords.rs, volcanoes.rs, reefs.rs, barriers.rs; water.rs: lakes.rs, rivers.rs,
+                        floodplains, mouths.rs (+ channels.rs)) → climate.rs → surface/ (mod.rs: `PlanetSurface`;
+                        field.rs: `FaceField`; features.rs: riparian, karst, deserts, sea ice; relief.rs: gullies,
+                        dunes, karst towers; channels.rs: carved rivers; glaciers.rs, springs.rs) → sea.rs;
                         shared: sphere.rs + grid.rs (cube-sphere grid), flow.rs (routing, filling), par.rs
                         (all parallelism), noise.rs, geology.rs (rock types), detail.rs (gullies)
 crates/worldgen/examples planet_preview, planet_probe, climate_preview, tectonics_preview, tectonics_stats, timings
@@ -131,12 +134,12 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   (its own thread pool, see `par.rs`) and `rand`; `opt-level = 3` even in dev). Noise is the
   crate's own `noise.rs` (Perlin 2D/3D + fBm / ridged / warp). Erosion, flow routing and blurs
   are generic over a `Grid` (`grid.rs`; the only one is the cube-sphere, `sphere.rs`).
-  Parameters: `PlanetSettings` (planet.rs), `terrain::ErosionSettings` (built from it per
+  Parameters: `PlanetSettings` (planet/mod.rs), `terrain::ErosionSettings` (built from it per
   erosion stage), `ClimateSettings`; everything else is module constants. Disc queries ("every
   cell within r") go through `SphereGrid::for_cells_within` (a window scan inside a face).
 - **Rock types** (`geology.rs`, `Rock`): granite (cratons, old ranges' roots, some plains and
   hills), metamorphic (young belts' cores), basalt (arcs, rifts, the sea floor), sandstone
-  (plateaus, foothills), shale (plains), limestone (patches) — `planet.rs::rock_of`, from the
+  (plateaus, foothills), shale (plains), limestone (patches) — `planet/shape.rs::rock_of`, from the
   boundaries, old ranges, provinces and a noise. Each scales the erodibility and diffusion
   (`PROPERTIES`); sandstone, shale and limestone are layered: hard and soft beds
   (`bedding`) along strata surfaces `height + offset = const`, the offset a smooth field
@@ -171,7 +174,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   `CLOUD_FOREST_HEIGHT`), savanna (Aw: grass, scattered acacias), mangroves (low tropical
   shores in stretches, standing in the shallows down to `MANGROVE_DEPTH`), tundra (ET poleward
   of `TUNDRA_SIN`: shrubs, stones) and alpine meadows (ET on mountains: grass, flowers, rocks).
-- **Desert types** (`surface.rs::deserts`): in desert climates (BWh, BWk), sand seas (ergs)
+- **Desert types** (`surface/features.rs::deserts`): in desert climates (BWh, BWk), sand seas (ergs)
   on gentle low ground in noise stretches (`ERG_*`), with transverse dunes added to the
   heights (`PlanetSurface::dunes`: crests north–south, a whole number round the planet,
   slip faces west); badlands on soft rocks (shale, sandstone) sloping more than
@@ -182,11 +185,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
 - **Sea ice** (`PlanetSurface::sea_ice`, static): pack ice where the warmest month at sea
   level stays below `SEA_ICE_WARMEST`; sent as the sea wave field's 4th channel
   (`water::sea_textures`) and drawn by `planet_water.wesl` as floes and leads (no waves).
-- **Karst** (`surface.rs::karst`): on limestone, tower karst in the humid tropics and
+- **Karst** (`surface/features.rs::karst`): on limestone, tower karst in the humid tropics and
   subtropics (Af, Am, Aw, Cwa, Cfa) and sinkholes in other wet climates, added to the heights
   (`PlanetSurface::karst_relief`: features on a jittered lattice `KARST_SPACING` apart).
 - **Tectonic history sampling**: its coarse fields (crust, young and old uplift) are sampled
-  at points warped at two scales (`planet.rs::HISTORY_WARP`) and belts fade across the
+  at points warped at two scales (`planet/shape.rs::HISTORY_WARP`) and belts fade across the
   continents' edge: its fronts would otherwise run straight for hundreds of cells.
   `SphereGrid::bilinear` and `PlanetClimate::months_at` sample across the faces' edges (no
   seams).
@@ -254,7 +257,8 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     (relative to the mean). Neighbours across face edges are found by direction (at cube
     corners a cell has 7). Tests: round trip, areas, mutual neighbours, everything drains.
   - `noise.rs`: 3D noise (`get3`, `fbm3`, `ridged3`, `warp3`) to sample the sphere by direction.
-  - `planet.rs`: `generate_planet(&PlanetSettings) -> Planet` (module docs explain it):
+  - `planet/`: `generate_planet(&PlanetSettings) -> Planet` (module docs explain it; the stages
+    in `shape.rs`, `coast.rs`, `water.rs`):
     rigid plates (Euler-pole rotations), each continental or oceanic; a crust value = continent
     noise + the plates' bias (blended across boundaries, `CRUST_BLEND`), cut at the level
     leaving `land_fraction` above, with shelves just below (`SHELF_BAND`). Boundaries act by
@@ -343,7 +347,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   over `JOIN_BLEND` points (one running alongside its parent ends where it first touches
   it); bends tighter than `MIN_BEND_RADIUS` widths are relaxed (`relax_bends`, as on the flat
   map: meander offsets fold over on tight valley bends); channels are carved at least
-  `MIN_CARVED_WIDTH` wide (`surface.rs`: narrower ones showed as holes in the mesh); rivers run through the lakes they enter or leave, to or from the
+  `MIN_CARVED_WIDTH` wide (`surface/channels.rs`: narrower ones showed as holes in the mesh); rivers run through the lakes they enter or leave, to or from the
   deepest cell at the lake's level, as on the flat map: `through_lakes`; rivers split on
   flat land: `split_on_flats` gives wide rivers on flat stretches without tributaries a side
   channel (`PlanetRiver::branch_of`, ending in `Junction` of the same river) round a low
@@ -374,7 +378,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   stops only along it; the sea's wave field has depth -1 over basins not open to the sea and
   the water shader discards there. Terrain vertices: colour = (dryness, forest, marsh / -salt,
   wet bed), UV1 = (cold + snow, coast); the shader takes deserts from dryness.
-  Floodplains (`planet.rs::flatten_floodplains`, as on the flat map): `rivers::extract`
+  Floodplains (`planet/water.rs::flatten_floodplains`): `rivers::extract`
   also returns the un-meandered valley points (level, floodplain half-width where the river
   meanders); the cells around are lowered to water + 0.4 (lake shores kept above their lake),
   walking the grid with `rivers::for_cells_within`, and calmed (no fine detail).
@@ -434,7 +438,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   the terrain draws grass (from the climate weights); each tile is turned upright with local x
   downwind (`PlanetSurface::wind_at`): `grass_blades.wesl` bends in the mesh's frame and takes
   its gust pattern from UV1 (along / across the wind in face coordinates) when present. Coasts are shaped as on
-  the flat map (`planet.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
+  the flat map (`planet/coast.rs`: blurred signed distance to the shore, land ramp, shelf). The camera (`planet/camera.rs`, `PlanetCamera`, replacing the
   pan-orbit controller) looks at a focus point on the surface from a distance, with a
   tangent forward direction parallel-transported as the focus moves (no flip at the poles);
   left or middle drag / arrows move the focus, Q / E turn (physical keys: A / E on AZERTY), right
@@ -744,7 +748,8 @@ of the migration work.
 - Keep shader asset paths as `const` next to the material type.
 
 ### 5.10 Style & hygiene
-- `cargo fmt` and `cargo clippy` clean. Remove dead and commented-out code rather than keeping
+- `cargo fmt` and `cargo clippy --workspace --all-targets` clean (`clippy.toml` allows up to
+  10 arguments: Bevy systems take many). Remove dead and commented-out code rather than keeping
   it (git has history).
 - Doc comments (`///`) on every component, resource, message and plugin, saying *why* it exists.
 - Use `info!` / `debug!` / `warn!`, never `println!` / `dbg!` in committed code.

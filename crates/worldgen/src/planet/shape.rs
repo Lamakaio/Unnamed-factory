@@ -1,25 +1,15 @@
-//! The planet (milestone 1 of `docs/living-world.md`): generation on the cube-sphere grid.
-//!
-//! Plates are rigid and either **continental or oceanic**. Continents ride on the continental
-//! plates: where a continent ends inside its plate the margin is passive (a wide shelf,
-//! lowlands); where it reaches a plate boundary the margin is active and the boundary shapes
-//! it. At converging boundaries, continent against continent raises great ranges, an ocean
-//! plate diving under a continent raises a coastal cordillera with a trench offshore, and
-//! ocean against ocean makes an island arc. Diverging boundaries open rifts in continents and
-//! mid-ocean ridges in the sea floor. Inside continents, old sutures between ancient blocks are
-//! worn-down ranges: the older, the lower and rounder (more hillslope diffusion, standing in
-//! for a long erosion history). The interiors are provinces of plains, broad hills and
-//! plateaus (plateaus away from the coasts, lowlands toward them). Then stream power erosion
-//! (`terrain::erode_timed`, on the [`SphereGrid`]).
-//!
-//! Lengths are in cells, so the landforms keep their size; the sphere's
-//! radius is `2n/π` cells. Planet-scale features (continents) are sized relative to it.
+//! The planet's shape before erosion, and the erosion: plates (or a tectonic history) and
+//! their boundaries (belts, arcs, rifts, ridges, trenches), provinces of plains, hills and
+//! plateaus, old worn ranges; from them each cell's inputs of erosion (uplift, erodibility,
+//! rock...) on a coarse grid and the full one; then erosion on the coarse grid, refined on the
+//! full one.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bevy_math::Vec3;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
+use super::{Laps, PlanetSettings};
 use crate::{
     geology::Rock,
     grid::Grid,
@@ -29,165 +19,23 @@ use crate::{
     terrain::{self, Shape},
 };
 
-/// The tectonic history is sampled at points warped this way, at two scales: wavelength,
 /// distance (world units). (Its fronts can run straight for hundreds of cells.)
-const HISTORY_WARP: [(f32, f32); 2] = [(160., 70.), (50., 40.)];
+pub(super) const HISTORY_WARP: [(f32, f32); 2] = [(160., 70.), (50., 40.)];
 /// Frequency of the continent outline noise on the unit sphere.
-const CONTINENT_FREQUENCY: f32 = 2.4;
+pub(super) const CONTINENT_FREQUENCY: f32 = 2.4;
 /// How much a plate's crust raises (continental) or lowers (oceanic) the continent outline.
-const CONTINENTAL_BIAS: f32 = 0.22;
+pub(super) const CONTINENTAL_BIAS: f32 = 0.22;
 /// Subsidence of rift floors (relative, like uplift).
-const RIFT_SUBSIDENCE: f32 = 0.3;
-/// Drainage area (cells) from which fine detail fades around rivers.
-const CALM_RIVER_AREA: f32 = 150.;
-/// Low flat ground along streams is wet: slopes under this, draining this much (mean cell
-/// areas), below this height (world units).
-const WET_SLOPE: f32 = 0.1;
-const WET_DRAINAGE: f32 = 40.;
-const WET_HEIGHT: f32 = 4.;
+pub(super) const RIFT_SUBSIDENCE: f32 = 0.3;
 /// Uplift of the low swells over all land (relative, like the provinces' uplift).
-const PLAIN_SWELLS: f32 = 0.08;
-/// Distances to the coast are only needed this far (cells) inland and out at sea: beyond,
+pub(super) const PLAIN_SWELLS: f32 = 0.08;
 /// they are this value.
-const COAST_REACH: f32 = 64.;
-const SHORE_REACH: f32 = 8.;
+pub(super) const COAST_REACH: f32 = 64.;
+pub(super) const SHORE_REACH: f32 = 8.;
 /// Distance over which the plates' crust bias blends across their boundaries (cells).
-const CRUST_BLEND: f32 = 25.;
+pub(super) const CRUST_BLEND: f32 = 25.;
 /// Crust value margin below the coast that is still continental (the shelf).
-const SHELF_BAND: f32 = 0.12;
-/// Depth of the continental shelf (world units).
-const SHELF_DEPTH: f32 = 1.5;
-
-/// Planet generation parameters.
-#[derive(Clone, Debug)]
-pub struct PlanetSettings {
-    pub seed: u64,
-    /// Cells along a cube face edge (the planet has `6 n²` cells).
-    pub n: usize,
-    /// Share of the surface above the sea.
-    pub land_fraction: f32,
-    /// Number of tectonic plates, and the share of them that are continental.
-    pub plate_count: usize,
-    pub continental_plates: f32,
-    /// Shape continents and mountain belts from a tectonic history (`tectonics.rs`) instead of
-    /// noise and plate-boundary rules.
-    pub history: Option<crate::tectonics::TectonicSettings>,
-    /// Mean area of a province (cells), and the share of each province type
-    /// (`[plains, hills, plateau]`) and how softly they blend (cells).
-    pub province_cells: f32,
-    pub province_weights: [f32; 3],
-    pub province_blend: f32,
-    /// Level of plateau caps (world units).
-    pub plateau_level: f32,
-    /// Mean area of the ancient blocks whose sutures are old, worn ranges (cells), and the
-    /// share of sutures that are ranges.
-    pub craton_cells: f32,
-    pub old_range_share: f32,
-    /// Width of mountain belts and spacing of their parallel ridges (cells).
-    pub range_width: f32,
-    pub ridge_spacing: f32,
-    /// Height of the highest ranges (99th percentile of range summits) and depth of the open
-    /// sea (world units, about one per cell).
-    pub max_height: f32,
-    pub sea_depth: f32,
-    /// Erosion: steps, time step, erodibility, drainage area exponent, hillslope diffusion,
-    /// routing jitter (see `terrain::ErosionSettings`).
-    pub erosion_steps: usize,
-    /// The first `coarse_steps` erosion steps run on a grid `coarse_factor` times coarser (the
-    /// large drainage network forms there, at a fraction of the cost); the rest refine it at
-    /// full resolution. 0: all at full resolution.
-    pub coarse_steps: usize,
-    pub coarse_factor: usize,
-    pub erosion_dt: f32,
-    pub erodibility: f32,
-    pub area_exponent: f32,
-    pub diffusion: f32,
-    pub routing_jitter: f32,
-}
-
-impl Default for PlanetSettings {
-    fn default() -> Self {
-        Self {
-            seed: 1082,
-            n: 256,
-            land_fraction: 0.3,
-            plate_count: 12,
-            continental_plates: 0.4,
-            history: Some(crate::tectonics::TectonicSettings::default()),
-            province_cells: 8_000.,
-            province_weights: [0.35, 0.45, 0.2],
-            province_blend: 20.,
-            plateau_level: 17.,
-            craton_cells: 20_000.,
-            old_range_share: 0.5,
-            range_width: 28.,
-            ridge_spacing: 13.,
-            max_height: 38.,
-            sea_depth: 20.,
-            erosion_steps: 60,
-            coarse_steps: 45,
-            coarse_factor: 2,
-            erosion_dt: 2.,
-            erodibility: 0.25,
-            area_exponent: 0.45,
-            diffusion: 0.05,
-            routing_jitter: 1.,
-        }
-    }
-}
-
-/// A generated planet.
-pub struct Planet {
-    pub settings: PlanetSettings,
-    pub grid: SphereGrid,
-    /// Height of each cell (world units; the sea is at 0).
-    pub heights: Vec<f32>,
-    /// Sea cells.
-    pub sea: Vec<bool>,
-    /// Continental crust (land and shelves).
-    pub continental: Vec<bool>,
-    /// Mountain belts (0..1), young and old.
-    pub range: Vec<f32>,
-    /// Upstream drainage area of each cell (in mean cell areas).
-    pub drainage: Vec<f32>,
-    /// Depth of the lake water over each cell (0: no lake), from filling the basins.
-    pub lake_depth: Vec<f32>,
-    /// Wet ground (0..1): closed flats and dry basins, lake shores, floodplains, delta land;
-    /// and the dry basins alone (no outlet: salt flats where dry). See `lakes`.
-    pub wetland: Vec<f32>,
-    pub basins: Vec<f32>,
-    /// The rivers (see `rivers`).
-    pub rivers: Vec<crate::rivers::PlanetRiver>,
-    /// The rock of each cell (`geology::Rock` ids) and its strata offset (erosion units), and
-    /// world units per erosion unit: a bed at erosion height `e` is at world height
-    /// `e * strata_scale` (strata height `height / strata_scale + offset`).
-    pub rock: Vec<u8>,
-    pub strata: Vec<f32>,
-    pub strata_scale: f32,
-    /// The volcanoes (see `volcanoes`), and fresh lava over each cell (0..1, active ones).
-    pub volcanoes: Vec<crate::volcanoes::Volcano>,
-    pub lava: Vec<f32>,
-    /// Geothermal fields (hot springs: 0..1, round young volcanoes).
-    pub geothermal: Vec<f32>,
-    /// Coral reef over each cell (0..1, see `reefs`).
-    pub reef: Vec<f32>,
-    /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
-    pub ruggedness: Vec<f32>,
-    /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
-    pub calm: Vec<f32>,
-    /// Plate of each cell, and whether each plate is continental.
-    pub plate: Vec<u16>,
-    pub continental_plate: Vec<bool>,
-    /// Duration of each generation stage.
-    pub timings: Vec<(&'static str, Duration)>,
-}
-
-impl Planet {
-    /// The planet's radius, in cells.
-    pub fn radius(&self) -> f32 {
-        2. * self.settings.n as f32 / std::f32::consts::PI
-    }
-}
+pub(super) const SHELF_BAND: f32 = 0.12;
 
 /// A rigid plate: its centre, its rotation (axis × angular speed, in radians per unit time)
 /// about the planet's centre, and its crust.
@@ -319,134 +167,237 @@ fn nearest_k<const K: usize>(
 
 /// What a plate boundary does near a cell, from the cell's side.
 #[derive(Default, Clone, Copy)]
-struct Boundary {
+pub(super) struct Boundary {
     /// Young mountain belt (0..1), and the distance across it to the boundary (cells).
-    belt: f32,
-    across: f32,
+    pub(super) belt: f32,
+    pub(super) across: f32,
     /// Foothills around belts.
-    foothills: f32,
+    pub(super) foothills: f32,
     /// Rift in a continent (subsiding floor, raised shoulders).
-    rift: f32,
-    shoulders: f32,
+    pub(super) rift: f32,
+    pub(super) shoulders: f32,
     /// Island arc (volcanic islands on the overriding ocean plate).
-    arc: f32,
+    pub(super) arc: f32,
     /// Sea floor: trench in front of a subduction zone, mid-ocean ridge.
-    trench: f32,
-    ridge: f32,
+    pub(super) trench: f32,
+    pub(super) ridge: f32,
 }
 
-pub fn generate_planet(settings: &PlanetSettings) -> Planet {
-    let mut timings = Vec::new();
-    let mut stage = Instant::now();
-    let mut lap = |name, timings: &mut Vec<(&'static str, Duration)>| {
-        timings.push((name, stage.elapsed()));
-        stage = Instant::now();
-    };
-    let grid = SphereGrid::new(settings.n);
-    let cells = grid.len();
-    let radius = 2. * settings.n as f32 / std::f32::consts::PI;
-    let noise = Noise::new(settings.seed as u32);
-    let mut rng = StdRng::seed_from_u64(settings.seed);
+// A tectonic history's fields, smoothed, for shaping.
+struct HistoryFields {
+    crust: Vec<f32>,
+    young: Vec<f32>,
+    old: Vec<f32>,
+    age: Vec<f32>,
+}
 
-    // Plates: random centres (boundaries warped), each turning about a random axis; a share
-    // of them continental.
-    let mut plates: Vec<Plate> = (0..settings.plate_count)
-        .map(|_| Plate {
-            center: random_direction(&mut rng),
-            rotation: random_direction(&mut rng) * rng.random_range(0.5..1.5),
-            continental: false,
-        })
-        .collect();
-    let continental_count =
-        ((settings.plate_count as f32 * settings.continental_plates).round() as usize).max(1);
-    for plate in plates.iter_mut().take(continental_count) {
-        plate.continental = true;
-    }
-    let regions =
-        |count: usize, kinds: &[f32], rng: &mut StdRng, value: &dyn Fn(&mut StdRng) -> f32| {
-            let total: f32 = kinds.iter().sum();
-            (0..count)
-                .map(|_| {
-                    let mut roll = rng.random_range(0.0..1.0f32) * total;
-                    let kind = kinds
-                        .iter()
-                        .position(|&w| {
-                            roll -= w;
-                            roll < 0.
-                        })
-                        .unwrap_or(kinds.len() - 1);
-                    Region {
-                        center: random_direction(rng),
-                        kind,
-                        value: value(rng),
-                    }
-                })
-                .collect::<Vec<Region>>()
-        };
-    let plateau_level = settings.plateau_level;
-    let provinces = regions(
-        ((cells as f32 / settings.province_cells) as usize).max(12),
-        &settings.province_weights,
-        &mut rng,
-        &|rng| plateau_level * rng.random_range(0.7..1.15f32),
-    );
-    let cratons = regions(
-        ((cells as f32 / settings.craton_cells) as usize).max(8),
-        &[1.],
-        &mut rng,
-        &|rng| rng.random_range(0.0..1.0f32),
-    );
-    let province_index = PointIndex::new(
-        &provinces.iter().map(|r| r.center).collect::<Vec<_>>(),
-        settings.province_cells.sqrt() / settings.n as f32,
-    );
-    let craton_index = PointIndex::new(
-        &cratons.iter().map(|r| r.center).collect::<Vec<_>>(),
-        settings.craton_cells.sqrt() / settings.n as f32,
-    );
+/// Uplift younger than this many tectonic steps makes young (sharp) ranges.
+const YOUNG_STEPS: f32 = 12.;
 
-    // The tectonic history, if any: crust, uplift (blurred into belts), oceanic age.
-    let history = settings.history.as_ref().map(|history| {
-        let t = crate::tectonics::run(&crate::tectonics::TectonicSettings {
-            seed: settings.seed,
-            ..history.clone()
+/// Shaping results on one grid.
+pub(super) struct Shaped {
+    pub(super) shape: Shape,
+    pub(super) boundaries: Vec<Boundary>,
+    pub(super) plate_of: Vec<u16>,
+    pub(super) crust: Vec<f32>,
+    pub(super) coast: f32,
+    pub(super) sea: Vec<bool>,
+    pub(super) continental: Vec<bool>,
+    /// Distance to the coast (full-size cells, up to `COAST_REACH`).
+    pub(super) to_sea: Vec<f32>,
+}
+
+/// What shapes the planet: its plates (or tectonic history), provinces and ancient blocks,
+/// and the noises shaping uses.
+pub(super) struct Shaper<'a> {
+    settings: &'a PlanetSettings,
+    /// The planet's radius (cells).
+    radius: f32,
+    plates: Vec<Plate>,
+    provinces: Vec<Region>,
+    province_index: PointIndex,
+    cratons: Vec<Region>,
+    craton_index: PointIndex,
+    /// The tectonic history, if any, and its smoothed fields.
+    history: Option<(crate::tectonics::Tectonics, HistoryFields)>,
+    continents: Noise,
+    peaks: Noise,
+    hills: Noise,
+    warp: Noise,
+    arcs: Noise,
+}
+
+impl<'a> Shaper<'a> {
+    pub(super) fn new(
+        settings: &'a PlanetSettings,
+        grid: &SphereGrid,
+        radius: f32,
+        noise: Noise,
+    ) -> Self {
+        let cells = grid.len();
+        let mut rng = StdRng::seed_from_u64(settings.seed);
+        // Plates: random centres (boundaries warped), each turning about a random axis; a share
+        // of them continental.
+        let mut plates: Vec<Plate> = (0..settings.plate_count)
+            .map(|_| Plate {
+                center: random_direction(&mut rng),
+                rotation: random_direction(&mut rng) * rng.random_range(0.5..1.5),
+                continental: false,
+            })
+            .collect();
+        let continental_count =
+            ((settings.plate_count as f32 * settings.continental_plates).round() as usize).max(1);
+        for plate in plates.iter_mut().take(continental_count) {
+            plate.continental = true;
+        }
+        let regions =
+            |count: usize, kinds: &[f32], rng: &mut StdRng, value: &dyn Fn(&mut StdRng) -> f32| {
+                let total: f32 = kinds.iter().sum();
+                (0..count)
+                    .map(|_| {
+                        let mut roll = rng.random_range(0.0..1.0f32) * total;
+                        let kind = kinds
+                            .iter()
+                            .position(|&w| {
+                                roll -= w;
+                                roll < 0.
+                            })
+                            .unwrap_or(kinds.len() - 1);
+                        Region {
+                            center: random_direction(rng),
+                            kind,
+                            value: value(rng),
+                        }
+                    })
+                    .collect::<Vec<Region>>()
+            };
+        let plateau_level = settings.plateau_level;
+        let provinces = regions(
+            ((cells as f32 / settings.province_cells) as usize).max(12),
+            &settings.province_weights,
+            &mut rng,
+            &|rng| plateau_level * rng.random_range(0.7..1.15f32),
+        );
+        let cratons = regions(
+            ((cells as f32 / settings.craton_cells) as usize).max(8),
+            &[1.],
+            &mut rng,
+            &|rng| rng.random_range(0.0..1.0f32),
+        );
+        let province_index = PointIndex::new(
+            &provinces.iter().map(|r| r.center).collect::<Vec<_>>(),
+            settings.province_cells.sqrt() / settings.n as f32,
+        );
+        let craton_index = PointIndex::new(
+            &cratons.iter().map(|r| r.center).collect::<Vec<_>>(),
+            settings.craton_cells.sqrt() / settings.n as f32,
+        );
+
+        // The tectonic history, if any: crust, uplift (blurred into belts), oceanic age.
+        let history = settings.history.as_ref().map(|history| {
+            let t = crate::tectonics::run(&crate::tectonics::TectonicSettings {
+                seed: settings.seed,
+                ..history.clone()
+            });
+            let young: Vec<f32> = (0..t.grid.len())
+                .map(|i| t.orogeny[i] * (-t.orogeny_age[i] / YOUNG_STEPS).exp())
+                .collect();
+            let old: Vec<f32> = (0..t.grid.len())
+                .map(|i| t.orogeny[i] * (1. - (-t.orogeny_age[i] / YOUNG_STEPS).exp()))
+                .collect();
+            let crust: Vec<f32> = t.crust.iter().map(|c| c.min(1.)).collect();
+            let fields = HistoryFields {
+                crust: t.grid.blur(&crust, 1),
+                young: t.grid.blur(&young, 3),
+                old: t.grid.blur(&old, 4),
+                age: t.age.clone(),
+            };
+            (t, fields)
         });
-        let young: Vec<f32> = (0..t.grid.len())
-            .map(|i| t.orogeny[i] * (-t.orogeny_age[i] / YOUNG_STEPS).exp())
-            .collect();
-        let old: Vec<f32> = (0..t.grid.len())
-            .map(|i| t.orogeny[i] * (1. - (-t.orogeny_age[i] / YOUNG_STEPS).exp()))
-            .collect();
-        let crust: Vec<f32> = t.crust.iter().map(|c| c.min(1.)).collect();
-        let fields = HistoryFields {
-            crust: t.grid.blur(&crust, 1),
-            young: t.grid.blur(&young, 3),
-            old: t.grid.blur(&old, 4),
-            age: t.age.clone(),
-        };
-        (t, fields)
-    });
-    let continents = noise.layer(1);
-    let peaks = noise.layer(2);
-    let hills = noise.layer(3);
-    let warp = noise.layer(4);
-    let arcs = noise.layer(6);
-    let width_at = |p: Vec3| settings.range_width * (0.8 + 0.45 * peaks.layer(1).fbm3(p / 120., 2));
-    // Where to sample the (coarse) tectonic history for a point (world units): warped, so its
-    // fields' straight bilinear contours wander.
-    let history_direction = |p: Vec3| {
-        let wide = warp
+        Self {
+            settings,
+            radius,
+            plates,
+            provinces,
+            province_index,
+            cratons,
+            craton_index,
+            history,
+            continents: noise.layer(1),
+            peaks: noise.layer(2),
+            hills: noise.layer(3),
+            warp: noise.layer(4),
+            arcs: noise.layer(6),
+        }
+    }
+
+    /// Half-width of the mountain belts at a point (world units).
+    fn width_at(&self, p: Vec3) -> f32 {
+        self.settings.range_width * (0.8 + 0.45 * self.peaks.layer(1).fbm3(p / 120., 2))
+    }
+
+    /// Where to sample the (coarse) tectonic history for a point (world units): warped, so its
+    /// fields' straight bilinear contours wander.
+    fn history_direction(&self, p: Vec3) -> Vec3 {
+        let wide = self
+            .warp
             .layer(7)
             .warp3(p / HISTORY_WARP[0].0, 3, HISTORY_WARP[0].1);
-        let short = warp
+        let short = self
+            .warp
             .layer(8)
             .warp3(p / HISTORY_WARP[1].0, 2, HISTORY_WARP[1].1);
         (p + wide + short).normalize()
-    };
+    }
 
-    // Shaping on a grid whose cells are `scale` full-size cells long (all lengths are in
-    // full-size cells: noise, plates and provinces look the same on any grid).
-    let shape_on = |grid: &SphereGrid, scale: f32| -> Shaped {
+    /// The surface velocity of the plate under a direction (`plate_of` from shaping).
+    pub(super) fn velocity(&self, grid: &SphereGrid, plate_of: &[u16], d: Vec3) -> Vec3 {
+        match &self.history {
+            Some((t, _)) => t.plates[t.plate[t.grid.cell_at(d)] as usize]
+                .rotation
+                .cross(d),
+            None => self.plates[plate_of[grid.cell_at(d)] as usize].velocity(d),
+        }
+    }
+
+    /// Whether each plate is continental (a history's: if a good share of its crust is).
+    pub(super) fn continental_plates(&self) -> Vec<bool> {
+        match &self.history {
+            Some((t, _)) => (0..t.plates.len())
+                .map(|k| {
+                    let cells = (0..t.grid.len()).filter(|&i| t.plate[i] as usize == k);
+                    let (total, land) =
+                        cells.fold((0, 0), |(n, l), i| (n + 1, l + (t.crust[i] > 0.5) as usize));
+                    land * 3 > total
+                })
+                .collect(),
+            None => self.plates.iter().map(|p| p.continental).collect(),
+        }
+    }
+
+    /// Shaping on a grid whose cells are `scale` full-size cells long (all lengths are in
+    /// full-size cells: noise, plates and provinces look the same on any grid).
+    pub(super) fn shape(&self, grid: &SphereGrid, scale: f32) -> Shaped {
+        let Shaper {
+            settings,
+            plates,
+            provinces,
+            province_index,
+            cratons,
+            craton_index,
+            history,
+            ..
+        } = self;
+        let (radius, continents, peaks, hills, warp, arcs) = (
+            self.radius,
+            self.continents,
+            self.peaks,
+            self.hills,
+            self.warp,
+            self.arcs,
+        );
+        let width_at = |p: Vec3| self.width_at(p);
+        let history_direction = |p: Vec3| self.history_direction(p);
         let cells = grid.len();
         // Pass 1: plates, boundaries, crust.
         let pass1: Vec<(u16, f32, Boundary)> = par::map(cells, |i| {
@@ -631,7 +582,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             // Old ranges: with a history, its old uplift (worn the more the older); else along the
             // sutures between ancient blocks.
             let w = (p + warp.layer(3).warp3(p / 140., 3, 60.)).normalize();
-            let (near, count) = craton_index.nearest::<4>(&cratons, w, radius);
+            let (near, count) = craton_index.nearest::<4>(cratons, w, radius);
             let near = &near[..count];
             let (mut old, mut age) = (0f32, 0f32);
             if let Some((t, fields)) = &history {
@@ -661,7 +612,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             let w =
                 (p + warp.layer(1).warp3(p / 160., 3, 70.) + warp.layer(2).warp3(p / 50., 2, 15.))
                     .normalize();
-            let (near, count) = province_index.nearest::<4>(&provinces, w, radius);
+            let (near, count) = province_index.nearest::<4>(provinces, w, radius);
             let near = &near[..count];
             let (mut weights, mut cap, mut total) = ([0f32; 3], 0., 0.);
             for &(d, k) in near {
@@ -758,10 +709,19 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             continental,
             to_sea,
         }
-    };
+    }
+}
 
-    // Erosion: first on the coarse grid, then refined at full resolution
-    // from its result.
+/// Shape the planet and erode it: the first `coarse_steps` on a grid `coarse_factor` times
+/// coarser (the large drainage network forms there, at a fraction of the cost), upsampled,
+/// the rest at full resolution. Returns the full grid's shaping and the eroded heights
+/// (erosion units).
+pub(super) fn shape_and_erode(
+    settings: &PlanetSettings,
+    grid: &SphereGrid,
+    shaper: &Shaper,
+    laps: &mut Laps,
+) -> (Shaped, Vec<f32>) {
     let erosion = |steps: usize, scale: f32| terrain::ErosionSettings {
         seed: settings.seed,
         steps,
@@ -771,10 +731,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         routing_jitter: settings.routing_jitter,
         cell_size: scale,
     };
-    let report = |name: &'static str,
-                  t: &terrain::ErosionTimings,
-                  timings: &mut Vec<(&'static str, Duration)>| {
-        timings.extend([
+    let report = |name: &'static str, t: &terrain::ErosionTimings, laps: &mut Laps| {
+        laps.timings.extend([
             (
                 name,
                 t.routing + t.accumulation + t.incision + t.glaciers + t.diffusion,
@@ -787,22 +745,21 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         ]);
     };
     let coarse_steps = settings.coarse_steps.min(settings.erosion_steps);
-    let mut fine_shape = None;
+    let mut shaped = None;
     if coarse_steps > 0 && settings.coarse_factor > 1 {
         let factor = settings.coarse_factor;
         let coarse_grid = SphereGrid::new(settings.n / factor);
-        let coarse = shape_on(&coarse_grid, factor as f32);
-        let fine = shape_on(&grid, 1.);
-        lap("shape", &mut timings);
+        let coarse = shaper.shape(&coarse_grid, factor as f32);
+        let mut fine = shaper.shape(grid, 1.);
+        laps.lap("shape");
         let (coarse_heights, t) = terrain::erode_timed(
             &coarse_grid,
             &erosion(coarse_steps, factor as f32),
             &coarse.shape,
         );
-        report("  coarse erosion", &t, &mut timings);
-        let mut fine = fine;
+        report("  coarse erosion", &t, laps);
         // The fine grid starts from the coarse result (its land only).
-        let upsampled = upsample(&coarse_grid, &coarse_heights, &grid);
+        let upsampled = upsample(&coarse_grid, &coarse_heights, grid);
         for (i, h) in fine.shape.heights.iter_mut().enumerate() {
             *h = if fine.sea[i] {
                 0.
@@ -810,299 +767,29 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
                 upsampled[i].max(0.)
             };
         }
-        fine_shape = Some(fine);
+        shaped = Some(fine);
     }
-    let shaped = match fine_shape {
-        Some(shaped) => shaped,
-        None => {
-            let shaped = shape_on(&grid, 1.);
-            lap("shape", &mut timings);
-            shaped
-        }
-    };
-    let Shaped {
-        shape,
-        boundaries,
-        plate_of,
-        crust,
-        coast,
-        mut sea,
-        continental,
-        to_sea,
-    } = shaped;
-    let cells = grid.len();
-    let (mut heights, t) = terrain::erode_timed(
-        &grid,
+    let shaped = shaped.unwrap_or_else(|| {
+        let shaped = shaper.shape(grid, 1.);
+        laps.lap("shape");
+        shaped
+    });
+    let (heights, t) = terrain::erode_timed(
+        grid,
         &erosion(settings.erosion_steps - coarse_steps, 1.),
-        &shape,
+        &shaped.shape,
     );
-    report("  fine erosion", &t, &mut timings);
-    lap("erosion", &mut timings);
-    // ("erosion" is the sum of both stages, listed after them.)
-    let erosion_total = timings.pop().unwrap();
-    let at = timings
+    report("  fine erosion", &t, laps);
+    laps.lap("erosion");
+    // ("erosion" is the sum of both stages, listed before them.)
+    let total: Duration = laps.timings.pop().unwrap().1;
+    let at = laps
+        .timings
         .iter()
         .position(|t| t.0.starts_with("  coarse") || t.0.starts_with("  fine"))
-        .unwrap_or(timings.len());
-    timings.insert(at, erosion_total);
-
-    // World units: the ranges' summits set the scale; plateaus are cut at their cap level.
-    let mut summits: Vec<f32> = (0..cells)
-        .filter(|&i| !sea[i] && shape.range[i] > 0.5)
-        .map(|i| heights[i])
-        .collect();
-    if summits.is_empty() {
-        summits = heights.clone();
-    }
-    summits.sort_by(f32::total_cmp);
-    let reference = summits[(summits.len() - 1) * 99 / 100].max(1e-6);
-    let strata_scale = settings.max_height / reference;
-    for i in 0..cells {
-        if !sea[i] {
-            heights[i] *= settings.max_height / reference;
-        }
-    }
-    terrain::cap_plateaus(&shape, &mut heights);
-    // The sea floor: a shelf over continental crust, the continental slope where the crust
-    // thins, the abyss over oceanic crust, raised along mid-ocean ridges, deepened in trenches.
-    let floor = noise.layer(9);
-    let shelf_floor: Vec<f32> = (0..cells)
-        .map(|i| {
-            let b = boundaries[i];
-            let slope = smoothstep(coast - SHELF_BAND * 0.6, coast - SHELF_BAND * 1.6, crust[i]);
-            let abyss = settings.sea_depth * (1. - 0.45 * b.ridge) * (1. + 0.4 * b.trench);
-            -(SHELF_DEPTH + (abyss - SHELF_DEPTH) * slope)
-        })
-        .collect();
-    let shelf_floor = grid.blur(&shelf_floor, 3);
-    // Shores: from a blurred signed distance to
-    // the shore (so the coast doesn't follow the cells' staircase), land rises gently from
-    // the water line and the sea floor slopes down from it.
-    let signed: Vec<f32> = (0..cells)
-        .map(|i| if sea[i] { -to_sea[i] } else { to_sea[i] })
-        .collect();
-    let shore = grid.blur(&grid.blur(&signed, 2), 2);
-    let variation = noise.layer(10);
-    let mut heights = par::map(cells, |i| {
-        let p = grid.direction(i) * radius;
-        let d = shore[i];
-        if sea[i] {
-            let open = smoothstep(0., 6., -d);
-            let floor_height =
-                (-0.3 + (shelf_floor[i] + 0.3) * open) * (0.9 + 0.1 * floor.fbm3(p / 60., 3));
-            floor_height.max(0.15 + 0.35 * (d - 0.5)).min(-0.05)
-        } else {
-            let slope =
-                0.25 + 0.3 * (0.5 + 0.5 * variation.fbm3(p / 60., 3)) + 0.5 * shape.range[i];
-            let ramp = 0.15 + slope * (d - 0.5);
-            // (Land cells may end up just under water: the shore follows `shore`.)
-            terrain::smooth_min(heights[i], ramp, 1.).max(-0.3)
-        }
-    });
-    // Fjords: glacial troughs flooded by the sea at cold, mountainous coasts.
-    crate::fjords::carve(&grid, radius, settings.seed, &mut heights, &mut sea);
-    lap("  fjords", &mut timings);
-    // Volcanoes: island and continental arcs, hotspot chains along the plates' motion.
-    let velocity = |d: Vec3| match &history {
-        Some((t, _)) => t.plates[t.plate[t.grid.cell_at(d)] as usize]
-            .rotation
-            .cross(d),
-        None => plates[plate_of[grid.cell_at(d)] as usize].velocity(d),
-    };
-    let volcanoes = crate::volcanoes::place(
-        &grid,
-        radius,
-        settings.seed,
-        |i| boundaries[i].arc,
-        |i| {
-            if !sea[i] && boundaries[i].belt > 0.4 && to_sea[i] < COASTAL_ARC {
-                1.
-            } else {
-                0.
-            }
-        },
-        velocity,
-        |i| sea[i],
-    );
-    let volcanic = crate::volcanoes::build(
-        &grid,
-        radius,
-        settings.seed,
-        &volcanoes,
-        &mut heights,
-        &mut sea,
-    );
-    let mut rock: Vec<u8> = shape.rock.iter().map(|&r| r as u8).collect();
-    let mut strata = shape.strata.clone();
-    for i in 0..cells {
-        if volcanic.volcanic[i] {
-            rock[i] = Rock::Basalt as u8;
-            strata[i] = 0.;
-        }
-    }
-    // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes.
-    let reef = crate::reefs::build(
-        &grid,
-        radius,
-        settings.seed,
-        &volcanoes,
-        &mut heights,
-        &mut sea,
-    );
-    lap("  volcanoes", &mut timings);
-    // Barrier islands and lagoons on low coasts with a shallow shelf.
-    crate::barriers::build(
-        &grid,
-        radius,
-        settings.seed,
-        &reef,
-        &mut heights,
-        &mut sea,
-        &mut rock,
-    );
-    lap("  barrier islands", &mut timings);
-    // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
-    let crate::lakes::Hydrology {
-        filled,
-        drainage,
-        lake_depth,
-        base,
-        wetland,
-        basins,
-    } = crate::lakes::shape_lakes(&grid, &mut heights, &mut sea);
-    lap("  lakes", &mut timings);
-    let ruggedness: Vec<f32> = (0..cells)
-        .map(|i| shape.ruggedness(i).max(volcanic.ruggedness[i]))
-        .collect();
-    let (mut rivers, valley) =
-        crate::rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
-    // Floodplains: flat valley floors where rivers meander.
-    lap("  rivers", &mut timings);
-    let floodplain = flatten_floodplains(&grid, radius, &mut heights, &lake_depth, &valley);
-    // Wet ground: floodplains, and low flat ground along the larger streams (poorly drained
-    // valley floors and plains).
-    // (Slopes of the general lie of the land: on smoothed heights; near streams: their mask
-    // spread a few cells.)
-    let smooth = grid.blur(&heights, 2);
-    let streams: Vec<f32> = drainage
-        .iter()
-        .map(|&d| if d >= WET_DRAINAGE { 1. } else { 0. })
-        .collect();
-    let near_stream = grid.blur(&streams, 3);
-    let wetland: Vec<f32> = par::map(cells, |i| {
-        let (sum, count) = grid.neighbours(i).fold((0., 0.), |(sum, count), (j, d)| {
-            (sum + (smooth[j] - smooth[i]).abs() / d, count + 1.)
-        });
-        let slope = sum / count;
-        let flat_valley = smoothstep(WET_SLOPE, WET_SLOPE * 0.4, slope)
-            * smoothstep(0.03, 0.15, near_stream[i])
-            * smoothstep(WET_HEIGHT, WET_HEIGHT * 0.5, heights[i]);
-        wetland[i].max(0.9 * floodplain[i]).max(0.8 * flat_valley)
-    });
-    let wetland = grid.blur(&wetland, 1);
-    let mut wetland = wetland;
-    lap("  floodplains, wetlands", &mut timings);
-    let sea_before_mouths = sea.clone();
-    // Deltas and estuaries at the river mouths (deltas build land out into the sea).
-    crate::mouths::shape_mouths(
-        &grid,
-        radius,
-        settings.seed,
-        noise.layer(11),
-        &shore,
-        &mut heights,
-        &mut sea,
-        &mut wetland,
-        &mut rivers,
-    );
-    // The floodplains and mouths reshaped the ground: settle the water again (the routing
-    // base: the sea as it is now, and the dry basins' sinks).
-    let base: Vec<bool> = (0..cells)
-        .map(|i| sea[i] || base[i] && !sea_before_mouths[i])
-        .collect();
-    lap("  mouths", &mut timings);
-    let (drainage, lake_depth, flats) =
-        crate::lakes::settle(&grid, &mut heights, &base, &lake_depth);
-    lap("  settle", &mut timings);
-    for i in flats {
-        wetland[i] = 1.;
-    }
-    // Rivers (cells draining enough, as drawn in the previews) and lakes, widened.
-    let calm: Vec<f32> = (0..cells)
-        .map(|i| {
-            let river = smoothstep(CALM_RIVER_AREA * 0.5, CALM_RIVER_AREA, drainage[i]);
-            let lake = smoothstep(0.02, 0.1, lake_depth[i]);
-            // (Wetlands are flat: floodplains, closed flats, delta land.)
-            river.max(lake).max(wetland[i]).max(basins[i])
-        })
-        .collect();
-    let calm: Vec<f32> = grid
-        .blur(&calm, 2)
-        .iter()
-        .map(|c| (c * 3.).min(1.))
-        .collect();
-    lap("drainage", &mut timings);
-
-    Planet {
-        settings: settings.clone(),
-        grid,
-        heights,
-        sea,
-        continental,
-        range: shape.range,
-        drainage,
-        lake_depth,
-        wetland,
-        basins,
-        rock,
-        strata,
-        lava: volcanic.lava,
-        geothermal: volcanic.geothermal,
-        reef,
-        volcanoes,
-        strata_scale,
-        rivers,
-        ruggedness,
-        calm,
-        plate: plate_of,
-        continental_plate: match &history {
-            // (A history's plates: continental if a good share of their crust is.)
-            Some((t, _)) => (0..t.plates.len())
-                .map(|k| {
-                    let cells = (0..t.grid.len()).filter(|&i| t.plate[i] as usize == k);
-                    let (total, land) =
-                        cells.fold((0, 0), |(n, l), i| (n + 1, l + (t.crust[i] > 0.5) as usize));
-                    land * 3 > total
-                })
-                .collect(),
-            None => plates.iter().map(|p| p.continental).collect(),
-        },
-        timings,
-    }
-}
-
-/// A tectonic history's fields, smoothed, for shaping.
-struct HistoryFields {
-    crust: Vec<f32>,
-    young: Vec<f32>,
-    old: Vec<f32>,
-    age: Vec<f32>,
-}
-
-/// Uplift younger than this many tectonic steps makes young (sharp) ranges.
-const YOUNG_STEPS: f32 = 12.;
-
-/// Shaping results on one grid.
-struct Shaped {
-    shape: Shape,
-    boundaries: Vec<Boundary>,
-    plate_of: Vec<u16>,
-    crust: Vec<f32>,
-    coast: f32,
-    sea: Vec<bool>,
-    continental: Vec<bool>,
-    /// Distance to the coast (full-size cells, up to `COAST_REACH`).
-    to_sea: Vec<f32>,
+        .unwrap_or(laps.timings.len());
+    laps.timings.insert(at, ("erosion", total));
+    (shaped, heights)
 }
 
 /// Values of a coarse grid sampled on a finer one (bilinear within each face, clamped at face
@@ -1145,7 +832,7 @@ struct Cell {
 /// mask: for land cells to the sea, up to `land_reach`, for sea cells to land, up to
 /// `sea_reach` (further cells get the reach). Each cell's nearest source is propagated from its neighbours and the distance
 /// measured to it directly (stepping along neighbours instead would draw star-shaped rays).
-pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: f32) -> Vec<f32> {
+fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: f32) -> Vec<f32> {
     use std::{cmp::Reverse, collections::BinaryHeap};
     let reach = |i: usize| if sea[i] { sea_reach } else { land_reach };
     let mut distance: Vec<f32> = (0..grid.len()).map(reach).collect();
@@ -1179,9 +866,6 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: 
     }
     distance
 }
-
-/// Young ranges this close to the sea (cells) are continental arcs (volcanoes).
-const COASTAL_ARC: f32 = 60.;
 
 /// Strata: the scale (cells) over which their dip turns.
 const STRATA_WAVELENGTH: f32 = 120.;
@@ -1243,50 +927,4 @@ fn rock_of(b: Boundary, old: f32, [plains, hilly, plateau]: [f32; 3], noise: f32
         _ => Rock::Shale,
     };
     (rock, 0.03)
-}
-
-/// Lake shores within this distance (world units) stay above their lake's level when
-/// floodplains are flattened.
-const LAKE_RIM: f32 = 3.;
-
-/// Lower the valley floor to just above the water where rivers meander, so meanders have a flat floodplain to wind through; lake shores stay
-/// above their lake. Returns how much each cell is floodplain (0..1).
-fn flatten_floodplains(
-    grid: &SphereGrid,
-    radius: f32,
-    heights: &mut [f32],
-    lake_depth: &[f32],
-    valley: &[crate::rivers::ValleyPoint],
-) -> Vec<f32> {
-    use crate::rivers::for_cells_within;
-    let cells = grid.len();
-    // Lowest height allowed per cell: the level of any lake nearby. (From the lakes' shore
-    // cells: a lake's level is the same all over it.)
-    let mut floor = vec![f32::MIN; cells];
-    let lake = |i: usize| lake_depth[i] > 0.05;
-    let shore = par::map(cells, |i| {
-        lake(i) && grid.neighbours(i).any(|(j, _)| !lake(j))
-    });
-    for i in (0..cells).filter(|&i| shore[i]) {
-        let level = heights[i] + lake_depth[i] + 0.05;
-        for_cells_within(grid, radius, grid.direction(i), LAKE_RIM, |n, _| {
-            floor[n] = floor[n].max(level);
-        });
-    }
-    let mut plain = vec![0f32; cells];
-    // (Every other point: they are half a cell apart, the floodplains several cells wide.)
-    for point in valley.iter().step_by(2).filter(|p| p.floodplain > 0.) {
-        let reach = point.floodplain * 1.5 + 2.;
-        let target = point.level + 0.4;
-        for_cells_within(grid, radius, point.direction, reach, |i, distance| {
-            if lake_depth[i] > 0.05 || heights[i] <= target {
-                return;
-            }
-            let t = smoothstep(reach * 0.4, reach, distance);
-            let lowered = target + (heights[i] - target) * t;
-            heights[i] = heights[i].min(lowered.max(floor[i]));
-            plain[i] = plain[i].max(1. - t);
-        });
-    }
-    plain
 }

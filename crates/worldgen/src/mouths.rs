@@ -538,8 +538,8 @@ fn raise_delta_land(
                 continue;
             }
             for (j, _) in grid.neighbours(i) {
-                if !previous.contains_key(&j) {
-                    previous.insert(j, i);
+                if let std::collections::hash_map::Entry::Vacant(e) = previous.entry(j) {
+                    e.insert(i);
                     queue.push_back((j, steps + 1));
                 }
             }
