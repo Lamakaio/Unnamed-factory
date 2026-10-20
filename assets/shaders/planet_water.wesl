@@ -339,11 +339,15 @@ fn fragment(
     // Sea ice: pack ice broken into floes by dark leads, looser towards its edge (no waves,
     // no glints there).
     var floe = 0.0;
-    if !river && sea.ice > 0.02 {
+    // (Lakes carry their ice in the vertex colour's third channel.)
+    var ice = sea.ice;
+@if(VERTEX_COLORS)
+    ice = max(ice, in.color.z);
+    if !river && ice > 0.02 {
         let breakup = value_noise(xz * 0.35) * 0.5 + 0.5;
         let cells = 1.0 - abs(value_noise(xz * 0.9 + vec2(value_noise(xz * 0.2) * 2.0, 0.0)));
-        let leads = crisp(0.93 - 0.25 * (1.0 - sea.ice), cells);
-        let cover = sea.ice * 1.3 - 0.3 * breakup;
+        let leads = crisp(0.93 - 0.25 * (1.0 - ice), cells);
+        let cover = ice * 1.3 - 0.3 * breakup;
         floe = crisp(0.5, cover) * (1.0 - leads);
         let snowy = value_noise(xz * 0.5 + vec2(9.0, 3.0)) * 0.5 + 0.5;
         let ice_color = mix(vec3(0.80, 0.88, 0.94), vec3(0.95, 0.97, 1.0), crisp(0.45, snowy));

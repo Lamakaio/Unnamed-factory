@@ -180,6 +180,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
 - **Karst** (`surface.rs::karst`): on limestone, tower karst in the humid tropics and
   subtropics (Af, Am, Aw, Cwa, Cfa) and sinkholes in other wet climates, added to the heights
   (`PlanetSurface::karst_relief`: features on a jittered lattice `KARST_SPACING` apart).
+- **Tectonic history sampling**: its coarse fields (crust, young and old uplift) are sampled
+  at points warped at two scales (`planet.rs::HISTORY_WARP`) and belts fade across the
+  continents' edge: its fronts would otherwise run straight for hundreds of cells.
+  `SphereGrid::bilinear` and `PlanetClimate::months_at` sample across the faces' edges (no
+  seams).
 - **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
   spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
@@ -190,8 +195,10 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   and a random `Design`: stretch along a rift axis, lobed outline, flank cones (parasitic
   cones, rift-zone cones and pit craters, a massif's overlapping cones, a cone field's cinder
   cones, domes and maars, some breached), a landslide amphitheatre (a scarp on shields,
-  likelier with age), radial gullies deepening with age, ribs on young cones, a summit crater
-  (old stratovolcanoes: a caldera) or a big collapsed caldera (it becomes a lake).
+  likelier with age), radial gullies deepening with age, ribs on young cones, a lobed
+  outline, a concavity of its own (`Design::steepness`), craters (`Pit`: the summit crater a
+  little off centre, often a few smaller ones of various sizes, walls sheer or gentle; old
+  stratovolcanoes: a caldera) or a big collapsed caldera (it becomes a lake).
   `Design::shape` gives the rise and what craters dig (below the ground for calderas and
   maars): on land on the ground, at sea from the floor to a summit above the water that
   sinks with age (`SUBSIDENCE`: worn islands, then seamounts); cells raised above the sea

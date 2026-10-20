@@ -819,6 +819,8 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
             let first = water.positions.len() as u32;
             for &p in &polygon {
                 water.vertex(surface.direction(face, p) * height, p, wind(surface, face, p), 0., 1.);
+                // (Frozen lakes: the ice in the pattern coordinates' third channel.)
+                water.coords.last_mut().unwrap()[2] = surface.sea_ice.bilinear(face, p);
             }
             for k in 1..polygon.len() as u32 - 1 {
                 water.indices.extend([first, first + k, first + k + 1]);

@@ -152,19 +152,24 @@ impl SphereGrid {
         (angle + 1.) / 2. * self.n as f32 - 0.5
     }
 
-    /// A per-cell field at a direction: bilinear between the four nearest cells of the face
-    /// (clamped at its edges).
+    /// A per-cell field at a direction: bilinear between the four nearest cells, across the
+    /// face's edges (corners beyond it are the neighbouring face's cells there: clamping at the
+    /// edge would leave a seam along the cube's edges).
     pub fn bilinear(&self, values: &[f32], direction: Vec3) -> f32 {
         let (face, p) = self.face_coords(direction);
-        let last = (self.n - 1) as f32;
-        let p = p.clamp(Vec2::ZERO, Vec2::splat(last));
+        let n = self.n as i64;
         let (x0, z0) = (p.x.floor(), p.y.floor());
         let (fx, fz) = (p.x - x0, p.y - z0);
-        let (x0, z0) = (x0 as usize, z0 as usize);
-        let (x1, z1) = ((x0 + 1).min(self.n - 1), (z0 + 1).min(self.n - 1));
-        let at = |x: usize, z: usize| values[self.index(face, x, z)];
-        let top = at(x0, z0) + (at(x1, z0) - at(x0, z0)) * fx;
-        let bottom = at(x0, z1) + (at(x1, z1) - at(x0, z1)) * fx;
+        let at = |x: f32, z: f32| {
+            let (xi, zi) = (x as i64, z as i64);
+            if (0..n).contains(&xi) && (0..n).contains(&zi) {
+                values[self.index(face, xi as usize, zi as usize)]
+            } else {
+                values[self.cell_at(self.direction_at(face, Vec2::new(x, z)))]
+            }
+        };
+        let top = at(x0, z0) + (at(x0 + 1., z0) - at(x0, z0)) * fx;
+        let bottom = at(x0, z0 + 1.) + (at(x0 + 1., z0 + 1.) - at(x0, z0 + 1.)) * fx;
         top + (bottom - top) * fz
     }
 

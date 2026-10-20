@@ -257,8 +257,8 @@ pub struct PlanetSurface {
     pub reef: FaceField,
     /// Glacier ice (0..1, see `glaciers`; its thickness is in the heights).
     pub ice: FaceField,
-    /// Sea ice over the sea (0..1): pack ice where the warmest month at sea level stays below
-    /// `SEA_ICE_WARMEST.1`, thinning out to `SEA_ICE_WARMEST.0`.
+    /// Sea and lake ice (0..1): pack ice where the warmest month at the water's level stays
+    /// below `SEA_ICE_WARMEST.1`, thinning out to `SEA_ICE_WARMEST.0`; frozen lakes alike.
     pub sea_ice: FaceField,
     /// Deserts (see [`deserts`]): sand seas (ergs, with dunes in the heights) and badlands
     /// (0..1); the rest of a hot or cold desert is stony (reg).
@@ -337,11 +337,14 @@ impl PlanetSurface {
         };
         let sea_ice: Vec<f32> = match climate {
             Some(climate) => {
+                // (Lakes too: at their water's height.)
                 let raw = crate::par::map(planet.grid.len(), |i| {
-                    if !planet.sea[i] {
+                    let lake = planet.lake_depth[i] > 0.02;
+                    if !planet.sea[i] && !lake {
                         return 0.;
                     }
-                    let (t, _) = climate.months_at(planet.grid.direction(i), 0.);
+                    let level = if lake { planet.heights[i] + planet.lake_depth[i] } else { 0. };
+                    let (t, _) = climate.months_at(planet.grid.direction(i), level);
                     let warmest = t.iter().copied().fold(f32::MIN, f32::max);
                     smoothstep(SEA_ICE_WARMEST.0, SEA_ICE_WARMEST.1, warmest)
                 });

@@ -30,6 +30,9 @@ use crate::{
     terrain::{self, Shape},
 };
 
+/// The tectonic history is sampled at points warped this way, at two scales: wavelength,
+/// distance (world units). (Its fronts can run straight for hundreds of cells.)
+const HISTORY_WARP: [(f32, f32); 2] = [(160., 70.), (50., 40.)];
 /// Frequency of the continent outline noise on the unit sphere.
 const CONTINENT_FREQUENCY: f32 = 2.4;
 /// How much a plate's crust raises (continental) or lowers (oceanic) the continent outline.
@@ -420,6 +423,13 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let warp = noise.layer(4);
     let arcs = noise.layer(6);
     let width_at = |p: Vec3| settings.range_width * (0.8 + 0.45 * peaks.layer(1).fbm3(p / 120., 2));
+    // Where to sample the (coarse) tectonic history for a point (world units): warped, so its
+    // fields' straight bilinear contours wander.
+    let history_direction = |p: Vec3| {
+        let wide = warp.layer(7).warp3(p / HISTORY_WARP[0].0, 3, HISTORY_WARP[0].1);
+        let short = warp.layer(8).warp3(p / HISTORY_WARP[1].0, 2, HISTORY_WARP[1].1);
+        (p + wide + short).normalize()
+    };
 
     // Shaping on a grid whose cells are `scale` full-size cells long (all lengths are in
     // full-size cells: noise, plates and provinces look the same on any grid).
@@ -457,17 +467,20 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         // With a history: continents from its crust (noise only details the coasts), belts
         // from its uplift, mid-ocean ridges where its ocean floor is young.
         if let Some((t, fields)) = &history {
-            let crust = t.grid.bilinear(&fields.crust, direction);
-            let young = t.grid.bilinear(&fields.young, direction);
-            let ocean_age = t.grid.bilinear(&fields.age, direction);
-            let continental = crust > 0.5;
-            boundary.belt = if continental { smoothstep(0.06, 0.6, young) } else { 0. };
+            // (Sampled at a warped direction, and blended across the continents' edge: the
+            // coarse history's fields, bilinear, have long straight contours.)
+            let h = history_direction(p);
+            let crust = t.grid.bilinear(&fields.crust, h);
+            let young = t.grid.bilinear(&fields.young, h);
+            let ocean_age = t.grid.bilinear(&fields.age, h);
+            let continental = smoothstep(0.4, 0.6, crust);
+            boundary.belt = continental * smoothstep(0.06, 0.6, young);
             // (Ridges run parallel to the belt: the belt's strength falls steadily from its
             // axis, so its contours stand in for the distance across it.)
             boundary.across = (1. - smoothstep(0.03, 0.9, young)) * width * 1.4;
-            boundary.foothills = if continental { smoothstep(0.01, 0.15, young) } else { 0. };
-            boundary.arc = if continental { 0. } else { smoothstep(0.1, 0.6, young) };
-            boundary.ridge = if continental { 0. } else { (-ocean_age / 4.).exp() };
+            boundary.foothills = continental * smoothstep(0.01, 0.15, young);
+            boundary.arc = (1. - continental) * smoothstep(0.1, 0.6, young);
+            boundary.ridge = (1. - continental) * (-ocean_age / 4.).exp();
             let peaks_here = smoothstep(0.78, 0.95, arcs.ridged3(p / 16., 2));
             let stretches = smoothstep(0.05, 0.35, arcs.layer(1).fbm3(p / 70., 2));
             let value = (crust - 0.5) * 1.2 + outline * 0.3 + boundary.arc * peaks_here * stretches * 1.2;
@@ -591,7 +604,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         let near = &near[..count];
         let (mut old, mut age) = (0f32, 0f32);
         if let Some((t, fields)) = &history {
-            let uplift = t.grid.bilinear(&fields.old, direction);
+            let uplift = t.grid.bilinear(&fields.old, history_direction(p));
             old = smoothstep(0.05, 0.6, uplift);
             age = 0.6;
         } else if near.len() >= 2 {

@@ -67,16 +67,16 @@ const ACTIVE_AGE: f32 = 0.15;
 const GEOTHERMAL_AGE: f32 = 0.3;
 const GEOTHERMAL_SLOPE: (f32, f32) = (0.12, 0.3);
 /// Arc volcanoes: spacing along the arc (cells), height (world units) and radius per height.
-const ARC_SPACING: f32 = 80.;
-const STRATO_HEIGHT: (f32, f32) = (9., 18.);
-const STRATO_RADIUS: f32 = 2.6;
+const ARC_SPACING: f32 = 120.;
+const STRATO_HEIGHT: (f32, f32) = (7., 15.);
+const STRATO_RADIUS: f32 = 1.9;
 /// Hotspots: plumes per million cells, volcanoes per chain, spacing along it (cells), height
 /// and radius per height.
-const HOTSPOTS_PER_MILLION: f32 = 2.5;
+const HOTSPOTS_PER_MILLION: f32 = 1.6;
 const CHAIN: (usize, usize) = (4, 8);
 const CHAIN_SPACING: (f32, f32) = (28., 45.);
-const SHIELD_HEIGHT: (f32, f32) = (10., 16.);
-const SHIELD_RADIUS: f32 = 5.;
+const SHIELD_HEIGHT: (f32, f32) = (8., 13.);
+const SHIELD_RADIUS: f32 = 3.8;
 /// Cone fields: the plateau's height and the cinder cones' radius (world units).
 const CONE_FIELD_PLATEAU: f32 = 1.2;
 const CINDER_CONE: (f32, f32) = (2.5, 5.);
@@ -111,7 +111,7 @@ pub fn place(
     let mut candidates: Vec<(u32, usize)> = (0..grid.len())
         .filter_map(|i| {
             let weight = arc(i).max(coastal_belt(i));
-            (weight > 0.5 && random(i as u32, 1) < 0.004 * weight).then(|| (hash(seed, i as u32, 2), i))
+            (weight > 0.5 && random(i as u32, 1) < 0.003 * weight).then(|| (hash(seed, i as u32, 2), i))
         })
         .collect();
     candidates.sort_unstable();
@@ -174,13 +174,13 @@ pub fn place(
         let roll = random(k as u32, 90);
         let on_land = !sea(grid.cell_at(v.direction));
         let (kind, height, radius) = match v.kind {
-            VolcanoKind::Strato if roll < 0.55 => (VolcanoKind::Strato, v.height, v.radius),
-            VolcanoKind::Strato if roll < 0.72 => (VolcanoKind::Massif, v.height * 1.1, v.radius * 1.5),
-            VolcanoKind::Strato if roll < 0.86 => (VolcanoKind::Caldera, v.height * 0.55, v.radius * 1.1),
+            VolcanoKind::Strato if roll < 0.62 => (VolcanoKind::Strato, v.height, v.radius),
+            VolcanoKind::Strato if roll < 0.77 => (VolcanoKind::Massif, v.height * 1.1, v.radius * 1.3),
+            VolcanoKind::Strato if roll < 0.84 => (VolcanoKind::Caldera, v.height * 0.55, v.radius * 1.1),
             VolcanoKind::Strato if on_land => (VolcanoKind::ConeField, CONE_FIELD_PLATEAU, v.radius * 0.8),
             VolcanoKind::Strato => (VolcanoKind::Strato, v.height, v.radius),
-            _ if on_land && roll < 0.35 => (VolcanoKind::Caldera, v.height * 0.5, v.radius * 0.6),
-            _ if on_land && roll < 0.8 => (VolcanoKind::ConeField, CONE_FIELD_PLATEAU, v.radius * 0.5),
+            _ if on_land && roll < 0.15 => (VolcanoKind::Caldera, v.height * 0.5, v.radius * 0.6),
+            _ if on_land && roll < 0.6 => (VolcanoKind::ConeField, CONE_FIELD_PLATEAU, v.radius * 0.5),
             _ => (v.kind, v.height, v.radius),
         };
         v.kind = kind;
@@ -322,14 +322,27 @@ struct Vent {
     maar: bool,
 }
 
+/// A crater dug into the volcano: its centre (world units from the summit), radius (world
+/// units), depth (share of the volcano's height), how far in its walls end (share of the
+/// radius: low, gentle walls; high, sheer ones) and whether an active volcano has a lava lake
+/// in it.
+struct Pit {
+    at: Vec2,
+    radius: f32,
+    depth: f32,
+    floor: f32,
+    lava: bool,
+}
+
 /// The random design of one volcano: stretch along its rift axis, a breached (landslide)
-/// side (angle, half-width), its summit crater or caldera, flank vents.
+/// side (angle, half-width), how concave its cone is, its summit craters (or caldera), flank
+/// vents.
 struct Design {
     axis: Vec2,
     stretch: f32,
     breach: Option<(f32, f32)>,
-    crater_radius: f32,
-    crater_depth: f32,
+    steepness: f32,
+    pits: Vec<Pit>,
     vents: Vec<Vent>,
     /// How far the shape reaches (share of the radius).
     reach: f32,
@@ -367,7 +380,7 @@ impl Design {
                 // Old ones: the summit crater widened into a caldera.
                 let caldera = old > 0.5 && random(5) < 0.6;
                 let (radius, depth) = if caldera { (0.22, 0.14) } else { (0.08, 0.1) };
-                (1. + 0.2 * random(2), 0.3 + 0.35 * old, radius, depth)
+                (1. + 0.45 * random(2), 0.3 + 0.35 * old, radius, depth)
             }
             VolcanoKind::Shield => {
                 // Cones and pit craters along the rift zones.
@@ -390,7 +403,7 @@ impl Design {
                     let height = 0.55 + 0.25 * random(60 + j);
                     vents.push(cone(20 + 10 * j, (0.2, 0.4), (0.35 * v.radius, 0.5 * v.radius), height));
                 }
-                (1.15 + 0.3 * random(2), 0.3, 0.2, 0.12)
+                (1.1 + 0.4 * random(2), 0.3, 0.16, 0.12)
             }
             VolcanoKind::Caldera => {
                 // Sometimes a new cone inside the caldera.
@@ -404,7 +417,7 @@ impl Design {
                         maar: false,
                     });
                 }
-                (1. + 0.25 * random(2), 0.15, 0.4 + 0.12 * random(3), 0.5)
+                (1.1 + 0.5 * random(2), 0.15, 0.35 + 0.12 * random(3), 0.5)
             }
             VolcanoKind::ConeField => {
                 // Many small cinder cones, a few domes and maars, scattered over the field.
@@ -427,8 +440,33 @@ impl Design {
             }
         };
         let breach = (random(3) < breach_chance).then(|| (random(4) * TAU, 0.45 + 0.4 * random(6)));
+        // The summit crater (or caldera), a little off centre, and on most volcanoes a few
+        // smaller ones of various sizes round it; walls sheer or gentle.
+        let mut pits = Vec::new();
+        if crater_radius > 0. {
+            pits.push(Pit {
+                at: Vec2::from_angle(random(70) * TAU) * v.radius * 0.05 * random(71),
+                radius: crater_radius * v.radius * (0.8 + 0.4 * random(72)),
+                depth: crater_depth,
+                // (Calderas' walls gentler: slumped and eroded.)
+                floor: if v.kind == VolcanoKind::Caldera { 0.25 + 0.3 * random(73) } else { 0.45 + 0.4 * random(73) },
+                lava: v.kind != VolcanoKind::Caldera,
+            });
+            let extra = if v.kind == VolcanoKind::Caldera { 1.5 } else { 4. };
+            for j in 0..(random(74) * extra) as u32 {
+                let k = 80 + 6 * j;
+                pits.push(Pit {
+                    at: Vec2::from_angle(random(k) * TAU) * v.radius * (0.05 + 0.2 * random(k + 1)),
+                    radius: v.radius * (0.02 + 0.06 * random(k + 2)),
+                    depth: crater_depth * (0.4 + 0.6 * random(k + 3)),
+                    floor: 0.3 + 0.5 * random(k + 4),
+                    lava: false,
+                });
+            }
+        }
+        let steepness = 1.2 + 1.1 * random(75);
         let beyond = vents.iter().map(|w| (w.at.length() + w.radius) / v.radius - 1.).fold(0., f32::max);
-        Design { axis, stretch, breach, crater_radius, crater_depth, vents, reach: 1.3 + beyond.max(0.) }
+        Design { axis, stretch, breach, steepness, pits, vents, reach: 1.4 + beyond.max(0.) }
     }
 
     /// The shape at `q` (world units east and north of the summit); `height` is the volcano's
@@ -437,12 +475,14 @@ impl Design {
         let young = 1. - v.age;
         // Stretched along the rift axis, the outline in irregular lobes.
         let local = Vec2::new(q.dot(self.axis) / self.stretch, q.perp_dot(self.axis));
-        let wobble = 1. + 0.22 * noise(world / (v.radius * 0.5), 2);
+        let wobble = 1. + 0.32 * noise(world / (v.radius * 0.9), 2) + 0.1 * noise(world / (v.radius * 0.3), 2);
         let x = local.length() / (v.radius * wobble);
         let angle = local.y.atan2(local.x);
         let profile = |x: f32| match v.kind {
             // Concave: steep near the summit, flaring out; blunter with age.
-            VolcanoKind::Strato | VolcanoKind::Massif => (1. - x).max(0.).powf(1.5 + 0.5 * young).min(1. - 0.25 * v.age),
+            VolcanoKind::Strato | VolcanoKind::Massif => {
+                (1. - x).max(0.).powf(self.steepness * (0.75 + 0.25 * young)).min(1. - 0.25 * v.age)
+            }
             VolcanoKind::Shield => (1. - x * x).max(0.).powf(1.3),
             VolcanoKind::Caldera => (1. - x).max(0.).powf(1.2),
             VolcanoKind::ConeField => (1. - x * x).max(0.),
@@ -468,17 +508,23 @@ impl Design {
             let depth = if shield { 0.6 } else { 0.85 };
             rise -= (rise - floor).max(0.) * side * inside * depth;
         }
-        // The summit crater or caldera: a flat floor in steep walls, shallower with age.
-        let mut dig = 0.;
-        let mut crater_floor = 0.;
-        if self.crater_radius > 0. {
-            let wall = smoothstep(self.crater_radius, self.crater_radius * 0.75, x);
-            dig += self.crater_depth * (0.5 + 0.5 * young) * wall;
-            // (A lava lake in the middle of the floor, small; none in collapsed calderas,
-            // which hold water.)
-            let lake = (self.crater_radius * 0.55).min(LAVA_LAKE / v.radius);
-            if v.kind != VolcanoKind::Caldera {
-                crater_floor = smoothstep(lake, lake * 0.6, x);
+        // The craters (or caldera): flat floors in walls sheer or gentle, shallower with age,
+        // stretched with the volcano and a little irregular.
+        let mut dig = 0f32;
+        let mut crater_floor = 0f32;
+        for pit in &self.pits {
+            let centre = Vec2::new(pit.at.dot(self.axis) / self.stretch, pit.at.perp_dot(self.axis));
+            let r = (local - centre).length() / pit.radius;
+            if r > 1.3 {
+                continue;
+            }
+            let r = r * (1. + 0.15 * noise(world / (pit.radius * 0.7) + Vec3::splat(5.), 2));
+            dig = dig.max(pit.depth * (0.5 + 0.5 * young) * smoothstep(1., pit.floor, r));
+            // (A small lava lake in the middle of the floor; none in collapsed calderas, which
+            // hold water.)
+            if pit.lava {
+                let lake = (pit.floor * 0.7).min(LAVA_LAKE / pit.radius);
+                crater_floor = crater_floor.max(smoothstep(lake, lake * 0.6, r));
             }
         }
         // Flank cones, domes and maars.
