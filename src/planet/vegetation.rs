@@ -460,6 +460,7 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
                 || surface.ocean.bilinear(chunk.face, p) > COAST.0
                 || surface.lake_depth.bilinear(chunk.face, p) > 0.02
                 || surface.marsh.bilinear(chunk.face, p).abs() > 0.4
+                || surface.ice.bilinear(chunk.face, p) > 0.3
             {
                 continue;
             }
@@ -574,8 +575,8 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     if height < BEACH_HEIGHT && ocean > COAST.0 {
         return if tropical { Biome::TropicalBeach } else { Biome::Beach };
     }
-    // Fresh lava: bare.
-    if surface.lava.bilinear(face, p) > 0.4 {
+    // Fresh lava and glacier ice: bare.
+    if surface.lava.bilinear(face, p) > 0.4 || surface.ice.bilinear(face, p) > 0.3 {
         return Biome::Sea;
     }
     // Wetlands: marsh, or bare salt flats.

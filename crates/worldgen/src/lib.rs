@@ -10,6 +10,7 @@
 pub(crate) mod detail;
 pub mod geology;
 mod fjords;
+pub mod glaciers;
 mod flow;
 pub mod grid;
 pub mod sphere;

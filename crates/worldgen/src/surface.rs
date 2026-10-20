@@ -121,6 +121,8 @@ pub struct PlanetSurface {
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
     /// Coral reef (0..1, see `reefs`).
     pub reef: FaceField,
+    /// Glacier ice (0..1, see `glaciers`; its thickness is in the heights).
+    pub ice: FaceField,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -173,6 +175,16 @@ impl PlanetSurface {
             .collect();
         let ocean: Vec<f32> = planet.sea.iter().map(|&s| if s { 1. } else { 0. }).collect();
         let ocean = planet.grid.blur(&ocean, 3);
+        // Glaciers and ice caps: the ice on the ground (smooth: no gullies), no lakes or
+        // marsh under it.
+        let thickness =
+            climate.map_or_else(|| vec![0.; planet.grid.len()], |climate| crate::glaciers::glaciers(planet, climate));
+        let ice: Vec<f32> = thickness.iter().map(|&t| smoothstep(0.05, 0.25, t)).collect();
+        let heights: Vec<f32> = planet.heights.iter().zip(&thickness).map(|(h, t)| h + t).collect();
+        let lake_depth: Vec<f32> =
+            planet.lake_depth.iter().zip(&ice).map(|(&d, &ice)| if ice > 0. { 0. } else { d }).collect();
+        let calm: Vec<f32> = planet.calm.iter().zip(&ice).map(|(c, i)| c.max(*i)).collect();
+        let marsh: Vec<f32> = marsh.iter().zip(&ice).map(|(m, i)| m * (1. - i)).collect();
         let weights = weights.map(|weights: Vec<[f32; 5]>| {
             [0, 1, 2, 3, 4].map(|k| {
                 FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>())
@@ -186,6 +198,7 @@ impl PlanetSurface {
             rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
             lava: FaceField::new(planet, &planet.lava),
             reef: FaceField::new(planet, &planet.reef),
+            ice: FaceField::new(planet, &ice),
             volcanoes: planet.volcanoes.clone(),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
@@ -193,10 +206,10 @@ impl PlanetSurface {
             springs: Springs::default(),
             n: planet.grid.n(),
             radius: planet.radius(),
-            heights: FaceField::new(planet, &planet.heights),
-            lake_depth: FaceField::new(planet, &planet.lake_depth),
+            heights: FaceField::new(planet, &heights),
+            lake_depth: FaceField::new(planet, &lake_depth),
             ruggedness: FaceField::new(planet, &planet.ruggedness),
-            calm: FaceField::new(planet, &planet.calm),
+            calm: FaceField::new(planet, &calm),
             grid: std::sync::Arc::new(SphereGrid::new(planet.grid.n())),
             seed: planet.settings.seed as u32 ^ 0xD37A,
             detail_wavelength: flat.detail_wavelength,
@@ -206,6 +219,12 @@ impl PlanetSurface {
         // River water levels: never above the ground across the channel (smoothing and
         // meanders move points over lower ground), never rising downstream.
         let mut rivers = planet.rivers.clone();
+        // Rivers start at the glaciers' snouts (meltwater), not under the ice.
+        for river in &mut rivers {
+            let under = river.points.iter().take_while(|p| surface.ice_at(p.direction) > 0.5).count();
+            let keep = river.points.len().saturating_sub(1);
+            river.points.drain(..under.min(keep));
+        }
         for river in &mut rivers {
             let mut previous = f32::MAX;
             let count = river.points.len();
@@ -405,6 +424,12 @@ impl PlanetSurface {
             wind += -uphill * turned + along * turned * wind.dot(along).signum();
         }
         (wind * exposure, strength * exposure)
+    }
+
+    /// Glacier ice in a direction (0..1, see [`PlanetSurface::ice`]).
+    pub fn ice_at(&self, direction: Vec3) -> f32 {
+        let (face, p) = self.face_coords(direction);
+        self.ice.bilinear(face, p)
     }
 
     /// The ocean in a direction (see [`PlanetSurface::ocean`]): above 0.5 at sea.

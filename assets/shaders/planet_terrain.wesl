@@ -40,7 +40,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // x: the sea level radius.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
 // The face's rock field, by cell (`worldgen::geology`): rock id (red), strata offset (green,
-// erosion units), fresh lava (blue, round active volcanoes), coral reef (alpha). `planet.y` is the cells along a face edge, `planet.z` world units per
+// erosion units), fresh lava (blue, round active volcanoes), coral reef (alpha, positive) or glacier ice (alpha, negative). `planet.y` is the cells along a face edge, `planet.z` world units per
 // erosion unit (strata height = height / planet.z + offset), `planet.w` 1 with the field.
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var rock_field: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var rock_sampler: sampler;
@@ -309,6 +309,7 @@ fn ground(
     level: f32,
     lava: f32,
     reef: f32,
+    ice: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -403,6 +404,23 @@ fn ground(
         footprint * 0.6), 0.25);
     let snow_color = mix(srgb(0.97, 0.98, 1.0), srgb(0.84, 0.89, 0.97), drifts);
     color = mix(color, snow_color, crisp(0.5, snow_value, fwidth(snow_value)));
+
+    // Glacier ice: bare blue-white ice, cracked by crevasses where it steepens (icefalls),
+    // under snow (firn) where it is flat and cold enough, with dark moraines along its edges.
+    if ice > 0.02 {
+        let flow = fbm(xz * 0.12 + vec2(5.0, 11.0), 2, footprint * 0.12);
+        let cracks = 1.0 - abs(fbm(xz * vec2(0.9, 0.4) + vec2(flow * 3.0, 0.0), 3, footprint * 0.9));
+        let threshold = 0.9 - 0.12 * smoothstep(0.03, 0.25, steep);
+        let crevasse = crisp(threshold, cracks, fwidth(cracks)) * smoothstep(0.02, 0.08, steep);
+        let bare = mix(srgb(0.80, 0.90, 0.97), srgb(0.68, 0.83, 0.94), patches(medium, 0.1));
+        var ice_color = mix(bare, srgb(0.30, 0.52, 0.74), crevasse);
+        let firn = a.b * 1.25 + 0.3 * snow_noise + 2.0 * (up - 0.95);
+        ice_color = mix(ice_color, snow_color, crisp(0.5, firn, fwidth(firn)));
+        let edge = ice + 0.15 * medium;
+        let moraine = 1.0 - crisp(0.62, edge, fwidth(edge));
+        ice_color = mix(ice_color, srgb(0.45, 0.43, 0.41), moraine);
+        color = mix(color, ice_color, crisp(0.5, edge, fwidth(edge)));
+    }
 
     // River and lake beds.
     color = mix(color, srgb(0.52, 0.46, 0.36), crisp(0.5, wet, fwidth(wet)));
@@ -506,6 +524,7 @@ fn fragment(
     var level = height;
     var lava = 0.0;
     var reef = 0.0;
+    var ice = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
@@ -515,10 +534,11 @@ fn fragment(
         level = height / planet.z + offset;
         let field = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0);
         lava = field.b;
-        reef = field.a;
+        reef = max(field.a, 0.0);
+        ice = max(-field.a, 0.0);
     }
     let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
-        rock_type, level, lava, reef)
+        rock_type, level, lava, reef, ice)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

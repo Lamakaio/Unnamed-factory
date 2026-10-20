@@ -110,7 +110,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
         info!("Climate in {climate_time:.1?}, surface in {:.1?}", stage.elapsed());
         let sea_start = Instant::now();
         let sea = water::sea_textures(&planet, &surface);
-        let rock = rock_textures(&planet);
+        let rock = rock_textures(&planet, &surface);
         info!("Sea wave field in {:.1?}", sea_start.elapsed());
         info!(
             "Planet generated in {:.1?} ({} cells, radius {:.0}): {:?}",
@@ -339,14 +339,18 @@ fn finish_chunk_meshes(
 }
 
 /// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id,
-/// strata offset, fresh lava, coral reef.
-fn rock_textures(planet: &worldgen::planet::Planet) -> Vec<Vec<u8>> {
+/// strata offset, fresh lava, coral reef (positive) or glacier ice (negative: the two never
+/// meet).
+fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
+    let n = planet.grid.n();
     let per_face = planet.grid.n() * planet.grid.n();
     (0..FACES)
         .map(|face| {
             let mut data = Vec::with_capacity(per_face * 8);
             for i in face * per_face..(face + 1) * per_face {
-                for value in [planet.rock[i] as f32, planet.strata[i], planet.lava[i], planet.reef[i]] {
+                let cell = Vec2::new(((i - face * per_face) % n) as f32, ((i - face * per_face) / n) as f32);
+                let ice = surface.ice.bilinear(face, cell);
+                for value in [planet.rock[i] as f32, planet.strata[i], planet.lava[i], planet.reef[i] - ice] {
                     data.extend(half::f16::from_f32(value).to_le_bytes());
                 }
             }

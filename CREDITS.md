@@ -133,6 +133,9 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Fjords** (`fjords.rs`): glacial troughs with a sill at the mouth, flooded by the sea, as
   described in glacial geomorphology (e.g. D. Benn and D. Evans, *Glaciers and Glaciation*,
   2010).
+- **Glaciers** (`glaciers.rs`): ice where summers stay below freezing (the equilibrium line
+  idea of glaciology, e.g. Benn and Evans, *Glaciers and Glaciation*), tongues down the
+  valleys, moraines at the margins.
 - **Reefs and atolls** (`reefs.rs`): fringing reefs, barrier reefs round sinking volcanic
   islands and atolls on sunk ones, after C. Darwin, *The Structure and Distribution of Coral
   Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.

@@ -147,6 +147,14 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   ground within `RELIEF_RADIUS` of the mouth (mouths `SPACING` apart) are traced up the
   drainage for `LENGTH` cells and carved into U-shaped troughs below sea level (deepest a
   little inland, a sill at the mouth); the sea floods the carved cells.
+- **Glaciers and ice caps** (`glaciers.rs`, static, at the surface stage since they need the
+  climate): ice where the warmest month at the cell's height is below `ICE_WARMEST`, tongues
+  down the steepest way while it is below `TONGUE_WARMEST` (at most `TONGUE_LENGTH` cells).
+  The thickness (filling valleys to the smoothed ground, doming away from the edge) is added
+  to `PlanetSurface::heights`; `PlanetSurface::ice` (0..1) clears lakes, marsh, gullies,
+  vegetation, grass and rocks, trims river sources under the ice (they start at the snouts)
+  and goes to the shader as the rock field's negative alpha (bare ice, crevasses where it
+  steepens, firn on top, moraines at the edge).
 - **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
   spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
