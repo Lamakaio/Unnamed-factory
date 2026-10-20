@@ -35,7 +35,6 @@ mod terrain;
 
 use bevy_math::Vec3;
 
-
 /// Biome of a cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Biome {

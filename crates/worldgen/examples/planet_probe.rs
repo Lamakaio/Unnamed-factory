@@ -9,7 +9,10 @@ use worldgen::{
 };
 
 fn main() {
-    let args: Vec<f32> = std::env::args().skip(1).map(|a| a.parse().unwrap()).collect();
+    let args: Vec<f32> = std::env::args()
+        .skip(1)
+        .map(|a| a.parse().unwrap())
+        .collect();
     let planet = generate_planet(&PlanetSettings {
         n: args[0] as usize,
         seed: args[1] as u64,
@@ -27,7 +30,11 @@ fn main() {
                 planet.heights[i],
                 surface.height_at(d),
                 if planet.sea[i] { "S" } else { " " },
-                if planet.lake_depth[i] > 0.05 { format!("L{:.1}", planet.lake_depth[i]) } else { String::new() }
+                if planet.lake_depth[i] > 0.05 {
+                    format!("L{:.1}", planet.lake_depth[i])
+                } else {
+                    String::new()
+                }
             );
         }
         println!("lat {:+.2}: {line}", args[3] + dlat);

@@ -12,8 +12,8 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::{
     RiverEnd, RiverPoint,
-    grid::Grid,
     channels::{Channel, Mouth, grow_channels},
+    grid::Grid,
     noise::{Noise, hash, smoothstep},
     rivers::{PlanetRiver, PlanetRiverPoint},
     sphere::SphereGrid,
@@ -51,7 +51,12 @@ struct Frame {
 impl Frame {
     fn new(up: Vec3, radius: f32) -> Self {
         let east = up.any_orthonormal_vector();
-        Self { up, east, north: up.cross(east), radius }
+        Self {
+            up,
+            east,
+            north: up.cross(east),
+            radius,
+        }
     }
 
     fn local(&self, direction: Vec3) -> Vec2 {
@@ -130,7 +135,10 @@ pub fn shape_mouths(
                     .filter_map(|join| {
                         let river = &rivers[index].points;
                         (0..river.len()).max_by(|&a, &b| {
-                            river[a].direction.dot(join.direction).total_cmp(&river[b].direction.dot(join.direction))
+                            river[a]
+                                .direction
+                                .dot(join.direction)
+                                .total_cmp(&river[b].direction.dot(join.direction))
                         })
                     })
                     .max()
@@ -154,7 +162,14 @@ pub fn shape_mouths(
     }
 }
 
-fn choose(grid: &SphereGrid, frame: &Frame, seed: u64, heights: &[f32], width: f32, index: usize) -> Mouth {
+fn choose(
+    grid: &SphereGrid,
+    frame: &Frame,
+    seed: u64,
+    heights: &[f32],
+    width: f32,
+    index: usize,
+) -> Mouth {
     let roll = hash(seed as u32, index as u32, 0x0D17A) as f32 / u32::MAX as f32;
     let large = width >= DELTA_MIN_WIDTH;
     let (mut sum, mut count) = (0., 0.);
@@ -177,7 +192,13 @@ fn choose(grid: &SphereGrid, frame: &Frame, seed: u64, heights: &[f32], width: f
 
 /// Sediment fan around a mouth (radius 6 + 5·width): the land there is lowered to a low, flat
 /// deposit plain. The sea floor is left alone.
-fn spread_sediment(grid: &SphereGrid, frame: &Frame, shore: &[f32], heights: &mut [f32], width: f32) {
+fn spread_sediment(
+    grid: &SphereGrid,
+    frame: &Frame,
+    shore: &[f32],
+    heights: &mut [f32],
+    width: f32,
+) {
     let radius = 6. + 5. * width;
     for_cells_around(grid, frame, Vec2::ZERO, radius, |i, p| {
         let value = smoothstep(radius, radius * 0.3, p.length());
@@ -266,7 +287,10 @@ fn build_delta(
     );
     // Channels over high ground (headlands, hills) are dropped, with their forks.
     let high = |channel: &Channel| {
-        channel.points.iter().any(|p| heights[grid.cell_at(frame.direction(p.position))] > DELTA_MAX_GROUND)
+        channel
+            .points
+            .iter()
+            .any(|p| heights[grid.cell_at(frame.direction(p.position))] > DELTA_MAX_GROUND)
     };
     // ...and so are channels running mostly over the land (not the delta's new land: across a
     // headland, from one sea to another).
@@ -274,7 +298,9 @@ fn build_delta(
         let on_land = channel
             .points
             .iter()
-            .filter(|p| p.travelled > 3. * p.width && !sea[grid.cell_at(frame.direction(p.position))])
+            .filter(|p| {
+                p.travelled > 3. * p.width && !sea[grid.cell_at(frame.direction(p.position))]
+            })
             .count();
         on_land as f32 > MAX_OVERLAND * channel.points.len() as f32
     };
@@ -284,7 +310,12 @@ fn build_delta(
         for (k, channel) in channels.iter().enumerate() {
             let start = channel.points[0].position;
             let from_dropped = channels.iter().enumerate().any(|(j, parent)| {
-                dropped[j] && j != k && parent.points.last().is_some_and(|end| end.position.distance(start) < FORK_GAP)
+                dropped[j]
+                    && j != k
+                    && parent
+                        .points
+                        .last()
+                        .is_some_and(|end| end.position.distance(start) < FORK_GAP)
             });
             if from_dropped && !dropped[k] {
                 dropped[k] = true;
@@ -301,7 +332,9 @@ fn build_delta(
         for (k, channel) in channels.iter().enumerate() {
             let end = channel.points.last().map(|p| p.position);
             let continued = channels.iter().enumerate().any(|(j, child)| {
-                !dropped[j] && j != k && end.is_some_and(|end| child.points[0].position.distance(end) < FORK_GAP)
+                !dropped[j]
+                    && j != k
+                    && end.is_some_and(|end| child.points[0].position.distance(end) < FORK_GAP)
             });
             if !dropped[k] && !channel.open && !continued {
                 dropped[k] = true;
@@ -312,14 +345,27 @@ fn build_delta(
             break;
         }
     }
-    let channels: Vec<Channel> =
-        channels.into_iter().zip(dropped).filter(|(_, dropped)| !dropped).map(|(c, _)| c).collect();
+    let channels: Vec<Channel> = channels
+        .into_iter()
+        .zip(dropped)
+        .filter(|(_, dropped)| !dropped)
+        .map(|(c, _)| c)
+        .collect();
     if !channels.iter().any(|c| c.open) {
         // No way to the sea left: an ordinary mouth.
         river.points = original;
         return Vec::new();
     }
-    raise_delta_land(grid, frame, noise.layer(60 + index as u32), heights, sea, wetland, &channels, length);
+    raise_delta_land(
+        grid,
+        frame,
+        noise.layer(60 + index as u32),
+        heights,
+        sea,
+        wetland,
+        &channels,
+        length,
+    );
 
     // Water falls from the apex level to just under the sea at the full delta length.
     let level = |travelled: f32| apex.level + (-0.1 - apex.level) * (travelled / length).min(1.);
@@ -363,10 +409,16 @@ fn raise_delta_land(
     // The sea before, and the cells the delta reshapes.
     let mut region = Vec::new();
     let mut was_sea = std::collections::HashMap::new();
-    for_cells_around(grid, frame, first.position, length * 1.6 + FRONT_REACH, |i, p| {
-        region.push((i, p));
-        was_sea.insert(i, sea[i]);
-    });
+    for_cells_around(
+        grid,
+        frame,
+        first.position,
+        length * 1.6 + FRONT_REACH,
+        |i, p| {
+            region.push((i, p));
+            was_sea.insert(i, sea[i]);
+        },
+    );
     // The new land (core of the levees, away from the tips), kept above the sea by smoothing.
     let mut new_land = Vec::new();
     for &(i, p) in &region {
@@ -419,7 +471,9 @@ fn raise_delta_land(
                 let (sum, count) = grid
                     .neighbours(i)
                     .filter(|&(_, d)| d < 1.2)
-                    .fold((0., 0.), |(sum, count), (j, _)| (sum + heights[j], count + 1.));
+                    .fold((0., 0.), |(sum, count), (j, _)| {
+                        (sum + heights[j], count + 1.)
+                    });
                 0.5 * heights[i] + 0.5 * sum / count
             })
             .collect();
@@ -442,10 +496,16 @@ fn raise_delta_land(
             if point.to_tip < TIP_TRIM.0 + TIP_TRIM.1 * point.width {
                 continue;
             }
-            for_cells_around(grid, frame, point.position, point.width / 2. + CORRIDOR, |i, _| {
-                heights[i] = heights[i].max(NEW_LAND_MIN);
-                sea[i] = false;
-            });
+            for_cells_around(
+                grid,
+                frame,
+                point.position,
+                point.width / 2. + CORRIDOR,
+                |i, _| {
+                    heights[i] = heights[i].max(NEW_LAND_MIN);
+                    sea[i] = false;
+                },
+            );
         }
     }
     // Open every tip to the sea, by a path to the open sea if the land closes it in.
@@ -459,7 +519,12 @@ fn raise_delta_land(
             sea[i] = true;
             opened.push(i);
         });
-        let open_sea = |i: usize| sea[i] && heights[i] < -0.05 && !opened.contains(&i) && was_sea.get(&i).is_none_or(|&s| s);
+        let open_sea = |i: usize| {
+            sea[i]
+                && heights[i] < -0.05
+                && !opened.contains(&i)
+                && was_sea.get(&i).is_none_or(|&s| s)
+        };
         let start = grid.cell_at(frame.direction(tip.position));
         let mut previous = std::collections::HashMap::from([(start, start)]);
         let mut queue = std::collections::VecDeque::from([(start, 0)]);

@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{grid::Grid, planet::Planet, climate::PlanetClimate};
+use crate::{climate::PlanetClimate, grid::Grid, planet::Planet};
 
 /// Permanent ice where the warmest month is below this (°C at the cell's height); glacier
 /// tongues reach down while it is below `TONGUE_WARMEST`, for at most `TONGUE_LENGTH` cells.
@@ -47,20 +47,27 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
     // Ice gathers in valleys (below the ground smoothed round them) and on flat ground (ice
     // sheets, plateaus); ridges, peaks and steep slopes stay bare rock.
     let slope: Vec<f32> = crate::par::map(cells, |i| {
-        grid.neighbours(i).map(|(j, d)| (planet.heights[j] - planet.heights[i]).abs() / d).fold(0., f32::max)
+        grid.neighbours(i)
+            .map(|(j, d)| (planet.heights[j] - planet.heights[i]).abs() / d)
+            .fold(0., f32::max)
     });
     let around = grid.blur(&planet.heights, VALLEY_RADIUS);
     // (Where it is coldest, ice sheets bury everything but the steepest ground.)
     let gathers = |i: usize| {
         slope[i] < MAX_SLOPE
-            && (around[i] - planet.heights[i] > VALLEY_DEPTH || slope[i] < FLAT_SLOPE || warmest[i] < SHEET_WARMEST)
+            && (around[i] - planet.heights[i] > VALLEY_DEPTH
+                || slope[i] < FLAT_SLOPE
+                || warmest[i] < SHEET_WARMEST)
     };
     // (No ice on lakes: they stay lakes.)
     let lake = |i: usize| planet.lake_depth[i] > 0.02;
-    let mut ice: Vec<bool> = (0..cells).map(|i| warmest[i] < ICE_WARMEST && gathers(i) && !lake(i)).collect();
+    let mut ice: Vec<bool> = (0..cells)
+        .map(|i| warmest[i] < ICE_WARMEST && gathers(i) && !lake(i))
+        .collect();
     // Tongues: down from the ice's edge, the steepest way.
-    let edge: Vec<usize> =
-        (0..cells).filter(|&i| ice[i] && grid.neighbours(i).any(|(j, _)| !ice[j] && !planet.sea[j])).collect();
+    let edge: Vec<usize> = (0..cells)
+        .filter(|&i| ice[i] && grid.neighbours(i).any(|(j, _)| !ice[j] && !planet.sea[j]))
+        .collect();
     for start in edge {
         let mut here = start;
         for _ in 0..TONGUE_LENGTH {
@@ -74,7 +81,12 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
             };
             // (Tongues flow in valleys: not straight down a cone or a ridge.)
             let valley = around[next] - planet.heights[next] > VALLEY_DEPTH * 0.5;
-            if planet.sea[next] || lake(next) || !valley || warmest[next] > TONGUE_WARMEST || slope[next] > MAX_SLOPE {
+            if planet.sea[next]
+                || lake(next)
+                || !valley
+                || warmest[next] > TONGUE_WARMEST
+                || slope[next] > MAX_SLOPE
+            {
                 break;
             }
             ice[next] = true;
@@ -88,14 +100,23 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
                 || !planet.sea[i]
                     && !lake(i)
                     && slope[i] < MAX_SLOPE
-                    && grid.neighbours(i).filter(|&(j, d)| d < 1.2 && ice[j]).count() >= 2
+                    && grid
+                        .neighbours(i)
+                        .filter(|&(j, d)| d < 1.2 && ice[j])
+                        .count()
+                        >= 2
         })
         .collect();
     // Close the small holes (no ice-free speckles in the sheets and valley floors).
     let mut ice = widened;
     for _ in 0..2 {
         let closed: Vec<bool> = (0..cells)
-            .map(|i| ice[i] || !planet.sea[i] && !lake(i) && grid.neighbours(i).filter(|&(j, _)| ice[j]).count() >= 5)
+            .map(|i| {
+                ice[i]
+                    || !planet.sea[i]
+                        && !lake(i)
+                        && grid.neighbours(i).filter(|&(j, _)| ice[j]).count() >= 5
+            })
             .collect();
         ice = closed;
     }
@@ -103,8 +124,9 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
     // Thickness: the valleys filled up to the smoothed ground, domes away from the edge.
     let smooth = grid.blur(&planet.heights, SMOOTHING);
     let mut from_edge = vec![f32::INFINITY; cells];
-    let mut queue: VecDeque<usize> =
-        (0..cells).filter(|&i| ice[i] && grid.neighbours(i).any(|(j, _)| !ice[j])).collect();
+    let mut queue: VecDeque<usize> = (0..cells)
+        .filter(|&i| ice[i] && grid.neighbours(i).any(|(j, _)| !ice[j]))
+        .collect();
     for &i in &queue {
         from_edge[i] = 0.;
     }

@@ -24,7 +24,11 @@ fn argument<T: std::str::FromStr>(flag: &str) -> Option<T> {
     args.iter()
         .position(|arg| arg == flag)
         .and_then(|i| args.get(i + 1))
-        .map(|value| value.parse().unwrap_or_else(|_| panic!("{flag}: bad value {value}")))
+        .map(|value| {
+            value
+                .parse()
+                .unwrap_or_else(|_| panic!("{flag}: bad value {value}"))
+        })
 }
 
 /// The world seed: `--seed <n>` on the command line, else [`SEED`].
@@ -40,19 +44,18 @@ fn seed() -> u128 {
 fn main() {
     let seed = seed();
     let mut app = App::new();
-    app
-        .add_plugins((
-            DefaultPlugins.set(ImagePlugin::default_nearest()),
-            MeshPickingPlugin,
-        ))
-        .init_state::<AppState>()
-        .add_plugins((
-            dev_tools::DevToolsPlugin,
-            environment::EnvironmentPlugin,
-            camera::CameraPlugin,
-            shaders::ShadersPlugin,
-            ui::UiPlugin,
-        ));
+    app.add_plugins((
+        DefaultPlugins.set(ImagePlugin::default_nearest()),
+        MeshPickingPlugin,
+    ))
+    .init_state::<AppState>()
+    .add_plugins((
+        dev_tools::DevToolsPlugin,
+        environment::EnvironmentPlugin,
+        camera::CameraPlugin,
+        shaders::ShadersPlugin,
+        ui::UiPlugin,
+    ));
     app.add_plugins(planet::PlanetPlugin {
         seed,
         n: argument("--n").unwrap_or(PLANET_CELLS),

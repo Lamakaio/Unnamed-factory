@@ -61,13 +61,16 @@ pub fn build_chunk_mesh(
         indices: Vec::new(),
     };
     builder.visit(chunk.min - 0.5, CHUNK_CELLS as f32);
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, builder.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, builder.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, builder.colors)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, builder.uvs)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, builder.covers)
-        .with_inserted_indices(Indices::U32(builder.indices))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, builder.positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, builder.normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, builder.colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, builder.uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, builder.covers)
+    .with_inserted_indices(Indices::U32(builder.indices))
 }
 
 struct Builder<'a> {
@@ -139,7 +142,12 @@ impl Builder<'_> {
         };
         for z in 0..PATCH_RES {
             for x in 0..PATCH_RES {
-                let (a, b, c, d) = (index(x, z), index(x + 1, z), index(x, z + 1), index(x + 1, z + 1));
+                let (a, b, c, d) = (
+                    index(x, z),
+                    index(x + 1, z),
+                    index(x, z + 1),
+                    index(x + 1, z + 1),
+                );
                 if outward {
                     self.indices.extend([a, b, c, b, d, c]);
                 } else {
@@ -202,7 +210,11 @@ fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4],
     // (Snow only where it is cold: the two share a channel, snow above 1. Geothermal fields
     // and the coast share one too: hot springs negative.)
     let geothermal = surface.geothermal.bilinear(face, p);
-    let coast = if geothermal > coast { -geothermal } else { coast };
+    let coast = if geothermal > coast {
+        -geothermal
+    } else {
+        coast
+    };
     ([dryness, forest, marsh, wet], [cold.min(1.) + snow, coast])
 }
 

@@ -115,7 +115,9 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
     let directions: Vec<Vec3> = (0..cells).map(|i| grid.direction(i)).collect();
 
     // Initial plates: warped Voronoi regions, each turning about a random axis.
-    let centers: Vec<Vec3> = (0..settings.plates).map(|_| random_direction(&mut rng)).collect();
+    let centers: Vec<Vec3> = (0..settings.plates)
+        .map(|_| random_direction(&mut rng))
+        .collect();
     let warp = noise.layer(1);
     let mut plate: Vec<u16> = par::map(cells, |i| {
         let d = directions[i];
@@ -140,8 +142,13 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
     let mut sorted = value.clone();
     let k = ((1. - settings.continental_share) * (cells - 1) as f32) as usize;
     let cut = *sorted.select_nth_unstable_by(k, f32::total_cmp).1;
-    let crust0: Vec<f32> = value.iter().map(|&v| if v >= cut { 1. } else { 0. }).collect();
-    let born0: Vec<f32> = (0..cells).map(|_| -rng.random_range(0.0..30.0f32)).collect();
+    let crust0: Vec<f32> = value
+        .iter()
+        .map(|&v| if v >= cut { 1. } else { 0. })
+        .collect();
+    let born0: Vec<f32> = (0..cells)
+        .map(|_| -rng.random_range(0.0..30.0f32))
+        .collect();
     let mut rasters: Vec<Raster> = (0..settings.plates)
         .map(|p| Raster {
             rotation: Quat::IDENTITY,
@@ -171,7 +178,9 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
                 land[p] += rasters[p].crust[r].min(1.);
                 middle[p] += directions[i];
             }
-            let p = (0..plates.len()).max_by(|&a, &b| land[a].total_cmp(&land[b])).unwrap();
+            let p = (0..plates.len())
+                .max_by(|&a, &b| land[a].total_cmp(&land[b]))
+                .unwrap();
             let center = middle[p].normalize_or_zero();
             if center != Vec3::ZERO {
                 let normal = random_direction(&mut rng).reject_from(center).normalize();
@@ -188,8 +197,14 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
                 let speed = settings.speed * rng.random_range(0.8..1.4);
                 let base = plates[p].rotation * 0.5;
                 plates[p].rotation = away * speed * 0.5 + base;
-                plates.push(PlateMotion { rotation: -away * speed * 0.5 + base });
-                events.push(Event::Rift { step, plate: p as u16, new: new as u16 });
+                plates.push(PlateMotion {
+                    rotation: -away * speed * 0.5 + base,
+                });
+                events.push(Event::Rift {
+                    step,
+                    plate: p as u16,
+                    new: new as u16,
+                });
             }
         }
         // Motions wander slowly (welded plates follow their partner); plates turn.
@@ -202,7 +217,8 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
             plates[small as usize].rotation = plates[big as usize].rotation;
         }
         for (motion, raster) in plates.iter().zip(&mut rasters) {
-            raster.rotation = (Quat::from_scaled_axis(motion.rotation) * raster.rotation).normalize();
+            raster.rotation =
+                (Quat::from_scaled_axis(motion.rotation) * raster.rotation).normalize();
         }
 
         // Each world cell: the plates whose crust covers it (and the cell of their raster).
@@ -227,7 +243,9 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
             }
             // The winner: continental crust floats on oceanic; between oceanic crusts, the
             // younger (lighter) one.
-            let key = |&(p, r): &(u16, usize)| (rasters[p as usize].crust[r], rasters[p as usize].born[r]);
+            let key = |&(p, r): &(u16, usize)| {
+                (rasters[p as usize].crust[r], rasters[p as usize].born[r])
+            };
             let &(winner, wr) = claims
                 .iter()
                 .max_by(|a, b| {
@@ -264,7 +282,9 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
                 }
                 let there = rasters[loser as usize].crust[lr] > 0.5;
                 if here && there {
-                    *collisions.entry((winner.min(loser), winner.max(loser))).or_default() += 1;
+                    *collisions
+                        .entry((winner.min(loser), winner.max(loser)))
+                        .or_default() += 1;
                 }
                 uplift = uplift.max(match (here, there) {
                     (true, true) => {
@@ -344,17 +364,28 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
     let end = settings.steps as f32;
     let sample = |i: usize| {
         let raster = &rasters[plate[i] as usize];
-        (grid.cell_at(raster.rotation.inverse() * directions[i]), raster)
+        (
+            grid.cell_at(raster.rotation.inverse() * directions[i]),
+            raster,
+        )
     };
     let crust = (0..cells).map(|i| sample(i).1.crust[sample(i).0]).collect();
     let age = (0..cells)
         .map(|i| {
             let (r, raster) = sample(i);
-            if raster.crust[r] > 0.5 { 0. } else { end - raster.born[r] }
+            if raster.crust[r] > 0.5 {
+                0.
+            } else {
+                end - raster.born[r]
+            }
         })
         .collect();
-    let orogeny = (0..cells).map(|i| sample(i).1.orogeny[sample(i).0]).collect();
-    let orogeny_age = (0..cells).map(|i| end - sample(i).1.uplifted[sample(i).0]).collect();
+    let orogeny = (0..cells)
+        .map(|i| sample(i).1.orogeny[sample(i).0])
+        .collect();
+    let orogeny_age = (0..cells)
+        .map(|i| end - sample(i).1.uplifted[sample(i).0])
+        .collect();
     Tectonics {
         settings: settings.clone(),
         grid,

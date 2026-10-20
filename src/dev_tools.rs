@@ -45,7 +45,9 @@ impl Plugin for DevToolsPlugin {
         if let Ok(list) = std::env::var("UF_SCREENSHOTS") {
             for entry in list.split(';').filter(|entry| !entry.trim().is_empty()) {
                 match entry.split_once('=') {
-                    Some((view, path)) => shots.push((Some(view.trim().to_string()), path.trim().to_string())),
+                    Some((view, path)) => {
+                        shots.push((Some(view.trim().to_string()), path.trim().to_string()))
+                    }
                     None => warn!("UF_SCREENSHOTS entry without a view: {entry}"),
                 }
             }

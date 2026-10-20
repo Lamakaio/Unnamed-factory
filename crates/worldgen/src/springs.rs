@@ -77,7 +77,11 @@ impl PlanetSpring {
             radii
                 .iter()
                 .enumerate()
-                .map(|(k, r)| *center + Vec2::from_angle(k as f32 * std::f32::consts::TAU / POND_SIDES as f32) * *r)
+                .map(|(k, r)| {
+                    *center
+                        + Vec2::from_angle(k as f32 * std::f32::consts::TAU / POND_SIDES as f32)
+                            * *r
+                })
                 .collect(),
         )
     }
@@ -85,8 +89,13 @@ impl PlanetSpring {
     /// Centre of what is carved (local coordinates) and its reach.
     fn extent(&self) -> (Vec2, f32) {
         match &self.kind {
-            PlanetSpringKind::Pond { center, radii } => (*center, radii.iter().fold(0f32, |a, &b| a.max(b)) + BANK),
-            PlanetSpringKind::Hillside => (-Vec2::X * self.notch_radius() * 0.5, self.notch_radius() + NOTCH_BANK),
+            PlanetSpringKind::Pond { center, radii } => {
+                (*center, radii.iter().fold(0f32, |a, &b| a.max(b)) + BANK)
+            }
+            PlanetSpringKind::Hillside => (
+                -Vec2::X * self.notch_radius() * 0.5,
+                self.notch_radius() + NOTCH_BANK,
+            ),
         }
     }
 
@@ -116,7 +125,10 @@ pub fn find_springs(
     for (index, river) in rivers.iter().enumerate() {
         for point in &river.points {
             let p = point.direction * radius;
-            points.entry((p / BUCKET).floor().as_ivec3()).or_default().push((index, p, point.width));
+            points
+                .entry((p / BUCKET).floor().as_ivec3())
+                .or_default()
+                .push((index, p, point.width));
         }
     }
     let on_river = |river: usize, p: Vec3| {
@@ -124,9 +136,13 @@ pub fn find_springs(
         (-1..=1).any(|x| {
             (-1..=1).any(|y| {
                 (-1..=1).any(|z| {
-                    points.get(&(bucket + IVec3::new(x, y, z))).is_some_and(|near| {
-                        near.iter().any(|&(other, q, width)| other != river && q.distance(p) < width / 2. + 1.)
-                    })
+                    points
+                        .get(&(bucket + IVec3::new(x, y, z)))
+                        .is_some_and(|near| {
+                            near.iter().any(|&(other, q, width)| {
+                                other != river && q.distance(p) < width / 2. + 1.
+                            })
+                        })
                 })
             })
         })
@@ -140,7 +156,9 @@ pub fn find_springs(
         }
         let up = source.direction;
         let p = up * radius;
-        let downstream = (river.points[3].direction - up).reject_from(up).normalize_or_zero();
+        let downstream = (river.points[3].direction - up)
+            .reject_from(up)
+            .normalize_or_zero();
         if downstream == Vec3::ZERO {
             continue;
         }
@@ -155,7 +173,11 @@ pub fn find_springs(
         }
         // Terrain slope around the source.
         let d = 1.5;
-        let slope = Vec2::new(at(downstream * d) - at(-downstream * d), at(across * d) - at(-across * d)).length()
+        let slope = Vec2::new(
+            at(downstream * d) - at(-downstream * d),
+            at(across * d) - at(-across * d),
+        )
+        .length()
             / (2. * d);
         let kind = if slope < POND_MAX_SLOPE {
             let size = (POND_RADIUS.0 + POND_RADIUS.1 * source.width) * (0.8 + 0.4 * jitter(p, 1));
@@ -189,7 +211,10 @@ pub fn find_springs(
 
 /// A deterministic pseudo-random value in 0..1 for a position (and a salt).
 fn jitter(p: Vec3, salt: u32) -> f32 {
-    let mut h = p.x.to_bits() ^ p.y.to_bits().rotate_left(11) ^ p.z.to_bits().rotate_left(22) ^ salt.wrapping_mul(0x9e37_79b9);
+    let mut h = p.x.to_bits()
+        ^ p.y.to_bits().rotate_left(11)
+        ^ p.z.to_bits().rotate_left(22)
+        ^ salt.wrapping_mul(0x9e37_79b9);
     h = (h ^ (h >> 15)).wrapping_mul(0x85eb_ca6b);
     h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
     (h ^ (h >> 16)) as f32 / u32::MAX as f32
@@ -209,16 +234,26 @@ impl Springs {
         for (id, spring) in springs.iter().enumerate() {
             let (center, reach) = spring.extent();
             let c = spring.direction_of(center, radius) * radius;
-            let (lo, hi) = (((c - reach) / BUCKET).floor().as_ivec3(), ((c + reach) / BUCKET).floor().as_ivec3());
+            let (lo, hi) = (
+                ((c - reach) / BUCKET).floor().as_ivec3(),
+                ((c + reach) / BUCKET).floor().as_ivec3(),
+            );
             for x in lo.x..=hi.x {
                 for y in lo.y..=hi.y {
                     for z in lo.z..=hi.z {
-                        buckets.entry(IVec3::new(x, y, z)).or_default().push(id as u32);
+                        buckets
+                            .entry(IVec3::new(x, y, z))
+                            .or_default()
+                            .push(id as u32);
                     }
                 }
             }
         }
-        Self { springs, radius, buckets }
+        Self {
+            springs,
+            radius,
+            buckets,
+        }
     }
 
     /// Carve the springs at world position `p` into `height`, returning the carved height and

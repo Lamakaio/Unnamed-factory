@@ -62,7 +62,10 @@ impl View {
     /// Parse `longitude,latitude[,distance[,pitch[,heading]]]` (degrees, world units); what is
     /// left out comes from `default`.
     pub fn parse(view: &str, default: View) -> View {
-        let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let values: Vec<f32> = view
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
         let mut out = default;
         if let [longitude, latitude, ..] = values[..] {
             let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
@@ -173,7 +176,8 @@ pub fn control(
     let turn = pressed(KeyCode::KeyE) as i32 as f32 - pressed(KeyCode::KeyQ) as i32 as f32;
     if turn != 0. {
         let up = camera.focus;
-        camera.forward = Quat::from_axis_angle(up, -turn * KEY_TURN_SPEED * time.delta_secs()) * camera.forward;
+        camera.forward =
+            Quat::from_axis_angle(up, -turn * KEY_TURN_SPEED * time.delta_secs()) * camera.forward;
     }
     // Orbit.
     if buttons.pressed(MouseButton::Right) && !over_ui {
@@ -207,7 +211,9 @@ pub fn control(
     // Far out, the view turns straight down.
     let top_down = smoothstep(TOP_DOWN.0, TOP_DOWN.1, camera.distance / radius);
     let min_pitch = MIN_PITCH + (std::f32::consts::FRAC_PI_2 - 0.01 - MIN_PITCH) * top_down;
-    camera.pitch = camera.pitch.clamp(min_pitch, std::f32::consts::FRAC_PI_2 - 0.01);
+    camera.pitch = camera
+        .pitch
+        .clamp(min_pitch, std::f32::consts::FRAC_PI_2 - 0.01);
 }
 
 /// Place the camera from its state, above the ground, with clip planes fitting the view.

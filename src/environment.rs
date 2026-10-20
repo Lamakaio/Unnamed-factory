@@ -52,7 +52,11 @@ fn spawn_environment(mut commands: Commands) {
     ));
 }
 
-fn rotate_sun(mut sun: Single<&mut Transform, With<Sun>>, mut turn: ResMut<SunTurn>, time: Res<Time>) {
+fn rotate_sun(
+    mut sun: Single<&mut Transform, With<Sun>>,
+    mut turn: ResMut<SunTurn>,
+    time: Res<Time>,
+) {
     sun.rotate_axis(Dir3::Z, time.delta_secs() * SUN_ROTATION_SPEED);
     turn.0 += time.delta_secs() * SUN_ROTATION_SPEED;
 }

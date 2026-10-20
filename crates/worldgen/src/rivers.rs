@@ -78,7 +78,9 @@ pub fn extract(
             donors[r].push(i);
         }
     }
-    let mut mouths: Vec<usize> = (0..n).filter(|&i| is_river(i) && !is_river(graph.receivers[i])).collect();
+    let mut mouths: Vec<usize> = (0..n)
+        .filter(|&i| is_river(i) && !is_river(graph.receivers[i]))
+        .collect();
     mouths.sort_by(|&a, &b| area[b].total_cmp(&area[a]));
 
     // Trace upstream; parents come before their tributaries.
@@ -93,7 +95,11 @@ pub fn extract(
         .map(|mouth| {
             let r = graph.receivers[mouth];
             // (Planet lakes have no index yet: the end only says "a lake".)
-            let end = if sea[r] { RiverEnd::Sea } else { RiverEnd::Lake(0) };
+            let end = if sea[r] {
+                RiverEnd::Sea
+            } else {
+                RiverEnd::Lake(0)
+            };
             (mouth, end, None)
         })
         .collect();
@@ -117,7 +123,11 @@ pub fn extract(
             cells.push(current);
         }
         cells.reverse();
-        traced.push(Traced { cells, end, junction });
+        traced.push(Traced {
+            cells,
+            end,
+            junction,
+        });
     }
 
     let mut rivers = Vec::with_capacity(traced.len());
@@ -127,8 +137,11 @@ pub fn extract(
     let mut flats: Vec<Vec<f32>> = Vec::with_capacity(traced.len());
     for river in &traced {
         let point = |i: usize| grid.direction(i) * radius;
-        let mut path: Vec<(Vec3, f32, f32)> =
-            river.cells.iter().map(|&i| (point(i), heights[i], area[i])).collect();
+        let mut path: Vec<(Vec3, f32, f32)> = river
+            .cells
+            .iter()
+            .map(|&i| (point(i), heights[i], area[i]))
+            .collect();
         let last = *river.cells.last().unwrap();
         let outlet = river.junction.unwrap_or(graph.receivers[last]);
         let outlet_level = match river.end {
@@ -147,10 +160,14 @@ pub fn extract(
             path[i].1 = path[i].1.min(path[i - 1].1);
         }
         let length = path.len();
-        let widths: Vec<f32> =
-            path.iter().map(|p| RIVER_WIDTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_WIDTH.1)).collect();
-        let depths: Vec<f32> =
-            path.iter().map(|p| RIVER_DEPTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_DEPTH.1)).collect();
+        let widths: Vec<f32> = path
+            .iter()
+            .map(|p| RIVER_WIDTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_WIDTH.1))
+            .collect();
+        let depths: Vec<f32> = path
+            .iter()
+            .map(|p| RIVER_DEPTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_DEPTH.1))
+            .collect();
         // Meanders where the valley is flat, about 12 channel widths long.
         let slope: Vec<f32> = (0..length)
             .map(|i| {
@@ -161,7 +178,10 @@ pub fn extract(
         let flatness: Vec<f32> = (0..length)
             .map(|i| {
                 let (a, b) = (i.saturating_sub(20), (i + 21).min(length));
-                slope[a..b].iter().map(|&s| smoothstep(MEANDER_MAX_SLOPE, 0., s)).sum::<f32>()
+                slope[a..b]
+                    .iter()
+                    .map(|&s| smoothstep(MEANDER_MAX_SLOPE, 0., s))
+                    .sum::<f32>()
                     / (b - a) as f32
             })
             .collect();
@@ -173,7 +193,8 @@ pub fn extract(
                 phase += TAU * SPACING / wavelength;
                 let from_start = i as f32 * SPACING;
                 let from_end = (length - 1 - i) as f32 * SPACING;
-                let taper = smoothstep(0., wavelength, from_start) * smoothstep(0., wavelength, from_end);
+                let taper =
+                    smoothstep(0., wavelength, from_start) * smoothstep(0., wavelength, from_end);
                 let amplitude = MEANDER_AMPLITUDE * widths[i] * flatness[i] * taper;
                 let tangent = path[(i + 2).min(length - 1)].0 - path[i.saturating_sub(2)].0;
                 let up = position.normalize();
@@ -209,7 +230,12 @@ pub fn extract(
         }
         output_index.push(Some(rivers.len()));
         flats.push(flatness);
-        rivers.push(PlanetRiver { points, end: river.end, branch_of: None, distributary: false });
+        rivers.push(PlanetRiver {
+            points,
+            end: river.end,
+            branch_of: None,
+            distributary: false,
+        });
     }
     // Junctions point at output indices (short rivers were dropped).
     for river in &mut rivers {
@@ -250,9 +276,12 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
             && let Some(end) = river.points.last()
         {
             let main = &rivers[parent].points;
-            if let Some(k) = (0..main.len())
-                .max_by(|&a, &b| main[a].direction.dot(end.direction).total_cmp(&main[b].direction.dot(end.direction)))
-            {
+            if let Some(k) = (0..main.len()).max_by(|&a, &b| {
+                main[a]
+                    .direction
+                    .dot(end.direction)
+                    .total_cmp(&main[b].direction.dot(end.direction))
+            }) {
                 joins[parent].push(k);
             }
         }
@@ -266,7 +295,9 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
         let mut k = 0;
         while k < main.len() {
             let width = main[k].width;
-            let length = ((SPLIT_LENGTH.0 + (SPLIT_LENGTH.1 - SPLIT_LENGTH.0) * random(index, k, 1)) * width)
+            let length = ((SPLIT_LENGTH.0
+                + (SPLIT_LENGTH.1 - SPLIT_LENGTH.0) * random(index, k, 1))
+                * width)
                 .max(SPLIT_LENGTH.2);
             let steps = (length / SPACING) as usize;
             let end = k + steps;
@@ -291,10 +322,12 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
                         let p = main[j];
                         let (before, after) = (main[j - 1].direction, main[j + 1].direction);
                         let across = (after - before).cross(p.direction).normalize_or_zero();
-                        let offset = reach * (std::f32::consts::PI * t).sin().max(0.).powf(0.7) * side;
+                        let offset =
+                            reach * (std::f32::consts::PI * t).sin().max(0.).powf(0.7) * side;
                         PlanetRiverPoint {
                             direction: (p.direction * radius + across * offset).normalize(),
-                            width: branch_width * (0.6 + 0.4 * (std::f32::consts::PI * t).sin().max(0.)),
+                            width: branch_width
+                                * (0.6 + 0.4 * (std::f32::consts::PI * t).sin().max(0.)),
                             depth: p.depth * SPLIT_SHARE.sqrt(),
                             ..p
                         }
@@ -323,9 +356,10 @@ const JOIN_BLEND: usize = 8;
 /// would overlap all along).
 fn join_parent(points: &mut Vec<PlanetRiverPoint>, parent: &PlanetRiver, radius: f32) {
     let touching = |point: &PlanetRiverPoint| {
-        parent.points.iter().any(|q| {
-            q.direction.distance(point.direction) * radius < (q.width + point.width) / 2.
-        })
+        parent
+            .points
+            .iter()
+            .any(|q| q.direction.distance(point.direction) * radius < (q.width + point.width) / 2.)
     };
     // (Not in its first points: a tributary starting right by its parent keeps a little length.)
     if let Some(first) = (4..points.len()).find(|&k| touching(&points[k])) {
@@ -334,7 +368,10 @@ fn join_parent(points: &mut Vec<PlanetRiverPoint>, parent: &PlanetRiver, radius:
     let n = points.len();
     let end = points[n - 1].direction;
     let Some(nearest) = (0..parent.points.len()).max_by(|&a, &b| {
-        parent.points[a].direction.dot(end).total_cmp(&parent.points[b].direction.dot(end))
+        parent.points[a]
+            .direction
+            .dot(end)
+            .total_cmp(&parent.points[b].direction.dot(end))
     }) else {
         return;
     };
@@ -433,10 +470,18 @@ fn through_lakes(
             let steps = ((pair[0].distance(pair[1]) * radius / SPACING).ceil() as usize).max(1);
             for k in 0..steps {
                 let direction = pair[0].lerp(pair[1], k as f32 / steps as f32).normalize();
-                points.push(PlanetRiverPoint { direction, level, ..like });
+                points.push(PlanetRiverPoint {
+                    direction,
+                    level,
+                    ..like
+                });
             }
         }
-        points.push(PlanetRiverPoint { direction: *route.last().unwrap(), level, ..like });
+        points.push(PlanetRiverPoint {
+            direction: *route.last().unwrap(),
+            level,
+            ..like
+        });
         points
     };
     for river in rivers.iter_mut() {
@@ -452,7 +497,9 @@ fn through_lakes(
             let level = filled[entry].min(last.level);
             let mut route = vec![last.direction];
             route.extend(path.iter().map(|&i| grid.direction(i)));
-            river.points.extend(points_along(route, last, level).into_iter().skip(1));
+            river
+                .points
+                .extend(points_along(route, last, level).into_iter().skip(1));
         }
         // Out of a lake (next to the source, not the one it flows into): from its deepest.
         if let Some(entry) = lake_cell_near(first.direction)
@@ -485,7 +532,11 @@ fn relax_bends(points: &mut [PlanetRiverPoint], radius: f32) {
     for _ in 0..RELAX_ROUNDS {
         let mut moved = false;
         for i in 1..n - 1 {
-            let (a, b, c) = (points[i - 1].direction, points[i].direction, points[i + 1].direction);
+            let (a, b, c) = (
+                points[i - 1].direction,
+                points[i].direction,
+                points[i + 1].direction,
+            );
             let (ab, bc) = ((b - a) * radius, (c - b) * radius);
             let (la, lc) = (ab.length(), bc.length());
             let target = (a + c).normalize();
@@ -516,7 +567,11 @@ fn chaikin(path: &[(Vec3, f32, f32)], iterations: usize, radius: f32) -> Vec<(Ve
         for pair in path.windows(2) {
             let ((a, la, wa), (b, lb, wb)) = (pair[0], pair[1]);
             for t in [0.25, 0.75] {
-                next.push(((a.lerp(b, t)).normalize() * radius, la + (lb - la) * t, wa + (wb - wa) * t));
+                next.push((
+                    (a.lerp(b, t)).normalize() * radius,
+                    la + (lb - la) * t,
+                    wa + (wb - wa) * t,
+                ));
             }
         }
         next.push(*path.last().unwrap());
@@ -536,7 +591,11 @@ fn resample(path: &[(Vec3, f32, f32)], spacing: f32) -> Vec<(Vec3, f32, f32)> {
         while t <= length {
             let f = t / length;
             let radius = a.length();
-            result.push((a.lerp(b, f).normalize() * radius, la + (lb - la) * f, wa + (wb - wa) * f));
+            result.push((
+                a.lerp(b, f).normalize() * radius,
+                la + (lb - la) * f,
+                wa + (wb - wa) * f,
+            ));
             t += spacing;
         }
         carry = length - (t - spacing);
@@ -556,5 +615,7 @@ pub(crate) fn for_cells_within(
     radius: f32,
     mut f: impl FnMut(usize, f32),
 ) {
-    grid.for_cells_within(center, radius / radius_of_planet, |i, angle| f(i, angle * radius_of_planet));
+    grid.for_cells_within(center, radius / radius_of_planet, |i, angle| {
+        f(i, angle * radius_of_planet)
+    });
 }

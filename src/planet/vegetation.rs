@@ -21,8 +21,8 @@ use bevy::{
 };
 use worldgen::{
     Biome,
-    noise::{Noise, hash, smoothstep},
     climate::Koppen,
+    noise::{Noise, hash, smoothstep},
     springs::PlanetSpringKind,
     surface::PlanetSurface,
 };
@@ -461,7 +461,9 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
     let per_chunk = (CHUNK_CELLS as f32 * cell_length / ROCK_CELL).round() as i64;
     let step = CHUNK_CELLS as f32 / per_chunk as f32;
     let seed = surface.seed() ^ 0x0C4F_5E7Du32 ^ (chunk.face as u32 + 1).wrapping_mul(0x85EB_CA6B);
-    let random = |x: i64, z: i64, k: u32| hash(seed.wrapping_add(k), x as u32, z as u32) as f32 / u32::MAX as f32;
+    let random = |x: i64, z: i64, k: u32| {
+        hash(seed.wrapping_add(k), x as u32, z as u32) as f32 / u32::MAX as f32
+    };
     let fields = Noise::new(seed ^ 0xF1E1D);
     let first = (chunk.min / step).round().as_i64vec2();
     let mut instances = Vec::new();
@@ -479,8 +481,10 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
                 continue;
             }
             let slope = Vec2::new(
-                surface.heights.bilinear(chunk.face, p + Vec2::X) - surface.heights.bilinear(chunk.face, p - Vec2::X),
-                surface.heights.bilinear(chunk.face, p + Vec2::Y) - surface.heights.bilinear(chunk.face, p - Vec2::Y),
+                surface.heights.bilinear(chunk.face, p + Vec2::X)
+                    - surface.heights.bilinear(chunk.face, p - Vec2::X),
+                surface.heights.bilinear(chunk.face, p + Vec2::Y)
+                    - surface.heights.bilinear(chunk.face, p - Vec2::Y),
             )
             .length()
                 / (2. * cell_length);
@@ -489,7 +493,11 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
                 .as_ref()
                 .map_or([0.; 5], |w| w.each_ref().map(|f| f.bilinear(chunk.face, p)));
             // Rocky ground, in fields (rock-strewn slopes and plains, clear stretches between).
-            let field = smoothstep(-0.3, 0.4, fields.fbm3(surface.direction(chunk.face, p) * surface.radius / 18., 2));
+            let field = smoothstep(
+                -0.3,
+                0.4,
+                fields.fbm3(surface.direction(chunk.face, p) * surface.radius / 18., 2),
+            );
             let rocky = (smoothstep(0.25, 1., slope) * 0.8 + desert * 0.5 + cold * 0.3 + 0.08)
                 * (1. - 0.8 * forest)
                 * field;
@@ -549,8 +557,16 @@ fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
         let flank = spring.width * 0.4 + 0.3;
         for (k, (name, offset, scale)) in [
             (tall, Vec2::new(-0.45, 0.), SPRING_ROCK_SCALE),
-            ("boulder_a", Vec2::new(-0.15, flank), SPRING_ROCK_SCALE * 0.55),
-            ("boulder_c", Vec2::new(-0.2, -flank), SPRING_ROCK_SCALE * 0.45),
+            (
+                "boulder_a",
+                Vec2::new(-0.15, flank),
+                SPRING_ROCK_SCALE * 0.55,
+            ),
+            (
+                "boulder_c",
+                Vec2::new(-0.2, -flank),
+                SPRING_ROCK_SCALE * 0.45,
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -559,7 +575,11 @@ fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
             let height = surface.height_at(direction) - 0.08;
             // Upright, facing upstream, turned a little.
             let upstream = (-spring.downstream).reject_from(direction).normalize();
-            let facing = Quat::from_mat3(&Mat3::from_cols(upstream, direction, upstream.cross(direction)));
+            let facing = Quat::from_mat3(&Mat3::from_cols(
+                upstream,
+                direction,
+                upstream.cross(direction),
+            ));
             instances.push(Instance {
                 species: species_index(name),
                 position: direction * (surface.radius + height),
@@ -600,7 +620,11 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
         return Biome::TropicalBeach;
     }
     if height < BEACH_HEIGHT && ocean > COAST.0 {
-        return if tropical { Biome::TropicalBeach } else { Biome::Beach };
+        return if tropical {
+            Biome::TropicalBeach
+        } else {
+            Biome::Beach
+        };
     }
     // Fresh lava and glacier ice: bare.
     if surface.lava.bilinear(face, p) > 0.4
@@ -642,12 +666,18 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     } else if surface.badlands.bilinear(face, p) > 0.5 {
         Biome::Badlands
     } else if desert > 0.5 {
-        if surface.erg.bilinear(face, p) > 0.5 { Biome::Erg } else { Biome::Desert }
+        if surface.erg.bilinear(face, p) > 0.5 {
+            Biome::Erg
+        } else {
+            Biome::Desert
+        }
     } else if forest * (0.6 + 0.8 * groves) > 0.45 {
         match koppen {
             Some(Koppen::Af | Koppen::Am) => Biome::Rainforest,
             // (Cooler and wet at altitude in the tropics.)
-            Some(Koppen::Cfa | Koppen::Cfb | Koppen::Cfc | Koppen::Cwa) if tropical && height > CLOUD_FOREST_HEIGHT => {
+            Some(Koppen::Cfa | Koppen::Cfb | Koppen::Cfc | Koppen::Cwa)
+                if tropical && height > CLOUD_FOREST_HEIGHT =>
+            {
                 Biome::CloudForest
             }
             _ if cold > 0.5 => Biome::ConiferForest,
@@ -657,7 +687,11 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
         Biome::Savanna
     } else if koppen == Some(Koppen::ET) {
         // Polar lowlands, or above the tree line on mountains.
-        if surface.direction(face, p).y.abs() > TUNDRA_SIN { Biome::Tundra } else { Biome::AlpineMeadow }
+        if surface.direction(face, p).y.abs() > TUNDRA_SIN {
+            Biome::Tundra
+        } else {
+            Biome::AlpineMeadow
+        }
     } else if cold > 0.6 {
         Biome::Alpine
     } else if dryness > 0.65 {

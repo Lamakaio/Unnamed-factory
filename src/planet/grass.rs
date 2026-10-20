@@ -122,7 +122,9 @@ fn update_near_grass(
     });
     wanted.retain(|tile| !state.tiles.contains_key(tile));
     let distance = |(face, tile): &(usize, IVec2)| {
-        surface.direction(*face, tile.as_vec2() + 0.5).distance_squared(up)
+        surface
+            .direction(*face, tile.as_vec2() + 0.5)
+            .distance_squared(up)
     };
     wanted.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
     for (face, tile) in wanted.into_iter().take(TILES_PER_FRAME) {
@@ -175,7 +177,11 @@ fn grass_at(surface: &PlanetSurface, face: usize, p: Vec2) -> Option<(Vec3, f32)
     let dry = (dryness * 3.).round() / 3.;
     let lush = srgb(0.40, 0.66, 0.24).lerp(srgb(0.80, 0.72, 0.38), dry);
     let alpine = (1. - forest) * cold * 0.8;
-    let color = if alpine > 0.5 { srgb(0.60, 0.68, 0.42) } else { lush };
+    let color = if alpine > 0.5 {
+        srgb(0.60, 0.68, 0.42)
+    } else {
+        lush
+    };
     let density = if alpine > 0.5 { 0.6 } else { 1. - 0.1 * dry };
     Some((color, density * (1. - forest)))
 }
@@ -188,14 +194,20 @@ fn tile_mesh(surface: &PlanetSurface, face: usize, tile: IVec2) -> Option<(Mesh,
     let up = surface.direction(face, center);
     let ground = surface.position(face, center);
     let (wind, _) = surface.wind_at(face, center);
-    let downwind = wind.reject_from(up).try_normalize().unwrap_or(up.any_orthonormal_vector());
+    let downwind = wind
+        .reject_from(up)
+        .try_normalize()
+        .unwrap_or(up.any_orthonormal_vector());
     let rotation = Quat::from_mat3(&Mat3::from_cols(downwind, up, downwind.cross(up)));
     let to_local = rotation.inverse();
     // The wind in face coordinates, for the gust pattern (along / across it).
     let ex = surface.direction(face, center + Vec2::X) - surface.direction(face, center - Vec2::X);
     let ey = surface.direction(face, center + Vec2::Y) - surface.direction(face, center - Vec2::Y);
-    let wind_2d = Vec2::new(downwind.dot(ex) / ex.length_squared(), downwind.dot(ey) / ey.length_squared())
-        .normalize_or(Vec2::X);
+    let wind_2d = Vec2::new(
+        downwind.dot(ex) / ex.length_squared(),
+        downwind.dot(ey) / ey.length_squared(),
+    )
+    .normalize_or(Vec2::X);
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut colors: Vec<[f32; 4]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
@@ -252,13 +264,19 @@ fn tile_mesh(surface: &PlanetSurface, face: usize, tile: IVec2) -> Option<(Mesh,
         return None;
     }
     let count = positions.len();
-    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        // Lit like the ground under them.
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 1., 0.]; count])
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, pattern)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_inserted_indices(Indices::U32((0..count as u32).collect()));
-    Some((mesh, Transform::from_translation(ground).with_rotation(rotation)))
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    // Lit like the ground under them.
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0., 1., 0.]; count])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, pattern)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_indices(Indices::U32((0..count as u32).collect()));
+    Some((
+        mesh,
+        Transform::from_translation(ground).with_rotation(rotation),
+    ))
 }

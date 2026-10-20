@@ -23,8 +23,8 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use worldgen::{
-    planet::{PlanetSettings, generate_planet},
     climate::{ClimateSettings, PlanetClimate, simulate},
+    planet::{PlanetSettings, generate_planet},
     sphere::FACES,
     surface::PlanetSurface,
 };
@@ -59,21 +59,23 @@ impl Plugin for PlanetPlugin {
             grass::PlanetGrassPlugin,
             inspect::InspectPlugin,
         ))
-            .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
-            .add_systems(Startup, move |commands: Commands| start_generation(commands, seed, n))
-            .add_systems(
-                Update,
-                (
-                    finish_generation.run_if(in_state(AppState::Loading)),
-                    (schedule_chunk_meshes, finish_chunk_meshes)
-                        .chain()
-                        .run_if(in_state(AppState::InGame)),
-                    (camera::control, camera::apply, camera::follow_sun)
-                        .chain()
-                        .run_if(in_state(AppState::InGame)),
-                ),
-            )
-            .add_systems(OnEnter(AppState::InGame), (spawn_planet, view_planet));
+        .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
+        .add_systems(Startup, move |commands: Commands| {
+            start_generation(commands, seed, n)
+        })
+        .add_systems(
+            Update,
+            (
+                finish_generation.run_if(in_state(AppState::Loading)),
+                (schedule_chunk_meshes, finish_chunk_meshes)
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
+                (camera::control, camera::apply, camera::follow_sun)
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
+            ),
+        )
+        .add_systems(OnEnter(AppState::InGame), (spawn_planet, view_planet));
     }
 }
 
@@ -92,7 +94,15 @@ pub struct PlanetWorld {
 }
 
 #[derive(Resource)]
-struct Generation(Task<(PlanetSurface, Vec<Vec<u8>>, PlanetClimate, Vec<Vec<u8>>, f32)>);
+struct Generation(
+    Task<(
+        PlanetSurface,
+        Vec<Vec<u8>>,
+        PlanetClimate,
+        Vec<Vec<u8>>,
+        f32,
+    )>,
+);
 
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
@@ -107,7 +117,10 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
         let climate_time = stage.elapsed();
         let stage = Instant::now();
         let surface = PlanetSurface::new(&planet, Some(&climate));
-        info!("Climate in {climate_time:.1?}, surface in {:.1?}", stage.elapsed());
+        info!(
+            "Climate in {climate_time:.1?}, surface in {:.1?}",
+            stage.elapsed()
+        );
         let sea_start = Instant::now();
         let sea = water::sea_textures(&planet, &surface);
         let rock = rock_textures(&planet, &surface);
@@ -194,7 +207,11 @@ fn spawn_planet(
         .into_iter()
         .map(|data| {
             let mut image = Image::new(
-                Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+                Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: 1,
+                },
                 TextureDimension::D2,
                 data,
                 TextureFormat::Rgba16Float,
@@ -240,7 +257,14 @@ fn spawn_planet(
             }
         }
     }
-    water::spawn(&mut commands, surface, sea, &mut meshes, &mut images, &mut water_materials);
+    water::spawn(
+        &mut commands,
+        surface,
+        sea,
+        &mut meshes,
+        &mut images,
+        &mut water_materials,
+    );
 }
 
 /// Look at the planet from orbit, with the planet camera; space has no atmosphere nor fog
@@ -261,7 +285,14 @@ fn view_planet(
     let view = std::env::var("UF_PLANET_CAMERA")
         .ok()
         .map_or(start, |view| camera::View::parse(&view, start));
-    camera::take_over(&mut commands, *camera, view.focus, view.distance, view.pitch, view.heading);
+    camera::take_over(
+        &mut commands,
+        *camera,
+        view.focus,
+        view.distance,
+        view.pitch,
+        view.heading,
+    );
 }
 
 /// Start meshing the chunks that need it (no mesh yet, or the camera moved), nearest first.
@@ -292,7 +323,9 @@ fn schedule_chunk_meshes(
         let surface = world.surface.clone();
         let task = AsyncComputeTaskPool::get()
             .spawn(async move { mesh::build_chunk_mesh(&surface, &chunk, origin, camera) });
-        commands.entity(entity).insert(ChunkMeshTask { task, camera });
+        commands
+            .entity(entity)
+            .insert(ChunkMeshTask { task, camera });
     }
 }
 
@@ -300,7 +333,13 @@ fn finish_chunk_meshes(
     mut commands: Commands,
     material: Res<TerrainMaterial>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut chunks: Query<(Entity, &PlanetChunk, &mut ChunkState, &mut ChunkMeshTask, Option<&Mesh3d>)>,
+    mut chunks: Query<(
+        Entity,
+        &PlanetChunk,
+        &mut ChunkState,
+        &mut ChunkMeshTask,
+        Option<&Mesh3d>,
+    )>,
 ) {
     for (entity, chunk, mut state, mut task, mesh3d) in &mut chunks {
         let Some(mesh) = check_ready(&mut task.task) else {
@@ -313,9 +352,10 @@ fn finish_chunk_meshes(
                 }
             }
             None => {
-                commands
-                    .entity(entity)
-                    .insert((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.0[chunk.face].clone())));
+                commands.entity(entity).insert((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(material.0[chunk.face].clone()),
+                ));
             }
         }
         state.built_for = Some(task.camera);
@@ -333,12 +373,20 @@ fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> 
         .map(|face| {
             let mut data = Vec::with_capacity(per_face * 8);
             for i in face * per_face..(face + 1) * per_face {
-                let cell = Vec2::new(((i - face * per_face) % n) as f32, ((i - face * per_face) / n) as f32);
+                let cell = Vec2::new(
+                    ((i - face * per_face) % n) as f32,
+                    ((i - face * per_face) / n) as f32,
+                );
                 let ice = surface.ice.bilinear(face, cell);
                 let erg = surface.erg.bilinear(face, cell);
                 let badlands = surface.badlands.bilinear(face, cell).clamp(0., 1.);
                 let rock = planet.rock[i] as f32 + 0.9 * badlands;
-                for value in [rock, planet.strata[i], planet.lava[i] - erg, planet.reef[i] - ice] {
+                for value in [
+                    rock,
+                    planet.strata[i],
+                    planet.lava[i] - erg,
+                    planet.reef[i] - ice,
+                ] {
                     data.extend(half::f16::from_f32(value).to_le_bytes());
                 }
             }

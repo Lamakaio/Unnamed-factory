@@ -19,7 +19,9 @@ const RIVER_AREA: f32 = 150.;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let out = args.next().expect("usage: planet_preview <out_dir> [--n <cells>] [--coarse <steps>] [seeds...]");
+    let out = args
+        .next()
+        .expect("usage: planet_preview <out_dir> [--n <cells>] [--coarse <steps>] [seeds...]");
     std::fs::create_dir_all(&out).unwrap();
     let mut n = PlanetSettings::default().n;
     let mut coarse_steps = PlanetSettings::default().coarse_steps;
@@ -50,8 +52,16 @@ fn main() {
         report(seed, &planet);
         let shade = hillshade(&planet);
         let colour = |i: usize| relief_colour(&planet, &shade, i);
-        write_map(&Path::new(&out).join(format!("{seed}_map.png")), &planet, colour);
-        write_globes(&Path::new(&out).join(format!("{seed}_globes.png")), &planet, colour);
+        write_map(
+            &Path::new(&out).join(format!("{seed}_map.png")),
+            &planet,
+            colour,
+        );
+        write_globes(
+            &Path::new(&out).join(format!("{seed}_globes.png")),
+            &planet,
+            colour,
+        );
         let plates = |i: usize| {
             let k = planet.plate[i] as u32;
             let hue = [
@@ -60,18 +70,28 @@ fn main() {
                 (k.wrapping_mul(181) % 255) as f32 / 255.,
             ];
             // Continental plates bright, oceanic ones dark; land brighter still.
-            let tint = if planet.continental_plate[k as usize] { 0.75 } else { 0.35 }
-                + if planet.sea[i] { 0. } else { 0.25 };
+            let tint = if planet.continental_plate[k as usize] {
+                0.75
+            } else {
+                0.35
+            } + if planet.sea[i] { 0. } else { 0.25 };
             let mountain = planet.range[i];
             hue.map(|c| (c * 0.6 + 0.3) * tint * (1. - 0.5 * mountain))
         };
-        write_map(&Path::new(&out).join(format!("{seed}_plates.png")), &planet, plates);
+        write_map(
+            &Path::new(&out).join(format!("{seed}_plates.png")),
+            &planet,
+            plates,
+        );
     }
 }
 
 fn report(seed: u64, planet: &Planet) {
     let cells = planet.grid.len();
-    let land: Vec<f32> = (0..cells).filter(|&i| !planet.sea[i]).map(|i| planet.heights[i]).collect();
+    let land: Vec<f32> = (0..cells)
+        .filter(|&i| !planet.sea[i])
+        .map(|i| planet.heights[i])
+        .collect();
     let mut sorted = land.clone();
     sorted.sort_by(f32::total_cmp);
     let percentile = |p: f32| sorted[((sorted.len() - 1) as f32 * p) as usize];
@@ -87,9 +107,12 @@ fn report(seed: u64, planet: &Planet) {
         percentile(1.),
     );
     // A hash of the result, to check that optimisations leave it unchanged.
-    let hash = planet.heights.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
-        (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3)
-    });
+    let hash = planet
+        .heights
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, v| {
+            (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3)
+        });
     println!("  heights hash {hash:016x}");
     for (name, duration) in &planet.timings {
         println!("  {name}: {:.2} s", duration.as_secs_f32());
@@ -156,7 +179,11 @@ fn relief_colour(planet: &Planet, shade: &[f32], i: usize) -> [f32; 3] {
         }
     }
     if planet.lake_depth[i] > 0.05 {
-        return mix([0.25, 0.5, 0.78], [0.12, 0.3, 0.6], planet.lake_depth[i] / 4.);
+        return mix(
+            [0.25, 0.5, 0.78],
+            [0.12, 0.3, 0.6],
+            planet.lake_depth[i] / 4.,
+        );
     }
     let colour = colour.map(|c| c * shade[i]);
     let river = planet.drainage[i] / RIVER_AREA;
@@ -173,9 +200,11 @@ fn write_map(path: &Path, planet: &Planet, colour: impl Fn(usize) -> [f32; 3]) {
     let height = width / 2;
     let mut image = vec![[0u8; 3]; width * height];
     for y in 0..height {
-        let latitude = std::f32::consts::FRAC_PI_2 - (y as f32 + 0.5) / height as f32 * std::f32::consts::PI;
+        let latitude =
+            std::f32::consts::FRAC_PI_2 - (y as f32 + 0.5) / height as f32 * std::f32::consts::PI;
         for x in 0..width {
-            let longitude = (x as f32 + 0.5) / width as f32 * std::f32::consts::TAU - std::f32::consts::PI;
+            let longitude =
+                (x as f32 + 0.5) / width as f32 * std::f32::consts::TAU - std::f32::consts::PI;
             let direction = Vec3::new(
                 latitude.cos() * longitude.cos(),
                 latitude.sin(),

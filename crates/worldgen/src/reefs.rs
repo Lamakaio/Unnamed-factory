@@ -61,7 +61,11 @@ pub fn build(
     // Atolls first (their lagoons are not coasts to fringe).
     for v in volcanoes {
         let centre = grid.cell_at(v.direction);
-        if !sea[centre] || v.kind != VolcanoKind::Shield || v.age < ATOLL_AGE || tropical(v.direction) < 0.5 {
+        if !sea[centre]
+            || v.kind != VolcanoKind::Shield
+            || v.age < ATOLL_AGE
+            || tropical(v.direction) < 0.5
+        {
             continue;
         }
         let ring = v.radius * ATOLL_RING;
@@ -113,7 +117,9 @@ pub fn build(
     // Volcanic islands old enough for a barrier reef.
     let barrier_near = |d: bevy_math::Vec3| {
         volcanoes.iter().any(|v| {
-            v.age >= BARRIER_AGE && v.age < ATOLL_AGE && d.distance(v.direction) * radius < v.radius * 0.9
+            v.age >= BARRIER_AGE
+                && v.age < ATOLL_AGE
+                && d.distance(v.direction) * radius < v.radius * 0.9
         })
     };
     // (Each cell on its own: on all cores.)

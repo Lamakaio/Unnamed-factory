@@ -48,14 +48,20 @@ pub fn carve(grid: &SphereGrid, radius: f32, seed: u64, heights: &mut [f32], sea
     // only lowers valleys).
     let relief = crate::par::map(mouths.len(), |k| {
         let mut highest = f32::MIN;
-        grid.for_cells_within(grid.direction(mouths[k]), RELIEF_RADIUS / radius, |i, _| highest = highest.max(heights[i]));
+        grid.for_cells_within(grid.direction(mouths[k]), RELIEF_RADIUS / radius, |i, _| {
+            highest = highest.max(heights[i])
+        });
         highest
     });
     let mut chosen: Vec<usize> = Vec::new();
     let mut carved = vec![false; cells];
     for (k, &mouth) in mouths.iter().enumerate() {
         let d = grid.direction(mouth);
-        if chosen.iter().any(|&m| grid.direction(m).distance(d) * radius < SPACING) || relief[k] < MIN_RELIEF {
+        if chosen
+            .iter()
+            .any(|&m| grid.direction(m).distance(d) * radius < SPACING)
+            || relief[k] < MIN_RELIEF
+        {
             continue;
         }
         chosen.push(mouth);
@@ -88,7 +94,10 @@ pub fn carve(grid: &SphereGrid, radius: f32, seed: u64, heights: &mut [f32], sea
                 along += grid.direction(c).distance(grid.direction(path[k - 1])) * radius;
             }
             let t = along / total;
-            let depth = DEPTH * smoothstep(0., 0.15, t) * (0.6 + 0.4 * smoothstep(0.0, 0.25, t)) * (1. - t * t)
+            let depth = DEPTH
+                * smoothstep(0., 0.15, t)
+                * (0.6 + 0.4 * smoothstep(0.0, 0.25, t))
+                * (1. - t * t)
                 + 0.4 * (1. - t);
             grid.for_cells_within(grid.direction(c), half / radius, |i, angle| {
                 let r = angle * radius;

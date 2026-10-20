@@ -42,7 +42,12 @@ impl Ord for Entry {
 /// `epsilon` above a neighbour: the least `f` with `f(i) = max(h(i), min f(j) + epsilon)`, as
 /// Priority-Flood+ε makes it), so steepest-descent routing works across them; with
 /// `epsilon == 0`, lakes come out perfectly flat.
-pub fn priority_flood(grid: &impl Grid, heights: &[f32], base_level: &[bool], epsilon: f32) -> Vec<f32> {
+pub fn priority_flood(
+    grid: &impl Grid,
+    heights: &[f32],
+    base_level: &[bool],
+    epsilon: f32,
+) -> Vec<f32> {
     let (_, _, mut filled) = route_depressions(grid, heights, base_level, |_, _| 1.);
     if epsilon <= 0. {
         return filled;
@@ -53,7 +58,10 @@ pub fn priority_flood(grid: &impl Grid, heights: &[f32], base_level: &[bool], ep
         if outlet(i) {
             return None;
         }
-        let lowest = grid.neighbours(i).map(|(j, _)| filled[j]).fold(f32::MAX, f32::min);
+        let lowest = grid
+            .neighbours(i)
+            .map(|(j, _)| filled[j])
+            .fold(f32::MAX, f32::min);
         let level = (lowest + epsilon).max(heights[i]);
         // (Not for float rounding: `lowest + epsilon` can come out a hair above a cell already
         // `epsilon` up, and raising by hairs would ripple through the flats for hundreds of
@@ -68,7 +76,10 @@ pub fn priority_flood(grid: &impl Grid, heights: &[f32], base_level: &[bool], ep
         !outlet(i) && grid.neighbours(i).all(|(j, _)| water[j] >= water[i])
     });
     let mut queue: std::collections::VecDeque<u32> = par::map(heights.len(), |i| {
-        flat[i] && grid.neighbours(i).any(|(j, _)| !flat[j] && water[j] <= water[i])
+        flat[i]
+            && grid
+                .neighbours(i)
+                .any(|(j, _)| !flat[j] && water[j] <= water[i])
     })
     .iter()
     .enumerate()
@@ -116,7 +127,10 @@ pub fn priority_flood(grid: &impl Grid, heights: &[f32], base_level: &[bool], ep
         }
         active.clear();
         for &(i, _) in &raised {
-            for (j, _) in grid.neighbours(i as usize).chain(std::iter::once((i as usize, 0.))) {
+            for (j, _) in grid
+                .neighbours(i as usize)
+                .chain(std::iter::once((i as usize, 0.)))
+            {
                 if stamp[j] != round && !outlet(j) {
                     stamp[j] = round;
                     active.push(j as u32);
@@ -130,12 +144,19 @@ pub fn priority_flood(grid: &impl Grid, heights: &[f32], base_level: &[bool], ep
 /// The classic sequential Priority-Flood (a priority queue from the outlets), to check
 /// [`priority_flood`] against.
 #[cfg(test)]
-pub fn priority_flood_reference(grid: &impl Grid, heights: &[f32], base_level: &[bool], epsilon: f32) -> Vec<f32> {
+pub fn priority_flood_reference(
+    grid: &impl Grid,
+    heights: &[f32],
+    base_level: &[bool],
+    epsilon: f32,
+) -> Vec<f32> {
     let mut filled = heights.to_vec();
     let mut closed = base_level.to_vec();
     let mut open = BinaryHeap::new();
     for i in 0..heights.len() {
-        if base_level[i] && grid.neighbours(i).any(|(j, _)| !base_level[j]) || !base_level[i] && grid.is_border(i) {
+        if base_level[i] && grid.neighbours(i).any(|(j, _)| !base_level[j])
+            || !base_level[i] && grid.is_border(i)
+        {
             closed[i] = true;
             open.push(Entry(filled[i], i as u32));
         }
@@ -235,7 +256,8 @@ impl FlowGraph {
         base_level: &[bool],
         weight: impl Fn(usize, usize) -> f32 + Sync,
     ) -> (Self, Vec<f32>) {
-        let (receivers, receiver_distance, water) = route_depressions(grid, heights, base_level, weight);
+        let (receivers, receiver_distance, water) =
+            route_depressions(grid, heights, base_level, weight);
         (Self::from_receivers(receivers, receiver_distance), water)
     }
 
@@ -273,7 +295,9 @@ impl FlowGraph {
                 order.push(i);
                 stack.extend(&donors[donor_count[i] as usize..donor_count[i + 1] as usize]);
             }
-            if order.len() > start + 1 { trees.push((start, order.len())); }
+            if order.len() > start + 1 {
+                trees.push((start, order.len()));
+            }
         }
         Self {
             receivers,
@@ -370,7 +394,11 @@ fn route_depressions(
                     }
                     let height = heights[i].max(heights[j]);
                     let (a, b) = if bi < bj { (i, j) } else { (j, i) };
-                    keep(&mut passes, (bi.min(bj), bi.max(bj)), (height, a as u32, b as u32));
+                    keep(
+                        &mut passes,
+                        (bi.min(bj), bi.max(bj)),
+                        (height, a as u32, b as u32),
+                    );
                 }
             }
             passes

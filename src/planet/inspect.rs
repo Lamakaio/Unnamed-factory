@@ -39,7 +39,9 @@ impl Plugin for InspectPlugin {
             .add_systems(
                 Update,
                 (
-                    start_report.run_if(bevy::input::common_conditions::input_just_pressed(KeyCode::F6)),
+                    start_report.run_if(bevy::input::common_conditions::input_just_pressed(
+                        KeyCode::F6,
+                    )),
                     type_description,
                     show_state,
                 )
@@ -58,9 +60,17 @@ pub enum Inspector {
     /// Waiting for the click on the problem.
     Picking,
     /// Typing the description of the problem at `point`.
-    Writing { point: Vec3, report: String, text: String },
+    Writing {
+        point: Vec3,
+        report: String,
+        text: String,
+    },
     /// Saving: the screenshot is taken next frame (the marker drawn).
-    Saving { point: Vec3, file: PathBuf, frames: u8 },
+    Saving {
+        point: Vec3,
+        file: PathBuf,
+        frames: u8,
+    },
 }
 
 impl Inspector {
@@ -86,10 +96,12 @@ fn spawn_ui(mut commands: Commands) {
             },
             BackgroundColor(Color::srgba(0.1, 0.1, 0.12, 0.8)),
         ))
-        .observe(|mut click: On<PointerClick>, mut inspector: ResMut<Inspector>| {
-            click.propagate(false);
-            *inspector = Inspector::Picking;
-        });
+        .observe(
+            |mut click: On<PointerClick>, mut inspector: ResMut<Inspector>| {
+                click.propagate(false);
+                *inspector = Inspector::Picking;
+            },
+        );
     commands.queue_spawn_scene(label("")).insert((
         Node {
             position_type: PositionType::Absolute,
@@ -104,17 +116,26 @@ fn spawn_ui(mut commands: Commands) {
 
 /// The reports asked for by `UF_PLANET_REPORT`, once (the camera placed).
 fn report_requested(world: Res<PlanetWorld>, camera: Query<&PlanetCamera>, mut done: Local<bool>) {
-    let (false, Ok(camera), Ok(points)) = (*done, camera.single(), std::env::var("UF_PLANET_REPORT")) else {
+    let (false, Ok(camera), Ok(points)) =
+        (*done, camera.single(), std::env::var("UF_PLANET_REPORT"))
+    else {
         return;
     };
     *done = true;
     for point in points.split(';') {
-        let values: Vec<f32> = point.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let values: Vec<f32> = point
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
         let [longitude, latitude] = values[..] else {
             continue;
         };
         let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
-        let direction = Vec3::new(latitude.cos() * longitude.cos(), latitude.sin(), latitude.cos() * longitude.sin());
+        let direction = Vec3::new(
+            latitude.cos() * longitude.cos(),
+            latitude.sin(),
+            latitude.cos() * longitude.sin(),
+        );
         let position = direction * (world.surface.radius + world.surface.height_at(direction));
         info!("{}", report(&world, position, camera));
     }
@@ -148,7 +169,11 @@ fn on_ground_click(
     let report = report(&world, position, camera);
     info!("{report}");
     if matches!(*inspector, Inspector::Picking) {
-        *inspector = Inspector::Writing { point: position, report, text: String::new() };
+        *inspector = Inspector::Writing {
+            point: position,
+            report,
+            text: String::new(),
+        };
     }
 }
 
@@ -159,12 +184,20 @@ fn type_description(
     mut inspector: ResMut<Inspector>,
     mut gizmos: Gizmos,
 ) {
-    let typed: Vec<KeyboardInput> = keys.read().filter(|k| k.state == ButtonState::Pressed).cloned().collect();
+    let typed: Vec<KeyboardInput> = keys
+        .read()
+        .filter(|k| k.state == ButtonState::Pressed)
+        .cloned()
+        .collect();
     // The marker on the spot, while writing and in the screenshot.
     if let Inspector::Writing { point, .. } | Inspector::Saving { point, .. } = &*inspector {
         let up = point.normalize();
         gizmos.line(*point, *point + up * 3., Color::srgb(1., 0.1, 0.6));
-        gizmos.circle(Isometry3d::new(*point + up * 0.05, Quat::from_rotation_arc(Vec3::Z, up)), 0.6, Color::srgb(1., 0.1, 0.6));
+        gizmos.circle(
+            Isometry3d::new(*point + up * 0.05, Quat::from_rotation_arc(Vec3::Z, up)),
+            0.6,
+            Color::srgb(1., 0.1, 0.6),
+        );
     }
     match &mut *inspector {
         Inspector::Picking => {
@@ -172,7 +205,11 @@ fn type_description(
                 *inspector = Inspector::Idle;
             }
         }
-        Inspector::Writing { point, report, text } => {
+        Inspector::Writing {
+            point,
+            report,
+            text,
+        } => {
             for key in &typed {
                 match &key.logical_key {
                     Key::Escape => {
@@ -182,7 +219,11 @@ fn type_description(
                     Key::Enter => {
                         let (point, file) = (*point, save_report(report, text));
                         *inspector = match file {
-                            Some(file) => Inspector::Saving { point, file, frames: 2 },
+                            Some(file) => Inspector::Saving {
+                                point,
+                                file,
+                                frames: 2,
+                            },
                             None => Inspector::Idle,
                         };
                         return;
@@ -204,7 +245,9 @@ fn type_description(
                 *frames -= 1;
                 return;
             }
-            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(file.with_extension("png")));
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(file.with_extension("png")));
             info!("Issue saved to {}", file.display());
             *inspector = Inspector::Idle;
         }
@@ -245,7 +288,9 @@ fn show_state(inspector: Res<Inspector>, mut status: Query<&mut Text, With<Statu
     let message = match &*inspector {
         Inspector::Idle | Inspector::Saving { .. } => String::new(),
         Inspector::Picking => "Click the problem on the ground (Esc: cancel)".into(),
-        Inspector::Writing { text, .. } => format!("Describe the problem, Enter saves, Esc cancels: {text}_"),
+        Inspector::Writing { text, .. } => {
+            format!("Describe the problem, Enter saves, Esc cancels: {text}_")
+        }
     };
     for mut status in &mut status {
         status.0 = message.clone();
@@ -257,10 +302,17 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
     let surface = &world.surface;
     let direction = position.normalize();
     let (face, p) = surface.face_coords(direction);
-    let (lon, lat) = (direction.z.atan2(direction.x).to_degrees(), direction.y.asin().to_degrees());
+    let (lon, lat) = (
+        direction.z.atan2(direction.x).to_degrees(),
+        direction.y.asin().to_degrees(),
+    );
     let height = surface.height(face, p);
     let mut out = String::new();
-    let _ = writeln!(out, "Ground at lon {lon:.2} lat {lat:.2} (face {face}, cell {:.1} {:.1})", p.x, p.y);
+    let _ = writeln!(
+        out,
+        "Ground at lon {lon:.2} lat {lat:.2} (face {face}, cell {:.1} {:.1})",
+        p.x, p.y
+    );
     let _ = writeln!(
         out,
         "  height {height:.3} (cells {:.3}), lake depth {:.3}, ocean {:.2}, wetness {:.2}, marsh/salt {:.2}",
@@ -293,7 +345,10 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
     let _ = writeln!(
         out,
         "  wind toward {:.0}° (from north), prevailing {:.1} m/s, strength {:.1} m/s",
-        wind.dot(east).atan2(wind.dot(north)).to_degrees().rem_euclid(360.),
+        wind.dot(east)
+            .atan2(wind.dot(north))
+            .to_degrees()
+            .rem_euclid(360.),
         wind.length(),
         strength
     );
@@ -352,12 +407,21 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
     for spring in surface.springs() {
         let distance = spring.direction.distance(direction) * surface.radius;
         if distance < 10. {
-            let _ = writeln!(out, "  spring of river {} ({:?}), {distance:.2} away", spring.river, match spring.kind {
-                worldgen::springs::PlanetSpringKind::Pond { .. } => "pond",
-                worldgen::springs::PlanetSpringKind::Hillside => "hillside",
-            });
+            let _ = writeln!(
+                out,
+                "  spring of river {} ({:?}), {distance:.2} away",
+                spring.river,
+                match spring.kind {
+                    worldgen::springs::PlanetSpringKind::Pond { .. } => "pond",
+                    worldgen::springs::PlanetSpringKind::Hillside => "hillside",
+                }
+            );
         }
     }
-    let _ = write!(out, "  view: UF_PLANET_CAMERA={}", super::camera::describe(camera));
+    let _ = write!(
+        out,
+        "  view: UF_PLANET_CAMERA={}",
+        super::camera::describe(camera)
+    );
     out
 }

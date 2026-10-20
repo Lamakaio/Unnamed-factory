@@ -57,13 +57,22 @@ pub fn build(
 }
 
 /// The new heights of the cells the barriers raise, and their nearest shore cell.
-fn raise(grid: &SphereGrid, radius: f32, seed: u64, reef: &[f32], heights: &[f32], sea: &[bool]) -> Vec<(usize, f32, usize)> {
+fn raise(
+    grid: &SphereGrid,
+    radius: f32,
+    seed: u64,
+    reef: &[f32],
+    heights: &[f32],
+    sea: &[bool],
+) -> Vec<(usize, f32, usize)> {
     let cells = grid.len();
     let noise = Noise::new(seed as u32 ^ 0xBA22);
     // Distance from the land over the sea (cells), and the nearest shore cell.
     let mut distance = vec![f32::INFINITY; cells];
     let mut shore = vec![usize::MAX; cells];
-    let mut queue: VecDeque<usize> = (0..cells).filter(|&i| !sea[i] && grid.neighbours(i).any(|(j, _)| sea[j])).collect();
+    let mut queue: VecDeque<usize> = (0..cells)
+        .filter(|&i| !sea[i] && grid.neighbours(i).any(|(j, _)| sea[j]))
+        .collect();
     for &i in &queue {
         distance[i] = 0.;
         shore[i] = i;
@@ -96,11 +105,19 @@ fn raise(grid: &SphereGrid, radius: f32, seed: u64, reef: &[f32], heights: &[f32
         }
         let d = grid.direction(i);
         let latitude = d.y.clamp(-1., 1.).asin().to_degrees().abs();
-        let band = smoothstep(LATITUDE.0, LATITUDE.0 + 4., latitude) * smoothstep(LATITUDE.1, LATITUDE.1 - 4., latitude);
-        smoothstep(0.5 - COVER, 0.6 - COVER, 0.5 + 0.5 * noise.fbm3(d * radius / STRETCH, 2)) * band
+        let band = smoothstep(LATITUDE.0, LATITUDE.0 + 4., latitude)
+            * smoothstep(LATITUDE.1, LATITUDE.1 - 4., latitude);
+        smoothstep(
+            0.5 - COVER,
+            0.6 - COVER,
+            0.5 + 0.5 * noise.fbm3(d * radius / STRETCH, 2),
+        ) * band
     });
     // Of those, the low ones (each shore cell looked at once).
-    let mut shores: Vec<usize> = (0..cells).filter(|&i| stretch[i] > 0.).map(|i| shore[i]).collect();
+    let mut shores: Vec<usize> = (0..cells)
+        .filter(|&i| stretch[i] > 0.)
+        .map(|i| shore[i])
+        .collect();
     shores.sort_unstable();
     shores.dedup();
     let lows = crate::par::map(shores.len(), |k| low(shores[k]));
@@ -111,7 +128,8 @@ fn raise(grid: &SphereGrid, radius: f32, seed: u64, reef: &[f32], heights: &[f32
             return None;
         }
         let p = grid.direction(i) * radius;
-        let at = BAR_DISTANCE.0 + (BAR_DISTANCE.1 - BAR_DISTANCE.0) * (0.5 + 0.5 * noise.layer(1).fbm3(p / 25., 2));
+        let at = BAR_DISTANCE.0
+            + (BAR_DISTANCE.1 - BAR_DISTANCE.0) * (0.5 + 0.5 * noise.layer(1).fbm3(p / 25., 2));
         // Shallow enough where the bar stands.
         let dx = distance[i] - at;
         if original[i] < -MAX_DEPTH && dx.abs() < BAR_HALF_WIDTH {
@@ -119,8 +137,16 @@ fn raise(grid: &SphereGrid, radius: f32, seed: u64, reef: &[f32], heights: &[f32
         }
         // The bar: a flat top, a gentle shoreface down to the sea, a steeper back to the
         // lagoon; inlets break it.
-        let inlet = smoothstep(INLETS, INLETS - 0.12, 0.5 + 0.5 * noise.layer(2).fbm3(p / 14., 2));
-        let down = if dx > 0. { SHOREFACE * (dx - BAR_HALF_WIDTH).max(0.) } else { BACK * (-dx - BAR_HALF_WIDTH).max(0.) };
+        let inlet = smoothstep(
+            INLETS,
+            INLETS - 0.12,
+            0.5 + 0.5 * noise.layer(2).fbm3(p / 14., 2),
+        );
+        let down = if dx > 0. {
+            SHOREFACE * (dx - BAR_HALF_WIDTH).max(0.)
+        } else {
+            BACK * (-dx - BAR_HALF_WIDTH).max(0.)
+        };
         let top = BAR_CREST * smoothstep(BAR_HALF_WIDTH * 1.4, 0., dx.abs()).sqrt();
         let bar = top - down;
         let lagoon = smoothstep(-BAR_HALF_WIDTH, -BAR_HALF_WIDTH * 2., dx) * stretch;

@@ -26,10 +26,10 @@ use std::collections::{HashMap, VecDeque};
 use bevy::{
     asset::RenderAssetUsages,
     image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     light::NotShadowCaster,
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use half::f16;
 use worldgen::{
@@ -37,8 +37,8 @@ use worldgen::{
     planet::Planet,
     rivers::PlanetRiver,
     sea::sea_field,
-    springs::{PlanetSpringKind, SPOUT_HEIGHT},
     sphere::FACES,
+    springs::{PlanetSpringKind, SPOUT_HEIGHT},
     surface::PlanetSurface,
 };
 
@@ -129,13 +129,19 @@ impl Water {
 
     fn build(self, rivers: bool) -> Mesh {
         // (UV0: the flow on rivers, the wind elsewhere; UV1 tells the shader it is a river.)
-        let normals: Vec<[f32; 3]> =
-            self.positions.iter().map(|p| Vec3::from(*p).normalize_or_zero().to_array()).collect();
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.coords)
-            .with_inserted_indices(Indices::U32(self.indices));
+        let normals: Vec<[f32; 3]> = self
+            .positions
+            .iter()
+            .map(|p| Vec3::from(*p).normalize_or_zero().to_array())
+            .collect();
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.coords)
+        .with_inserted_indices(Indices::U32(self.indices));
         mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.flow);
         if rivers {
             mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, self.flow_b);
@@ -180,7 +186,11 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
     let count = points.len();
     // The river unrolled along its length, for the flat map's profile (which only uses
     // distances along it and levels). Rivers into the sea stay just under its level.
-    let floor = if river.end == RiverEnd::Sea { -0.08 } else { f32::MIN };
+    let floor = if river.end == RiverEnd::Sea {
+        -0.08
+    } else {
+        f32::MIN
+    };
     let mut along = 0.;
     let unrolled: Vec<RiverPoint> = points
         .iter()
@@ -225,8 +235,8 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
         if here.drop > 0. && k + 1 < count {
             let t = fall_split(&unrolled, &profile, k);
             let up = up.lerp(points[k + 1].direction, t).normalize();
-            let along = unrolled[k].position.x
-                + (unrolled[k + 1].position.x - unrolled[k].position.x) * t;
+            let along =
+                unrolled[k].position.x + (unrolled[k + 1].position.x - unrolled[k].position.x) * t;
             rows.push(Row {
                 center: up * (surface.radius + here.level - here.drop + RIVER_OFFSET),
                 along,
@@ -244,7 +254,8 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
         let run = (rows[b].along - rows[a].along).max(1e-3);
         let slope = (levels[a] - levels[b]).max(0.) / run;
         let ends = (k.min(n - 1 - k) as f32 / 3.).min(1.);
-        rows[k].dome = rows[k].half.min(DOME_MAX) * smoothstep(DOME_SLOPE.0, DOME_SLOPE.1, slope) * ends;
+        rows[k].dome =
+            rows[k].half.min(DOME_MAX) * smoothstep(DOME_SLOPE.0, DOME_SLOPE.1, slope) * ends;
     }
     rows
 }
@@ -286,7 +297,8 @@ fn fade_out(rows: &mut Vec<Row>, start: usize, length: f32) {
 /// Fades at a river's ends: out of the lake it leaves, into the sea or lake it reaches (a
 /// tributary's end is capped on its parent instead).
 fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>) {
-    let under_lake = |row: &Row, side: f32| surface.lake_depth_at(row.edge(side).normalize()) > LAKE;
+    let under_lake =
+        |row: &Row, side: f32| surface.lake_depth_at(row.edge(side).normalize()) > LAKE;
     let in_lake = |row: &Row| under_lake(row, -1.) && under_lake(row, 1.);
     // Out of a lake: visible a little way into it, then fading.
     let leave = if in_lake(&rows[0]) {
@@ -308,15 +320,22 @@ fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>
         RiverEnd::Lake(_) => in_lake(row),
         RiverEnd::Sea => {
             let at_sea = |p: Vec3| surface.ocean_at(p.normalize()) > 0.5;
-            let bank = |side: f32| ground_at(surface, row.edge(side).normalize()) <= 0.02 && at_sea(row.edge(side));
+            let bank = |side: f32| {
+                ground_at(surface, row.edge(side).normalize()) <= 0.02 && at_sea(row.edge(side))
+            };
             (bank(-1.) && bank(1.))
-                || ground_at(surface, row.center.normalize()) < -OPEN_WATER_DEPTH && at_sea(row.center)
+                || ground_at(surface, row.center.normalize()) < -OPEN_WATER_DEPTH
+                    && at_sea(row.center)
         }
         RiverEnd::Junction(_) => false,
     };
     // The water it ends in: the last stretch under it (searched back from the end: on its way
     // a river may brush other water, or the ragged shore of the lake it left).
-    let tail = rows[leave..].iter().rev().take_while(|row| in_end_water(row)).count();
+    let tail = rows[leave..]
+        .iter()
+        .rev()
+        .take_while(|row| in_end_water(row))
+        .count();
     let reached = (tail > 0).then(|| rows.len() - leave - tail);
     match (reached, river.end) {
         (Some(start), RiverEnd::Lake(_)) => {
@@ -329,7 +348,11 @@ fn apply_fades(surface: &PlanetSurface, river: &PlanetRiver, rows: &mut Vec<Row>
         }
         (Some(start), _) => {
             let start = start + leave;
-            fade_out(rows, start, RIVER_FADE.0 + RIVER_FADE.1 * 2. * rows[start].half);
+            fade_out(
+                rows,
+                start,
+                RIVER_FADE.0 + RIVER_FADE.1 * 2. * rows[start].half,
+            );
         }
         // (Lake and sea ends always reach their water; just in case.)
         (None, RiverEnd::Sea | RiverEnd::Lake(_)) => {
@@ -423,8 +446,10 @@ fn junction_cap(
     };
     let ((left_row, left_hit, left_at), (right_row, right_hit, right_at)) = (left, right);
     let full_rows = left_row.min(right_row);
-    let mut outline: Vec<CapVertex> =
-        rows[full_rows - 1..left_row].iter().map(|row| tributary(row, -1.)).collect();
+    let mut outline: Vec<CapVertex> = rows[full_rows - 1..left_row]
+        .iter()
+        .map(|row| tributary(row, -1.))
+        .collect();
     outline.push(left_hit);
     // Parent edge vertices strictly between the two crossings.
     if left_at < right_at {
@@ -439,17 +464,28 @@ fn junction_cap(
         }
     }
     outline.push(right_hit);
-    outline.extend(rows[full_rows - 1..right_row].iter().rev().map(|row| tributary(row, 1.)));
+    outline.extend(
+        rows[full_rows - 1..right_row]
+            .iter()
+            .rev()
+            .map(|row| tributary(row, 1.)),
+    );
     Some((full_rows, outline))
 }
 
 /// The parent's ribbon edge on the tributary's side (`near`) or the other, around the
 /// junction.
 fn parent_edge(parent: &[Row], rows: &[Row], near: bool) -> Vec<CapVertex> {
-    let (end, approach) = (rows[rows.len() - 1].center, rows[rows.len().saturating_sub(6)].center);
-    let Some(nearest) = (0..parent.len())
-        .min_by(|&a, &b| parent[a].center.distance(end).total_cmp(&parent[b].center.distance(end)))
-    else {
+    let (end, approach) = (
+        rows[rows.len() - 1].center,
+        rows[rows.len().saturating_sub(6)].center,
+    );
+    let Some(nearest) = (0..parent.len()).min_by(|&a, &b| {
+        parent[a]
+            .center
+            .distance(end)
+            .total_cmp(&parent[b].center.distance(end))
+    }) else {
         return Vec::new();
     };
     let row = &parent[nearest];
@@ -482,7 +518,13 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
     let rivers = &surface.rivers;
     let mut all_rows: Vec<Vec<Row>> = rivers
         .iter()
-        .map(|river| if river.points.len() >= 3 { river_rows(surface, river) } else { Vec::new() })
+        .map(|river| {
+            if river.points.len() >= 3 {
+                river_rows(surface, river)
+            } else {
+                Vec::new()
+            }
+        })
         .collect();
     // Whitewater on the parent below each confluence.
     for river in rivers {
@@ -492,7 +534,10 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         let rows = &mut all_rows[parent];
         let join_at = join.direction * surface.radius;
         let Some(nearest) = (0..rows.len()).min_by(|&a, &b| {
-            rows[a].center.distance(join_at).total_cmp(&rows[b].center.distance(join_at))
+            rows[a]
+                .center
+                .distance(join_at)
+                .total_cmp(&rows[b].center.distance(join_at))
         }) else {
             continue;
         };
@@ -516,7 +561,12 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         if rows.len() < 2 {
             continue;
         }
-        match surface.springs().iter().find(|spring| spring.river == index).map(|s| &s.kind) {
+        match surface
+            .springs()
+            .iter()
+            .find(|spring| spring.river == index)
+            .map(|s| &s.kind)
+        {
             // Out of a pond: fading in from its rim.
             Some(PlanetSpringKind::Pond { .. }) => {
                 let first = rows[0];
@@ -540,7 +590,8 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
                 rows.insert(
                     0,
                     Row {
-                        center: first.center - first.forward * 0.4 + first.center.normalize() * SPOUT_HEIGHT,
+                        center: first.center - first.forward * 0.4
+                            + first.center.normalize() * SPOUT_HEIGHT,
                         half: first.half * 0.45,
                         along: first.along - 0.4,
                         speed: 2.,
@@ -554,13 +605,19 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
         }
         // A side channel (a river splitting on flat land) leaves its river on its ribbon edge
         // too: the cap of its rows taken backwards.
-        if let Some(main) = river.branch_of.and_then(|main| all_rows.get(main)).filter(|r| r.len() >= 2) {
+        if let Some(main) = river
+            .branch_of
+            .and_then(|main| all_rows.get(main))
+            .filter(|r| r.len() >= 2)
+        {
             let backwards: Vec<Row> = rows.iter().rev().copied().collect();
             let up = backwards[backwards.len() - 1].center.normalize();
             let (east, north) = up.any_orthonormal_pair();
             let project = |p: Vec3| Vec2::new(p.dot(east), p.dot(north));
             let cap = junction_cap(&backwards, &parent_edge(main, &backwards, true), project)
-                .or_else(|| junction_cap(&backwards, &parent_edge(main, &backwards, false), project));
+                .or_else(|| {
+                    junction_cap(&backwards, &parent_edge(main, &backwards, false), project)
+                });
             if let Some((full_rows, outline)) = cap {
                 fan(&mut water, &backwards[full_rows - 1], &outline);
                 rows.drain(..rows.len() - full_rows);
@@ -605,7 +662,9 @@ fn rivers_mesh(surface: &PlanetSurface) -> Mesh {
                 uncapped += 1;
                 let last = rows.len() - 1;
                 let length = 2. * rows[last].half;
-                let start = rows.iter().position(|row| row.along > rows[last].along - length);
+                let start = rows
+                    .iter()
+                    .position(|row| row.along > rows[last].along - length);
                 fade_out(&mut rows, start.unwrap_or(last), length);
                 for pair in rows.windows(2) {
                     strip(&mut water, &pair[0], &pair[1]);
@@ -644,14 +703,20 @@ fn fan(water: &mut Water, row: &Row, outline: &[CapVertex]) {
         })
         .collect();
     for (k, &vertex) in vertices.iter().enumerate() {
-        water.indices.extend([center, vertex, vertices[(k + 1) % vertices.len()]]);
+        water
+            .indices
+            .extend([center, vertex, vertices[(k + 1) % vertices.len()]]);
     }
 }
 
 /// A ribbon strip between two rows: flat across, or the top of an oval where domed (the edges
 /// sunk under the banks, the whole lowered a little: see `river_profile`).
 fn strip(water: &mut Water, a: &Row, b: &Row) {
-    let segments = if a.dome > 0. || b.dome > 0. { DOME_SEGMENTS } else { 1 };
+    let segments = if a.dome > 0. || b.dome > 0. {
+        DOME_SEGMENTS
+    } else {
+        1
+    };
     let first = water.positions.len() as u32;
     for row in [a, b] {
         let up = row.center.normalize();
@@ -768,19 +833,20 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
         }
     }
     // Contour field (positive under the water) and level of each covered sample.
-    let field = |x: i32, z: i32, kinds: &HashMap<(i32, i32), (Sample, f32)>| match covered.get(&(x, z)) {
-        None => (OUTSIDE, None),
-        Some(&(_, level)) => {
-            let (sample, ground) = kinds[&(x, z)];
-            let water = level + SHORE_MARGIN - ground;
-            let value = match sample {
-                Sample::River => RIVER_EDGE,
-                Sample::Lake(_) | Sample::Low => water.max(1e-3),
-                Sample::Shore => water,
-            };
-            (value, Some(level))
-        }
-    };
+    let field =
+        |x: i32, z: i32, kinds: &HashMap<(i32, i32), (Sample, f32)>| match covered.get(&(x, z)) {
+            None => (OUTSIDE, None),
+            Some(&(_, level)) => {
+                let (sample, ground) = kinds[&(x, z)];
+                let water = level + SHORE_MARGIN - ground;
+                let value = match sample {
+                    Sample::River => RIVER_EDGE,
+                    Sample::Lake(_) | Sample::Low => water.max(1e-3),
+                    Sample::Shore => water,
+                };
+                (value, Some(level))
+            }
+        };
     let mut squares: Vec<(i32, i32)> = covered
         .keys()
         .flat_map(|&(x, z)| [(x - 1, z - 1), (x, z - 1), (x - 1, z), (x, z)])
@@ -798,7 +864,10 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
         if values.iter().all(|&v| v <= 0.) {
             continue;
         }
-        let level = samples.iter().filter_map(|(_, level)| *level).fold(f32::MIN, f32::max);
+        let level = samples
+            .iter()
+            .filter_map(|(_, level)| *level)
+            .fold(f32::MIN, f32::max);
         for mut polygon in contour_cell(corners.map(|(x, z)| at(x, z)), values) {
             // Clipped to the face.
             for (a, b) in [
@@ -818,7 +887,13 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
             let height = surface.radius + level - LAKE_SINK;
             let first = water.positions.len() as u32;
             for &p in &polygon {
-                water.vertex(surface.direction(face, p) * height, p, wind(surface, face, p), 0., 1.);
+                water.vertex(
+                    surface.direction(face, p) * height,
+                    p,
+                    wind(surface, face, p),
+                    0.,
+                    1.,
+                );
                 // (Frozen lakes: the ice in the pattern coordinates' third channel.)
                 water.coords.last_mut().unwrap()[2] = surface.sea_ice.bilinear(face, p);
             }
@@ -834,7 +909,8 @@ fn lakes_mesh(surface: &PlanetSurface, face: usize) -> Option<Mesh> {
 fn ponds_mesh(surface: &PlanetSurface) -> Option<Mesh> {
     let mut water = Water::default();
     for spring in surface.springs() {
-        let (PlanetSpringKind::Pond { center, .. }, Some(outline)) = (&spring.kind, spring.outline())
+        let (PlanetSpringKind::Pond { center, .. }, Some(outline)) =
+            (&spring.kind, spring.outline())
         else {
             continue;
         };
@@ -847,7 +923,9 @@ fn ponds_mesh(surface: &PlanetSurface) -> Option<Mesh> {
         let middle = vertex(*center);
         let ring: Vec<u32> = outline.iter().map(|&q| vertex(q)).collect();
         for k in 0..ring.len() {
-            water.indices.extend([middle, ring[k], ring[(k + 1) % ring.len()]]);
+            water
+                .indices
+                .extend([middle, ring[k], ring[(k + 1) % ring.len()]]);
         }
     }
     (!water.indices.is_empty()).then(|| water.build(false))
@@ -863,13 +941,24 @@ fn sea_mesh(surface: &PlanetSurface, face: usize) -> Mesh {
     for z in 0..=segments {
         for x in 0..=segments {
             let p = Vec2::new(x as f32, z as f32) / segments as f32 * n - 0.5;
-            water.vertex(surface.direction(face, p) * surface.radius, p, wind(surface, face, p), 0., 1.);
+            water.vertex(
+                surface.direction(face, p) * surface.radius,
+                p,
+                wind(surface, face, p),
+                0.,
+                1.,
+            );
         }
     }
     let row = segments as u32 + 1;
     for z in 0..segments as u32 {
         for x in 0..segments as u32 {
-            let (a, b, c, d) = (z * row + x, z * row + x + 1, (z + 1) * row + x, (z + 1) * row + x + 1);
+            let (a, b, c, d) = (
+                z * row + x,
+                z * row + x + 1,
+                (z + 1) * row + x,
+                (z + 1) * row + x + 1,
+            );
             water.indices.extend([a, b, c, b, d, c]);
         }
     }
@@ -882,10 +971,14 @@ fn wind(surface: &PlanetSurface, face: usize, p: Vec2) -> Vec2 {
     let wind = wind.normalize_or_zero() * strength;
     // World units per cell along each face axis.
     let along = |axis: Vec2| {
-        (surface.direction(face, p + axis) - surface.direction(face, p - axis)) * surface.radius / 2.
+        (surface.direction(face, p + axis) - surface.direction(face, p - axis)) * surface.radius
+            / 2.
     };
     let (ex, ey) = (along(Vec2::X), along(Vec2::Y));
-    Vec2::new(wind.dot(ex) / ex.length_squared(), wind.dot(ey) / ey.length_squared())
+    Vec2::new(
+        wind.dot(ex) / ex.length_squared(),
+        wind.dot(ey) / ey.length_squared(),
+    )
 }
 
 /// The sea wave field of each face as texture data (`Rgba16Float`, a texel per cell): travel
@@ -901,7 +994,9 @@ pub fn sea_textures(planet: &Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
         .map(|(face, texels)| {
             let mut data = Vec::with_capacity(per_face * 8);
             for (k, texel) in texels.iter().enumerate() {
-                let ice = surface.sea_ice.bilinear(face, Vec2::new((k % n) as f32, (k / n) as f32));
+                let ice = surface
+                    .sea_ice
+                    .bilinear(face, Vec2::new((k % n) as f32, (k / n) as f32));
                 for value in [texel[0], texel[1], texel[2], ice] {
                     data.extend(f16::from_f32(value).to_le_bytes());
                 }
@@ -942,7 +1037,11 @@ pub fn spawn(
         .into_iter()
         .map(|data| {
             let mut image = Image::new(
-                Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+                Extent3d {
+                    width: n,
+                    height: n,
+                    depth_or_array_layers: 1,
+                },
                 TextureDimension::D2,
                 data,
                 TextureFormat::Rgba16Float,
@@ -973,11 +1072,19 @@ pub fn spawn(
         .iter()
         .filter(|spring| matches!(spring.kind, PlanetSpringKind::Pond { .. }))
         .count();
-    info!("{} springs: {ponds} ponds, {} hillside", surface.springs().len(), surface.springs().len() - ponds);
+    info!(
+        "{} springs: {ponds} ponds, {} hillside",
+        surface.springs().len(),
+        surface.springs().len() - ponds
+    );
     info!(
         "{} rivers, {} side channels (splitting on flat land)",
         surface.rivers.len(),
-        surface.rivers.iter().filter(|river| river.branch_of.is_some()).count()
+        surface
+            .rivers
+            .iter()
+            .filter(|river| river.branch_of.is_some())
+            .count()
     );
     if let Some(mesh) = ponds_mesh(surface) {
         spawn("Ponds".into(), mesh, &still);
@@ -986,7 +1093,11 @@ pub fn spawn(
         if let Some(mesh) = lakes_mesh(surface, face) {
             spawn(format!("Lakes {face}"), mesh, &still);
         }
-        spawn(format!("Sea {face}"), sea_mesh(surface, face), sea_materials.get(face).unwrap_or(&still));
+        spawn(
+            format!("Sea {face}"),
+            sea_mesh(surface, face),
+            sea_materials.get(face).unwrap_or(&still),
+        );
     }
     info!("Planet water meshed in {:.1?}", start.elapsed());
 }

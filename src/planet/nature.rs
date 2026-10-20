@@ -26,7 +26,9 @@ use worldgen::{Biome, geology::Rock};
 
 use crate::{
     AppState,
-    shaders::{LodToonMaterial, LodToonShader, SwayToonMaterial, SwayToonShader, ToonMaterial, toon},
+    shaders::{
+        LodToonMaterial, LodToonShader, SwayToonMaterial, SwayToonShader, ToonMaterial, toon,
+    },
 };
 
 /// Model units (metres) to world units: one world unit is 20 m (buildings use the same scale).
@@ -112,82 +114,378 @@ pub(super) struct Species {
 
 pub(super) const SPECIES: &[Species] = &[
     // Kenney Nature Kit (low poly, recoloured): the bulk of the forests and rocks.
-    Species { name: "oak_round", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "oak_detailed", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "oak", kind: Kind::Tree, scale: (0.8, 1.25) },
-    Species { name: "oak_fat", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "poplar", kind: Kind::Tree, scale: (0.8, 1.15) },
-    Species { name: "pine_round_a", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "pine_round_c", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "pine_round_e", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "pine_tall_a", kind: Kind::Tree, scale: (0.85, 1.3) },
-    Species { name: "pine_tall_c", kind: Kind::Tree, scale: (0.85, 1.3) },
-    Species { name: "pine_small", kind: Kind::Tree, scale: (0.6, 1.0) },
-    Species { name: "cypress", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "umbrella_pine", kind: Kind::Tree, scale: (0.9, 1.3) },
-    Species { name: "rock_a", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_b", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_c", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_d", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_e", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_f", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "rock_tall_a", kind: Kind::Rock, scale: (0.8, 1.6) },
-    Species { name: "rock_tall_b", kind: Kind::Rock, scale: (0.8, 1.6) },
-    Species { name: "rock_tall_c", kind: Kind::Rock, scale: (0.8, 1.6) },
-    Species { name: "rock_tall_d", kind: Kind::Rock, scale: (0.8, 1.6) },
-    Species { name: "stone_a", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "stone_c", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "stone_e", kind: Kind::Rock, scale: (0.8, 2.5) },
-    Species { name: "cactus_tall", kind: Kind::Tree, scale: (0.7, 1.2) },
-    Species { name: "cactus_short", kind: Kind::Tree, scale: (0.7, 1.2) },
-    Species { name: "desert_shrub", kind: Kind::Bush, scale: (0.8, 1.4) },
-    Species { name: "tall_grass", kind: Kind::Ground, scale: (0.8, 1.3) },
-    Species { name: "dry_tall_grass", kind: Kind::Ground, scale: (0.8, 1.3) },
-    Species { name: "reeds", kind: Kind::Ground, scale: (0.8, 1.4) },
-    Species { name: "stump", kind: Kind::Wood, scale: (0.8, 1.2) },
-    Species { name: "logs", kind: Kind::Wood, scale: (0.8, 1.2) },
+    Species {
+        name: "oak_round",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "oak_detailed",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "oak",
+        kind: Kind::Tree,
+        scale: (0.8, 1.25),
+    },
+    Species {
+        name: "oak_fat",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "poplar",
+        kind: Kind::Tree,
+        scale: (0.8, 1.15),
+    },
+    Species {
+        name: "pine_round_a",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "pine_round_c",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "pine_round_e",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "pine_tall_a",
+        kind: Kind::Tree,
+        scale: (0.85, 1.3),
+    },
+    Species {
+        name: "pine_tall_c",
+        kind: Kind::Tree,
+        scale: (0.85, 1.3),
+    },
+    Species {
+        name: "pine_small",
+        kind: Kind::Tree,
+        scale: (0.6, 1.0),
+    },
+    Species {
+        name: "cypress",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "umbrella_pine",
+        kind: Kind::Tree,
+        scale: (0.9, 1.3),
+    },
+    Species {
+        name: "rock_a",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_b",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_c",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_d",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_e",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_f",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "rock_tall_a",
+        kind: Kind::Rock,
+        scale: (0.8, 1.6),
+    },
+    Species {
+        name: "rock_tall_b",
+        kind: Kind::Rock,
+        scale: (0.8, 1.6),
+    },
+    Species {
+        name: "rock_tall_c",
+        kind: Kind::Rock,
+        scale: (0.8, 1.6),
+    },
+    Species {
+        name: "rock_tall_d",
+        kind: Kind::Rock,
+        scale: (0.8, 1.6),
+    },
+    Species {
+        name: "stone_a",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "stone_c",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "stone_e",
+        kind: Kind::Rock,
+        scale: (0.8, 2.5),
+    },
+    Species {
+        name: "cactus_tall",
+        kind: Kind::Tree,
+        scale: (0.7, 1.2),
+    },
+    Species {
+        name: "cactus_short",
+        kind: Kind::Tree,
+        scale: (0.7, 1.2),
+    },
+    Species {
+        name: "desert_shrub",
+        kind: Kind::Bush,
+        scale: (0.8, 1.4),
+    },
+    Species {
+        name: "tall_grass",
+        kind: Kind::Ground,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "dry_tall_grass",
+        kind: Kind::Ground,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "reeds",
+        kind: Kind::Ground,
+        scale: (0.8, 1.4),
+    },
+    Species {
+        name: "stump",
+        kind: Kind::Wood,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "logs",
+        kind: Kind::Wood,
+        scale: (0.8, 1.2),
+    },
     // Quaternius Stylized Nature MegaKit (textured): hero trees, boulders, bushes, ground cover.
-    Species { name: "common_tree_a", kind: Kind::Tree, scale: (1.1, 1.5) },
-    Species { name: "common_tree_b", kind: Kind::Tree, scale: (1.0, 1.4) },
-    Species { name: "hero_pine", kind: Kind::Tree, scale: (1.2, 1.6) },
-    Species { name: "twisted_tree", kind: Kind::Tree, scale: (0.7, 0.9) },
-    Species { name: "dead_tree_a", kind: Kind::Wood, scale: (0.7, 1.0) },
-    Species { name: "dead_tree_b", kind: Kind::Wood, scale: (0.7, 1.0) },
-    Species { name: "boulder_a", kind: Kind::Rock, scale: (0.6, 1.5) },
-    Species { name: "boulder_b", kind: Kind::Rock, scale: (0.6, 1.5) },
-    Species { name: "boulder_c", kind: Kind::Rock, scale: (0.6, 1.5) },
-    Species { name: "rock_large_a", kind: Kind::Rock, scale: (0.7, 1.6) },
+    Species {
+        name: "common_tree_a",
+        kind: Kind::Tree,
+        scale: (1.1, 1.5),
+    },
+    Species {
+        name: "common_tree_b",
+        kind: Kind::Tree,
+        scale: (1.0, 1.4),
+    },
+    Species {
+        name: "hero_pine",
+        kind: Kind::Tree,
+        scale: (1.2, 1.6),
+    },
+    Species {
+        name: "twisted_tree",
+        kind: Kind::Tree,
+        scale: (0.7, 0.9),
+    },
+    Species {
+        name: "dead_tree_a",
+        kind: Kind::Wood,
+        scale: (0.7, 1.0),
+    },
+    Species {
+        name: "dead_tree_b",
+        kind: Kind::Wood,
+        scale: (0.7, 1.0),
+    },
+    Species {
+        name: "boulder_a",
+        kind: Kind::Rock,
+        scale: (0.6, 1.5),
+    },
+    Species {
+        name: "boulder_b",
+        kind: Kind::Rock,
+        scale: (0.6, 1.5),
+    },
+    Species {
+        name: "boulder_c",
+        kind: Kind::Rock,
+        scale: (0.6, 1.5),
+    },
+    Species {
+        name: "rock_large_a",
+        kind: Kind::Rock,
+        scale: (0.7, 1.6),
+    },
     // Tropical and other biomes (Kenney Nature Kit, see `tools/nature/build.sh`).
-    Species { name: "palm_tall", kind: Kind::Tree, scale: (0.8, 1.25) },
-    Species { name: "palm_bend", kind: Kind::Tree, scale: (0.8, 1.25) },
-    Species { name: "palm_short", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "palm_detailed", kind: Kind::Tree, scale: (0.8, 1.2) },
-    Species { name: "acacia", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "jungle_a", kind: Kind::Tree, scale: (0.9, 1.4) },
-    Species { name: "jungle_b", kind: Kind::Tree, scale: (0.9, 1.4) },
-    Species { name: "jungle_c", kind: Kind::Tree, scale: (0.9, 1.3) },
-    Species { name: "jungle_d", kind: Kind::Tree, scale: (0.9, 1.4) },
-    Species { name: "mangrove", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "mangrove_b", kind: Kind::Tree, scale: (0.8, 1.3) },
-    Species { name: "bamboo", kind: Kind::Bush, scale: (0.8, 1.3) },
-    Species { name: "tundra_shrub", kind: Kind::Bush, scale: (0.8, 1.6) },
-    Species { name: "rock_large_b", kind: Kind::Rock, scale: (0.7, 1.6) },
-    Species { name: "rock_small_a", kind: Kind::Rock, scale: (0.8, 2.) },
-    Species { name: "rock_small_b", kind: Kind::Rock, scale: (0.8, 2.) },
-    Species { name: "rock_small_c", kind: Kind::Rock, scale: (0.8, 2.) },
-    Species { name: "bush_common", kind: Kind::Bush, scale: (0.9, 1.4) },
-    Species { name: "bush_flowers", kind: Kind::Bush, scale: (0.9, 1.4) },
-    Species { name: "pebbles_a", kind: Kind::Ground, scale: (1.0, 2.0) },
-    Species { name: "pebbles_b", kind: Kind::Ground, scale: (1.0, 2.0) },
-    Species { name: "fern", kind: Kind::Ground, scale: (0.8, 1.2) },
-    Species { name: "flowers_a", kind: Kind::Ground, scale: (0.6, 1.0) },
-    Species { name: "flowers_b", kind: Kind::Ground, scale: (0.6, 1.0) },
-    Species { name: "grass_a", kind: Kind::Ground, scale: (0.7, 1.2) },
-    Species { name: "grass_b", kind: Kind::Ground, scale: (0.7, 1.2) },
-    Species { name: "clover", kind: Kind::Ground, scale: (0.8, 1.2) },
-    Species { name: "mushrooms", kind: Kind::Ground, scale: (0.8, 1.3) },
-    Species { name: "plant", kind: Kind::Ground, scale: (0.8, 1.3) },
-    Species { name: "wispy_grass", kind: Kind::Ground, scale: (0.8, 1.2) },
+    Species {
+        name: "palm_tall",
+        kind: Kind::Tree,
+        scale: (0.8, 1.25),
+    },
+    Species {
+        name: "palm_bend",
+        kind: Kind::Tree,
+        scale: (0.8, 1.25),
+    },
+    Species {
+        name: "palm_short",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "palm_detailed",
+        kind: Kind::Tree,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "acacia",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "jungle_a",
+        kind: Kind::Tree,
+        scale: (0.9, 1.4),
+    },
+    Species {
+        name: "jungle_b",
+        kind: Kind::Tree,
+        scale: (0.9, 1.4),
+    },
+    Species {
+        name: "jungle_c",
+        kind: Kind::Tree,
+        scale: (0.9, 1.3),
+    },
+    Species {
+        name: "jungle_d",
+        kind: Kind::Tree,
+        scale: (0.9, 1.4),
+    },
+    Species {
+        name: "mangrove",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "mangrove_b",
+        kind: Kind::Tree,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "bamboo",
+        kind: Kind::Bush,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "tundra_shrub",
+        kind: Kind::Bush,
+        scale: (0.8, 1.6),
+    },
+    Species {
+        name: "rock_large_b",
+        kind: Kind::Rock,
+        scale: (0.7, 1.6),
+    },
+    Species {
+        name: "rock_small_a",
+        kind: Kind::Rock,
+        scale: (0.8, 2.),
+    },
+    Species {
+        name: "rock_small_b",
+        kind: Kind::Rock,
+        scale: (0.8, 2.),
+    },
+    Species {
+        name: "rock_small_c",
+        kind: Kind::Rock,
+        scale: (0.8, 2.),
+    },
+    Species {
+        name: "bush_common",
+        kind: Kind::Bush,
+        scale: (0.9, 1.4),
+    },
+    Species {
+        name: "bush_flowers",
+        kind: Kind::Bush,
+        scale: (0.9, 1.4),
+    },
+    Species {
+        name: "pebbles_a",
+        kind: Kind::Ground,
+        scale: (1.0, 2.0),
+    },
+    Species {
+        name: "pebbles_b",
+        kind: Kind::Ground,
+        scale: (1.0, 2.0),
+    },
+    Species {
+        name: "fern",
+        kind: Kind::Ground,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "flowers_a",
+        kind: Kind::Ground,
+        scale: (0.6, 1.0),
+    },
+    Species {
+        name: "flowers_b",
+        kind: Kind::Ground,
+        scale: (0.6, 1.0),
+    },
+    Species {
+        name: "grass_a",
+        kind: Kind::Ground,
+        scale: (0.7, 1.2),
+    },
+    Species {
+        name: "grass_b",
+        kind: Kind::Ground,
+        scale: (0.7, 1.2),
+    },
+    Species {
+        name: "clover",
+        kind: Kind::Ground,
+        scale: (0.8, 1.2),
+    },
+    Species {
+        name: "mushrooms",
+        kind: Kind::Ground,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "plant",
+        kind: Kind::Ground,
+        scale: (0.8, 1.3),
+    },
+    Species {
+        name: "wispy_grass",
+        kind: Kind::Ground,
+        scale: (0.8, 1.2),
+    },
 ];
 
 /// Probability per large placement cell of each species, by biome.
@@ -307,7 +605,11 @@ pub(super) fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
             ("bush_common", 0.08),
             ("acacia", 0.01),
         ],
-        Biome::Mangrove => &[("mangrove", 0.2), ("mangrove_b", 0.15), ("palm_short", 0.01)],
+        Biome::Mangrove => &[
+            ("mangrove", 0.2),
+            ("mangrove_b", 0.15),
+            ("palm_short", 0.01),
+        ],
         Biome::Tundra => &[
             ("tundra_shrub", 0.06),
             ("stone_a", 0.015),
@@ -382,7 +684,9 @@ pub(super) fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
         Biome::Badlands => &[("pebbles_b", 0.02)],
         Biome::Marsh => &[("grass_a", 0.12), ("plant", 0.04)],
         Biome::Alpine => &[("grass_b", 0.04), ("pebbles_a", 0.02)],
-        Biome::Rainforest | Biome::CloudForest => &[("fern", 0.3), ("plant", 0.12), ("mushrooms", 0.01)],
+        Biome::Rainforest | Biome::CloudForest => {
+            &[("fern", 0.3), ("plant", 0.12), ("mushrooms", 0.01)]
+        }
         Biome::Savanna => &[("grass_b", 0.06), ("grass_a", 0.02)],
         Biome::Mangrove => &[("plant", 0.03)],
         Biome::Riparian | Biome::Oasis => &[("grass_a", 0.08), ("fern", 0.04), ("plant", 0.04)],
@@ -432,7 +736,9 @@ fn load_models(mut commands: Commands, asset_server: Res<AssetServer>) {
         .map(|species| {
             let levels = if species.kind.has_stand_ins() { 3 } else { 1 };
             (0..levels)
-                .map(|lod| asset_server.load(format!("models/nature/{}_lod{lod}.glb", species.name)))
+                .map(|lod| {
+                    asset_server.load(format!("models/nature/{}_lod{lod}.glb", species.name))
+                })
                 .collect()
         })
         .collect();
@@ -573,7 +879,8 @@ fn prepare_models(
 
 /// Append a mesh's triangles (positions, normals, colours) to a stand-in.
 fn append_mesh(stand_in: &mut StandIn, mesh: &Mesh) {
-    let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
     else {
         return;
     };
@@ -655,18 +962,24 @@ pub(super) fn merged_mesh(
             .extend(stand_in.indices.iter().map(|i| first + i));
         if with_origins {
             let count = stand_in.positions.len();
-            uv0.extend(std::iter::repeat_n(instance.position.xz().to_array(), count));
+            uv0.extend(std::iter::repeat_n(
+                instance.position.xz().to_array(),
+                count,
+            ));
             uv1.extend(std::iter::repeat_n([instance.position.y, 0.], count));
         }
     }
     if merged.positions.is_empty() {
         return None;
     }
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, merged.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, merged.normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, merged.colors)
-        .with_inserted_indices(Indices::U32(merged.indices));
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, merged.positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, merged.normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, merged.colors)
+    .with_inserted_indices(Indices::U32(merged.indices));
     if with_origins {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);

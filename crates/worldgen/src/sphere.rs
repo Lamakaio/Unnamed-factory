@@ -26,7 +26,16 @@ const FACE_AXES: [(Vec3, Vec3, Vec3); FACES] = [
 ];
 
 /// The 8 neighbour offsets within a face.
-const OFFSETS: [(i64, i64); 8] = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)];
+const OFFSETS: [(i64, i64); 8] = [
+    (-1, 0),
+    (1, 0),
+    (0, -1),
+    (0, 1),
+    (-1, -1),
+    (1, -1),
+    (-1, 1),
+    (1, 1),
+];
 
 /// A cube-sphere grid of `6 × n × n` cells, indexed `(face * n + z) * n + x`.
 pub struct SphereGrid {
@@ -326,7 +335,10 @@ mod tests {
             let neighbours: Vec<(usize, f32)> = grid.neighbours(i).collect();
             assert!(neighbours.len() >= 7, "cell {i}: {neighbours:?}");
             for (j, distance) in neighbours {
-                assert!(distance > 0.5 && distance < 1.8, "cell {i} -> {j}: {distance}");
+                assert!(
+                    distance > 0.5 && distance < 1.8,
+                    "cell {i} -> {j}: {distance}"
+                );
                 assert!(
                     at_corner(i) || at_corner(j) || grid.neighbours(j).any(|(k, _)| k == i),
                     "cell {i} -> {j} is not mutual"
@@ -343,11 +355,19 @@ mod tests {
         let heights: Vec<f32> = (0..grid.len())
             .map(|i| crate::noise::hash(9, i as u32, 0) as f32 / u32::MAX as f32)
             .collect();
-        let sea: Vec<bool> = (0..grid.len()).map(|i| grid.direction(i).y < -0.9).collect();
-        let (graph, water) = crate::flow::FlowGraph::with_depressions(&grid, &heights, &sea, |_, _| 1.);
+        let sea: Vec<bool> = (0..grid.len())
+            .map(|i| grid.direction(i).y < -0.9)
+            .collect();
+        let (graph, water) =
+            crate::flow::FlowGraph::with_depressions(&grid, &heights, &sea, |_, _| 1.);
         let filled = crate::flow::priority_flood(&grid, &heights, &sea, 0.);
         for i in 0..grid.len() {
-            assert!((water[i] - filled[i]).abs() < 1e-6, "cell {i}: {} vs {}", water[i], filled[i]);
+            assert!(
+                (water[i] - filled[i]).abs() < 1e-6,
+                "cell {i}: {} vs {}",
+                water[i],
+                filled[i]
+            );
             let mut cell = i;
             for _ in 0..grid.len() {
                 if graph.receivers[cell] == cell {
@@ -369,13 +389,20 @@ mod tests {
         let heights: Vec<f32> = (0..grid.len())
             .map(|i| crate::noise::hash(11, i as u32, 0) as f32 / u32::MAX as f32)
             .collect();
-        let sea: Vec<bool> = (0..grid.len()).map(|i| grid.direction(i).y < -0.8).collect();
+        let sea: Vec<bool> = (0..grid.len())
+            .map(|i| grid.direction(i).y < -0.8)
+            .collect();
         for epsilon in [0., 1e-4] {
             let fast = crate::flow::priority_flood(&grid, &heights, &sea, epsilon);
             let reference = crate::flow::priority_flood_reference(&grid, &heights, &sea, epsilon);
             for i in 0..grid.len() {
                 let off = (fast[i] - reference[i]).abs();
-                assert!(off < 3. * epsilon + 1e-6, "epsilon {epsilon}, cell {i}: {} vs {}", fast[i], reference[i]);
+                assert!(
+                    off < 3. * epsilon + 1e-6,
+                    "epsilon {epsilon}, cell {i}: {} vs {}",
+                    fast[i],
+                    reference[i]
+                );
             }
             if epsilon > 0. {
                 let graph = crate::flow::FlowGraph::new(&grid, &fast, &sea);
@@ -398,7 +425,9 @@ mod tests {
         let heights: Vec<f32> = (0..grid.len())
             .map(|i| crate::noise::hash(7, i as u32, 0) as f32 / u32::MAX as f32)
             .collect();
-        let sea: Vec<bool> = (0..grid.len()).map(|i| grid.direction(i).y < -0.9).collect();
+        let sea: Vec<bool> = (0..grid.len())
+            .map(|i| grid.direction(i).y < -0.9)
+            .collect();
         let filled = crate::flow::priority_flood(&grid, &heights, &sea, 1e-5);
         let graph = crate::flow::FlowGraph::new(&grid, &filled, &sea);
         for i in 0..grid.len() {

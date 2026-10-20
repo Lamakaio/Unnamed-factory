@@ -40,7 +40,9 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     // The sea reaches the land below its level connected to it.
     let mut reached = sea.clone();
     // (From the sea's cells along the coast: the open sea's would only find more sea.)
-    let coast = par::map(cells, |i| sea[i] && grid.neighbours(i).any(|(j, _)| !sea[j]));
+    let coast = par::map(cells, |i| {
+        sea[i] && grid.neighbours(i).any(|(j, _)| !sea[j])
+    });
     let mut queue: std::collections::VecDeque<usize> = (0..cells).filter(|&i| coast[i]).collect();
     while let Some(i) = queue.pop_front() {
         for (j, _) in grid.neighbours(i) {
@@ -50,7 +52,10 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
             }
         }
     }
-    let speed: Vec<f32> = depth.iter().map(|d| (d / DEEP).sqrt().clamp(MIN_SPEED, 1.)).collect();
+    let speed: Vec<f32> = depth
+        .iter()
+        .map(|d| (d / DEEP).sqrt().clamp(MIN_SPEED, 1.))
+        .collect();
 
     // Travel time from the shore (land counts as shore).
     let mut travel = vec![MAX_TRAVEL; cells];
@@ -99,7 +104,8 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     let cells_per_radian = 2. * grid.n() as f32 / std::f32::consts::PI;
     let travel = par::map(cells, |i| {
         if path[i] > 0. && travel[i] < MAX_TRAVEL {
-            let straight = grid.direction(i).angle_between(grid.direction(source[i])) * cells_per_radian;
+            let straight =
+                grid.direction(i).angle_between(grid.direction(source[i])) * cells_per_radian;
             travel[i] * (straight / path[i]).clamp(0.85, 1.)
         } else {
             travel[i]
@@ -145,7 +151,13 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
 
     (0..cells)
         .map(|i| {
-            let depth = if reached[i] { depth[i].min(MAX_DEPTH) } else if planet.heights[i] < 0. { -1. } else { 0. };
+            let depth = if reached[i] {
+                depth[i].min(MAX_DEPTH)
+            } else if planet.heights[i] < 0. {
+                -1.
+            } else {
+                0.
+            };
             [travel[i].min(MAX_TRAVEL), depth, exposure[i], wind[i].1]
         })
         .collect()

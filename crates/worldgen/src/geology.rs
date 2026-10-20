@@ -32,8 +32,14 @@ pub enum Rock {
 }
 
 impl Rock {
-    pub const ALL: [Rock; 6] =
-        [Rock::Granite, Rock::Metamorphic, Rock::Basalt, Rock::Sandstone, Rock::Shale, Rock::Limestone];
+    pub const ALL: [Rock; 6] = [
+        Rock::Granite,
+        Rock::Metamorphic,
+        Rock::Basalt,
+        Rock::Sandstone,
+        Rock::Shale,
+        Rock::Limestone,
+    ];
 
     /// The rock of an id (see [`Rock`] as `u8`).
     pub fn from_id(id: u8) -> Rock {
@@ -63,7 +69,10 @@ impl Rock {
 
     /// The largest diffusion multiplier (for the erosion's stability limit).
     pub fn max_diffusion() -> f32 {
-        PROPERTIES.iter().map(|p| p.diffusion.0.max(p.diffusion.1)).fold(0., f32::max)
+        PROPERTIES
+            .iter()
+            .map(|p| p.diffusion.0.max(p.diffusion.1))
+            .fold(0., f32::max)
     }
 }
 
@@ -101,15 +110,45 @@ struct Properties {
 /// (wide canyons, mesas), massive hard rock keeps narrow gorges.
 const PROPERTIES: [Properties; 6] = [
     // Granite.
-    Properties { erodibility: (0.35, 0.35), diffusion: (0.7, 0.7), layer: 0., hard_share: 1. },
+    Properties {
+        erodibility: (0.35, 0.35),
+        diffusion: (0.7, 0.7),
+        layer: 0.,
+        hard_share: 1.,
+    },
     // Metamorphic.
-    Properties { erodibility: (0.55, 0.55), diffusion: (0.6, 0.6), layer: 0., hard_share: 1. },
+    Properties {
+        erodibility: (0.55, 0.55),
+        diffusion: (0.6, 0.6),
+        layer: 0.,
+        hard_share: 1.,
+    },
     // Basalt.
-    Properties { erodibility: (0.45, 0.45), diffusion: (0.45, 0.45), layer: 0., hard_share: 1. },
+    Properties {
+        erodibility: (0.45, 0.45),
+        diffusion: (0.45, 0.45),
+        layer: 0.,
+        hard_share: 1.,
+    },
     // Sandstone.
-    Properties { erodibility: (0.3, 1.6), diffusion: (0.12, 1.8), layer: 6., hard_share: 0.4 },
+    Properties {
+        erodibility: (0.3, 1.6),
+        diffusion: (0.12, 1.8),
+        layer: 6.,
+        hard_share: 0.4,
+    },
     // Shale.
-    Properties { erodibility: (0.6, 1.8), diffusion: (0.5, 2.), layer: 4., hard_share: 0.18 },
+    Properties {
+        erodibility: (0.6, 1.8),
+        diffusion: (0.5, 2.),
+        layer: 4.,
+        hard_share: 0.18,
+    },
     // Limestone.
-    Properties { erodibility: (0.5, 1.2), diffusion: (0.25, 1.), layer: 9., hard_share: 0.7 },
+    Properties {
+        erodibility: (0.5, 1.2),
+        diffusion: (0.25, 1.),
+        layer: 9.,
+        hard_share: 0.7,
+    },
 ];

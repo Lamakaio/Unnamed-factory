@@ -8,7 +8,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use worldgen::{planet::*, climate::*, surface::PlanetSurface};
+use worldgen::{climate::*, planet::*, surface::PlanetSurface};
 
 /// The process's CPU time so far (seconds, all threads).
 #[cfg(windows)]

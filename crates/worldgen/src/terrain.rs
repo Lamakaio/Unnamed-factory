@@ -11,11 +11,11 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    geology::Rock,
-    par,
     flow::FlowGraph,
+    geology::Rock,
     grid::Grid,
     noise::{hash, smoothstep},
+    par,
 };
 
 /// Inputs of the erosion simulation, per cell.
@@ -135,9 +135,10 @@ pub(crate) fn erode_timed(
         // Routing through the depressions (lakes) without filling them first.
         let seed = hash(settings.seed as u32, step as u32, 0x51ED);
         let jitter = settings.routing_jitter;
-        let (graph, water) = FlowGraph::with_depressions(grid, &heights, &shape.base_level, |i, j| {
-            1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
-        });
+        let (graph, water) =
+            FlowGraph::with_depressions(grid, &heights, &shape.base_level, |i, j| {
+                1. + jitter * (hash(seed, i as u32, j as u32) as f32 / u32::MAX as f32)
+            });
         lap(&mut timings.routing);
         let area = graph.accumulate(|i| shape.rain[i]);
         lap(&mut timings.accumulation);

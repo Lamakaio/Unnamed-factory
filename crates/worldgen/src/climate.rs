@@ -134,7 +134,9 @@ fn longitude(d: Vec3) -> f32 {
 
 /// East and north unit tangents at a direction (north falls back near the poles).
 fn frame(d: Vec3) -> (Vec3, Vec3) {
-    let north = (Vec3::Y - d * d.y).try_normalize().unwrap_or(Vec3::X.reject_from(d).normalize());
+    let north = (Vec3::Y - d * d.y)
+        .try_normalize()
+        .unwrap_or(Vec3::X.reject_from(d).normalize());
     (d.cross(north), north)
 }
 
@@ -142,7 +144,8 @@ fn frame(d: Vec3) -> (Vec3, Vec3) {
 fn insolation(solar: f32, latitude: f32, declination: f32) -> f32 {
     let x = (-latitude.tan() * declination.tan()).clamp(-1., 1.);
     let h0 = x.acos();
-    solar / PI * (h0 * latitude.sin() * declination.sin() + latitude.cos() * declination.cos() * h0.sin())
+    solar / PI
+        * (h0 * latitude.sin() * declination.sin() + latitude.cos() * declination.cos() * h0.sin())
 }
 
 /// Saturation water (mm of precipitable water) at a temperature (°C), Clausius–Clapeyron-like.
@@ -158,7 +161,8 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
     let longitudes: Vec<f32> = directions.iter().map(|&d| longitude(d)).collect();
 
     // Land share and mean land height of each climate cell.
-    let (mut land, mut height, mut total) = (vec![0f32; cells], vec![0f32; cells], vec![0f32; cells]);
+    let (mut land, mut height, mut total) =
+        (vec![0f32; cells], vec![0f32; cells], vec![0f32; cells]);
     for i in 0..planet.grid.len() {
         let c = grid.cell_at(planet.grid.direction(i));
         total[c] += 1.;
@@ -167,23 +171,43 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
             height[c] += planet.heights[i].max(0.);
         }
     }
-    let elevation: Vec<f32> = (0..cells).map(|c| if land[c] > 0. { height[c] / land[c] } else { 0. }).collect();
+    let elevation: Vec<f32> = (0..cells)
+        .map(|c| {
+            if land[c] > 0. {
+                height[c] / land[c]
+            } else {
+                0.
+            }
+        })
+        .collect();
     let land: Vec<f32> = (0..cells).map(|c| land[c] / total[c].max(1.)).collect();
-    let altitude: Vec<f32> = elevation.iter().map(|e| e * settings.meters_per_unit).collect();
+    let altitude: Vec<f32> = elevation
+        .iter()
+        .map(|e| e * settings.meters_per_unit)
+        .collect();
     let side: Vec<Vec<usize>> = (0..cells)
-        .map(|i| grid.neighbours(i).filter(|&(_, d)| d < 1.2).map(|(j, _)| j).collect())
+        .map(|i| {
+            grid.neighbours(i)
+                .filter(|&(_, d)| d < 1.2)
+                .map(|(j, _)| j)
+                .collect()
+        })
         .collect();
     let currents = current_anomaly(&grid, &land, &latitudes, &longitudes);
 
     // Energy balance: sea-level temperatures, stepped through the years.
-    let capacity: Vec<f32> =
-        land.iter().map(|&l| l * LAND_CAPACITY + (1. - l) * OCEAN_CAPACITY).collect();
+    let capacity: Vec<f32> = land
+        .iter()
+        .map(|&l| l * LAND_CAPACITY + (1. - l) * OCEAN_CAPACITY)
+        .collect();
     let dt = 365.25 * 86400. / (12 * STEPS_PER_MONTH) as f32;
     let spacing = std::f32::consts::FRAC_PI_2 / settings.n as f32;
     let coupling = DIFFUSION / (spacing * spacing);
     let tilt = settings.tilt.to_radians();
-    let mut temperature: Vec<f32> =
-        latitudes.iter().map(|&l| 15. - 30. * l.sin().powi(2)).collect();
+    let mut temperature: Vec<f32> = latitudes
+        .iter()
+        .map(|&l| 15. - 30. * l.sin().powi(2))
+        .collect();
     let mut monthly_t = vec![[0f32; 12]; cells];
     for year in 0..=SPIN_UP_YEARS {
         for month in 0..12 {
@@ -198,7 +222,8 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
                     let surface = previous[i] - LAPSE * altitude[i];
                     let ice = smoothstep(-5., -15., surface);
                     let albedo = 0.3 + 0.25 * ice * (0.6 + 0.4 * land[i]);
-                    let absorbed = insolation(settings.solar, latitudes[i], declination) * (1. - albedo);
+                    let absorbed =
+                        insolation(settings.solar, latitudes[i], declination) * (1. - albedo);
                     let emitted = OLR_A - settings.greenhouse + OLR_B * previous[i];
                     let current = currents[i] * (1. - land[i]);
                     previous[i] + dt * (absorbed - emitted + current) / capacity[i]
@@ -235,7 +260,15 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
     for pass in 0..2 {
         for month in 0..12 {
             let t: Vec<f32> = (0..cells).map(|i| monthly_t[i][month]).collect();
-            let wind = winds(&grid, &directions, &latitudes, &longitudes, &t, &land, &altitude);
+            let wind = winds(
+                &grid,
+                &directions,
+                &latitudes,
+                &longitudes,
+                &t,
+                &land,
+                &altitude,
+            );
             let aloft: Vec<Vec3> = wind.iter().map(|w| w.1 * ALOFT).collect();
             let wind: Vec<Vec3> = wind.iter().map(|w| w.0).collect();
             let precipitation = rain(
@@ -249,7 +282,10 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
             );
             if pass == 1 {
                 for i in 0..cells {
-                    months[i][month] = Month { temperature: t[i], precipitation: precipitation[i] };
+                    months[i][month] = Month {
+                        temperature: t[i],
+                        precipitation: precipitation[i],
+                    };
                 }
                 for i in 0..cells {
                     let storms = STORMINESS
@@ -266,7 +302,8 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
             }
             // Wet land evaporates more next time round (rain recycling inland).
             for i in 0..cells {
-                land_wetness[i] = (land_wetness[i] * 0.7 + 0.3 * (precipitation[i] / 100.).min(1.)).clamp(0.05, 1.);
+                land_wetness[i] = (land_wetness[i] * 0.7 + 0.3 * (precipitation[i] / 100.).min(1.))
+                    .clamp(0.05, 1.);
             }
         }
     }
@@ -285,7 +322,12 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
 /// Ocean current heating (W/m²): warm along the western side of ocean basins (east coasts of
 /// continents) in the subtropics and mid-latitudes, cold along their eastern side (west coasts)
 /// in the subtropics. Distances to land are measured along the latitude circle.
-fn current_anomaly(grid: &SphereGrid, land: &[f32], latitudes: &[f32], longitudes: &[f32]) -> Vec<f32> {
+fn current_anomaly(
+    grid: &SphereGrid,
+    land: &[f32],
+    latitudes: &[f32],
+    longitudes: &[f32],
+) -> Vec<f32> {
     let step = 1.5f32.to_radians();
     let range = 45f32.to_radians();
     par::map(grid.len(), |i| {
@@ -310,8 +352,10 @@ fn current_anomaly(grid: &SphereGrid, land: &[f32], latitudes: &[f32], longitude
         let (west, east) = (distance(-1.), distance(1.));
         let scale = 12f32.to_radians();
         let abs_lat = lat.abs().to_degrees();
-        let warm = (-west / scale).exp() * smoothstep(10., 22., abs_lat) * smoothstep(55., 40., abs_lat);
-        let cold = (-east / scale).exp() * smoothstep(8., 18., abs_lat) * smoothstep(45., 30., abs_lat);
+        let warm =
+            (-west / scale).exp() * smoothstep(10., 22., abs_lat) * smoothstep(55., 40., abs_lat);
+        let cold =
+            (-east / scale).exp() * smoothstep(8., 18., abs_lat) * smoothstep(45., 30., abs_lat);
         CURRENTS * (warm - cold)
     })
 }
@@ -380,7 +424,12 @@ fn winds(
         })
         .collect();
     let itcz: Vec<f32> = (0..BANDS)
-        .map(|b| (-4..=4).map(|k| raw[(b as i64 + k).rem_euclid(BANDS as i64) as usize]).sum::<f32>() / 9.)
+        .map(|b| {
+            (-4..=4)
+                .map(|k| raw[(b as i64 + k).rem_euclid(BANDS as i64) as usize])
+                .sum::<f32>()
+                / 9.
+        })
         .collect();
     // Zonal mean temperatures (per degree of latitude), for the land–sea pressure anomaly.
     let mut zonal = [(0f32, 0f32); 181];
@@ -403,7 +452,11 @@ fn winds(
         .map(|i| {
             let lat = latitudes[i].to_degrees();
             let shift = itcz[band(longitudes[i])];
-            let s = if lat >= shift { (lat - shift) / (90. - shift) * 90. } else { (lat - shift) / (90. + shift) * 90. };
+            let s = if lat >= shift {
+                (lat - shift) / (90. - shift) * 90.
+            } else {
+                (lat - shift) / (90. + shift) * 90.
+            };
             let belts = -(6. * s.to_radians()).cos();
             let thermal = (t[i] - zonal_mean(latitudes[i])) * land[i];
             belts - 0.06 * thermal
@@ -415,8 +468,10 @@ fn winds(
         // Coriolis turns the flow to the right in the north, left in the south (along the
         // isobars, friction keeping some flow toward low pressure).
         let lat = latitudes[i];
-        let turn = -lat.signum() * 70f32.to_radians() * smoothstep(0., 12f32.to_radians(), lat.abs());
-        let polar = 1. - (1. - POLAR_WIND) * smoothstep(60f32.to_radians(), 75f32.to_radians(), lat.abs());
+        let turn =
+            -lat.signum() * 70f32.to_radians() * smoothstep(0., 12f32.to_radians(), lat.abs());
+        let polar =
+            1. - (1. - POLAR_WIND) * smoothstep(60f32.to_radians(), 75f32.to_radians(), lat.abs());
         let mut flow = Vec2::from_angle(turn).rotate(down) * WIND_SCALE * polar;
         // Mountains: the wind blowing up a steep slope is partly blocked, and some of it turns
         // along the slope (going round the range).
@@ -473,7 +528,10 @@ fn rain(
     let evaporation: Vec<f32> = (0..cells)
         .map(|i| {
             let sea = 5. * (0.07 * (t[i] - 25.)).exp().min(1.6);
-            let wet_land = 2.5 * land_wetness[i] * (0.06 * (t[i] - 20.)).exp().min(1.5) * smoothstep(-5., 5., t[i]);
+            let wet_land = 2.5
+                * land_wetness[i]
+                * (0.06 * (t[i] - 20.)).exp().min(1.5)
+                * smoothstep(-5., 5., t[i]);
             (sea * (1. - land[i]) + wet_land * land[i]) * day_fraction
         })
         .collect();
@@ -543,9 +601,25 @@ pub enum Koppen {
 
 impl Koppen {
     pub const ALL: [Koppen; 19] = [
-        Koppen::Af, Koppen::Am, Koppen::Aw, Koppen::BWh, Koppen::BWk, Koppen::BSh, Koppen::BSk,
-        Koppen::Csa, Koppen::Csb, Koppen::Cwa, Koppen::Cfa, Koppen::Cfb, Koppen::Cfc, Koppen::Dfa,
-        Koppen::Dfb, Koppen::Dfc, Koppen::Dw, Koppen::ET, Koppen::EF,
+        Koppen::Af,
+        Koppen::Am,
+        Koppen::Aw,
+        Koppen::BWh,
+        Koppen::BWk,
+        Koppen::BSh,
+        Koppen::BSk,
+        Koppen::Csa,
+        Koppen::Csb,
+        Koppen::Cwa,
+        Koppen::Cfa,
+        Koppen::Cfb,
+        Koppen::Cfc,
+        Koppen::Dfa,
+        Koppen::Dfb,
+        Koppen::Dfc,
+        Koppen::Dw,
+        Koppen::ET,
+        Koppen::EF,
     ];
 
     /// The class's index in [`Koppen::ALL`].
@@ -609,7 +683,11 @@ impl Koppen {
         let warm_months = t.iter().filter(|&&m| m >= 10.).count();
         if t_min > 0. {
             if dry_summer {
-                return if t_max >= 22. { Koppen::Csa } else { Koppen::Csb };
+                return if t_max >= 22. {
+                    Koppen::Csa
+                } else {
+                    Koppen::Csb
+                };
             }
             if dry_winter {
                 return Koppen::Cwa;
@@ -716,7 +794,8 @@ impl PlanetClimate {
             if (0..n).contains(&xi) && (0..n).contains(&zi) {
                 self.grid.index(face, xi as usize, zi as usize)
             } else {
-                self.grid.cell_at(self.grid.direction_at(face, Vec2::new(x, z)))
+                self.grid
+                    .cell_at(self.grid.direction_at(face, Vec2::new(x, z)))
             }
         };
         let corners = [
@@ -727,7 +806,10 @@ impl PlanetClimate {
         ];
         let drop = LAPSE * height.max(0.) * self.settings.meters_per_unit;
         let blend = |f: &dyn Fn(&Month) -> f32, k: usize| {
-            corners.iter().map(|&(c, w)| f(&self.months[c][k]) * w).sum::<f32>()
+            corners
+                .iter()
+                .map(|&(c, w)| f(&self.months[c][k]) * w)
+                .sum::<f32>()
         };
         (
             std::array::from_fn(|k| blend(&|m| m.temperature, k) - drop),

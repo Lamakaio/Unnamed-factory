@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use bevy_math::{IVec3, Vec2, Vec3};
 
 use crate::{
+    climate::{PlanetClimate, WindField},
     detail::gullies,
     grid::Grid,
     noise::{Noise, hash, smoothstep},
     planet::Planet,
-    climate::{PlanetClimate, WindField},
     rivers::PlanetRiver,
-    springs::{PlanetSpring, Springs, find_springs},
     sphere::{FACES, SphereGrid},
+    springs::{PlanetSpring, Springs, find_springs},
 };
 
 /// Cells of padding around each face: the bicubic stencil reaches two cells out, and fine
@@ -81,7 +81,7 @@ const KARST_SINKHOLES: f32 = 0.35;
 /// Karst of each cell: towers (positive) where limestone meets the humid tropics and
 /// subtropics, sinkholes (negative) in other wet climates; none in dry or polar ones.
 fn karst(planet: &Planet, koppen: &[crate::climate::Koppen]) -> Vec<f32> {
-    use crate::{geology::Rock, climate::Koppen};
+    use crate::{climate::Koppen, geology::Rock};
     let raw: Vec<f32> = (0..planet.grid.len())
         .map(|i| {
             if planet.sea[i] || Rock::from_id(planet.rock[i]) != Rock::Limestone {
@@ -89,7 +89,13 @@ fn karst(planet: &Planet, koppen: &[crate::climate::Koppen]) -> Vec<f32> {
             }
             match koppen[i] {
                 Koppen::Af | Koppen::Am | Koppen::Aw | Koppen::Cwa | Koppen::Cfa => 1.,
-                Koppen::Cfb | Koppen::Cfc | Koppen::Csa | Koppen::Csb | Koppen::Dfa | Koppen::Dfb | Koppen::Dw => -1.,
+                Koppen::Cfb
+                | Koppen::Cfc
+                | Koppen::Csa
+                | Koppen::Csb
+                | Koppen::Dfa
+                | Koppen::Dfb
+                | Koppen::Dw => -1.,
                 _ => 0.,
             }
         })
@@ -110,7 +116,7 @@ const BADLANDS_SLOPE: (f32, f32) = (0.15, 0.4);
 
 /// Sand seas (ergs) and badlands of each cell (0..1), from the climate classes.
 fn deserts(planet: &Planet, koppen: &[crate::climate::Koppen]) -> (Vec<f32>, Vec<f32>) {
-    use crate::{geology::Rock, climate::Koppen};
+    use crate::{climate::Koppen, geology::Rock};
     let grid = &planet.grid;
     let radius = planet.radius();
     let noise = Noise::new(planet.settings.seed as u32 ^ 0xE6C5);
@@ -168,7 +174,10 @@ impl FaceField {
             .map(|face| {
                 (0..side * side)
                     .map(|k| {
-                        let (x, z) = ((k % side) as i64 - PAD as i64, (k / side) as i64 - PAD as i64);
+                        let (x, z) = (
+                            (k % side) as i64 - PAD as i64,
+                            (k / side) as i64 - PAD as i64,
+                        );
                         if x >= 0 && z >= 0 && (x as usize) < n && (z as usize) < n {
                             values[grid.index(face, x as usize, z as usize)]
                         } else {
@@ -185,7 +194,10 @@ impl FaceField {
 
     fn at(&self, face: usize, x: i64, z: i64) -> f32 {
         let side = (self.n + 2 * PAD) as i64;
-        let (x, z) = ((x + PAD as i64).clamp(0, side - 1), (z + PAD as i64).clamp(0, side - 1));
+        let (x, z) = (
+            (x + PAD as i64).clamp(0, side - 1),
+            (z + PAD as i64).clamp(0, side - 1),
+        );
         self.faces[face][(z * side + x) as usize]
     }
 
@@ -295,39 +307,72 @@ impl PlanetSurface {
                     .ground_color();
                 [r, g, b].map(srgb_to_linear)
             });
-            [0, 1, 2].map(|k| {
-                FaceField::new(planet, &colours.iter().map(|c| c[k]).collect::<Vec<_>>())
-            })
+            [0, 1, 2]
+                .map(|k| FaceField::new(planet, &colours.iter().map(|c| c[k]).collect::<Vec<_>>()))
         });
         let koppen = climate.map(|climate| {
-            crate::par::map(planet.grid.len(), |i| climate.koppen_at(planet.grid.direction(i), planet.heights[i]))
+            crate::par::map(planet.grid.len(), |i| {
+                climate.koppen_at(planet.grid.direction(i), planet.heights[i])
+            })
         });
-        let weights = koppen.as_ref().map(|koppen| koppen.iter().map(|k| k.ground_weights()).collect::<Vec<_>>());
+        let weights = koppen.as_ref().map(|koppen| {
+            koppen
+                .iter()
+                .map(|k| k.ground_weights())
+                .collect::<Vec<_>>()
+        });
         let koppen_cells = koppen.clone();
         let koppen = koppen.map(|koppen| {
-            FaceField::new(planet, &koppen.iter().map(|k| k.id() as f32).collect::<Vec<_>>())
+            FaceField::new(
+                planet,
+                &koppen.iter().map(|k| k.id() as f32).collect::<Vec<_>>(),
+            )
         });
         // Marsh where wet ground meets a wet enough climate (not frozen), salt flats on closed
         // flats where it is dry.
         let marsh: Vec<f32> = (0..planet.grid.len())
             .map(|i| {
-                let [dryness, _, _, snow, _] = weights.as_ref().map_or([0.3, 0., 0., 0., 0.], |w| w[i]);
+                let [dryness, _, _, snow, _] =
+                    weights.as_ref().map_or([0.3, 0., 0., 0., 0.], |w| w[i]);
                 let moist = 1. - smoothstep(0.5, 0.85, dryness);
                 let marsh = planet.wetland[i] * moist * (1. - snow);
                 marsh - planet.basins[i] * (1. - moist)
             })
             .collect();
-        let ocean: Vec<f32> = planet.sea.iter().map(|&s| if s { 1. } else { 0. }).collect();
+        let ocean: Vec<f32> = planet
+            .sea
+            .iter()
+            .map(|&s| if s { 1. } else { 0. })
+            .collect();
         let ocean = planet.grid.blur(&ocean, 3);
         // Glaciers and ice caps: the ice on the ground (smooth: no gullies), no lakes or
         // marsh under it.
-        let thickness =
-            climate.map_or_else(|| vec![0.; planet.grid.len()], |climate| crate::glaciers::glaciers(planet, climate));
-        let ice: Vec<f32> = thickness.iter().map(|&t| smoothstep(0.05, 0.25, t)).collect();
-        let heights: Vec<f32> = planet.heights.iter().zip(&thickness).map(|(h, t)| h + t).collect();
-        let lake_depth: Vec<f32> =
-            planet.lake_depth.iter().zip(&ice).map(|(&d, &ice)| if ice > 0. { 0. } else { d }).collect();
-        let calm: Vec<f32> = planet.calm.iter().zip(&ice).map(|(c, i)| c.max(*i)).collect();
+        let thickness = climate.map_or_else(
+            || vec![0.; planet.grid.len()],
+            |climate| crate::glaciers::glaciers(planet, climate),
+        );
+        let ice: Vec<f32> = thickness
+            .iter()
+            .map(|&t| smoothstep(0.05, 0.25, t))
+            .collect();
+        let heights: Vec<f32> = planet
+            .heights
+            .iter()
+            .zip(&thickness)
+            .map(|(h, t)| h + t)
+            .collect();
+        let lake_depth: Vec<f32> = planet
+            .lake_depth
+            .iter()
+            .zip(&ice)
+            .map(|(&d, &ice)| if ice > 0. { 0. } else { d })
+            .collect();
+        let calm: Vec<f32> = planet
+            .calm
+            .iter()
+            .zip(&ice)
+            .map(|(c, i)| c.max(*i))
+            .collect();
         let (erg, badlands) = match &koppen_cells {
             Some(koppen) => deserts(planet, koppen),
             None => (vec![0.; planet.grid.len()], vec![0.; planet.grid.len()]),
@@ -340,7 +385,11 @@ impl PlanetSurface {
                     if !planet.sea[i] && !lake {
                         return 0.;
                     }
-                    let level = if lake { planet.heights[i] + planet.lake_depth[i] } else { 0. };
+                    let level = if lake {
+                        planet.heights[i] + planet.lake_depth[i]
+                    } else {
+                        0.
+                    };
                     let (t, _) = climate.months_at(planet.grid.direction(i), level);
                     let warmest = t.iter().copied().fold(f32::MIN, f32::max);
                     smoothstep(SEA_ICE_WARMEST.0, SEA_ICE_WARMEST.1, warmest)
@@ -355,9 +404,8 @@ impl PlanetSurface {
         };
         let marsh: Vec<f32> = marsh.iter().zip(&ice).map(|(m, i)| m * (1. - i)).collect();
         let weights = weights.map(|weights: Vec<[f32; 5]>| {
-            [0, 1, 2, 3, 4].map(|k| {
-                FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>())
-            })
+            [0, 1, 2, 3, 4]
+                .map(|k| FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>()))
         });
         let mut surface = Self {
             wind: climate.map(|climate| std::sync::Arc::new(climate.wind_field())),
@@ -365,7 +413,10 @@ impl PlanetSurface {
             koppen,
             ground,
             ocean: FaceField::new(planet, &ocean),
-            rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
+            rock: FaceField::new(
+                planet,
+                &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>(),
+            ),
             lava: FaceField::new(planet, &planet.lava),
             geothermal: FaceField::new(planet, &planet.geothermal),
             reef: FaceField::new(planet, &planet.reef),
@@ -394,7 +445,11 @@ impl PlanetSurface {
         let mut rivers = planet.rivers.clone();
         // Rivers start at the glaciers' snouts (meltwater), not under the ice.
         for river in &mut rivers {
-            let under = river.points.iter().take_while(|p| surface.ice_at(p.direction) > 0.5).count();
+            let under = river
+                .points
+                .iter()
+                .take_while(|p| surface.ice_at(p.direction) > 0.5)
+                .count();
             let keep = river.points.len().saturating_sub(1);
             river.points.drain(..under.min(keep));
         }
@@ -403,10 +458,14 @@ impl PlanetSurface {
             let count = river.points.len();
             for k in 0..count {
                 let point = river.points[k];
-                let (before, after) =
-                    (river.points[k.saturating_sub(1)], river.points[(k + 1).min(count - 1)]);
+                let (before, after) = (
+                    river.points[k.saturating_sub(1)],
+                    river.points[(k + 1).min(count - 1)],
+                );
                 let up = point.direction;
-                let across = (after.direction - before.direction).cross(up).normalize_or_zero();
+                let across = (after.direction - before.direction)
+                    .cross(up)
+                    .normalize_or_zero();
                 let lowest = [-0.5f32, 0., 0.5]
                     .map(|side| {
                         let q = (up * surface.radius + across * side * point.width).normalize();
@@ -423,12 +482,10 @@ impl PlanetSurface {
         // Rivers end where they reach the sea (the shaped coast may lie upstream of the cell
         // they drained into).
         for river in &mut rivers {
-            let reached = river
-                .points
-                .iter()
-                .position(|p| {
-                    surface.uncarved_height(p.direction) < -SEA_REACHED && surface.ocean_at(p.direction) > 0.5
-                });
+            let reached = river.points.iter().position(|p| {
+                surface.uncarved_height(p.direction) < -SEA_REACHED
+                    && surface.ocean_at(p.direction) > 0.5
+            });
             if let Some(k) = reached {
                 river.points.truncate(k + 1);
                 river.end = crate::RiverEnd::Sea;
@@ -463,7 +520,8 @@ impl PlanetSurface {
     pub fn wetness(&self, face: usize, p: Vec2) -> f32 {
         let lake = smoothstep(0.02, 0.1, self.lake_depth.bilinear(face, p));
         let world = self.direction(face, p) * self.radius;
-        lake.max(self.channels.wetness(world)).max(self.springs.carve(world, 0.).1)
+        lake.max(self.channels.wetness(world))
+            .max(self.springs.carve(world, 0.).1)
     }
 
     /// Height in a direction, before the river channels are carved.
@@ -478,7 +536,9 @@ impl PlanetSurface {
         let direction = self.direction(face, p);
         let height = self.detailed_height(face, p, direction);
         let world = direction * self.radius;
-        self.springs.carve(world, self.channels.carve(world, height)).0
+        self.springs
+            .carve(world, self.channels.carve(world, height))
+            .0
     }
 
     /// The cells' heights with fine detail (no river channels).
@@ -490,10 +550,18 @@ impl PlanetSurface {
         let calm = 1. - self.calm.bilinear(face, p).clamp(0., 1.);
         // Dunes on the sand seas.
         let erg = self.erg.bilinear(face, p);
-        let height = if erg > 0.01 { height + self.dunes(direction) * erg * calm } else { height };
+        let height = if erg > 0.01 {
+            height + self.dunes(direction) * erg * calm
+        } else {
+            height
+        };
         // Karst: towers or sinkholes.
         let karst = self.karst.bilinear(face, p);
-        let height = if karst.abs() > 0.01 { height + self.karst_relief(direction, karst) * calm } else { height };
+        let height = if karst.abs() > 0.01 {
+            height + self.karst_relief(direction, karst) * calm
+        } else {
+            height
+        };
         // Badlands: dense gullies.
         let badlands = self.badlands.bilinear(face, p);
         let strength = self.ruggedness.bilinear(face, p).max(badlands) * calm;
@@ -505,11 +573,17 @@ impl PlanetSurface {
         let world = direction * (2. * self.n as f32 / std::f32::consts::PI);
         let roughness = noise.fbm3(world / 5., 3) * 0.12;
         // ...and gullies on slopes, blended with the neighbouring face's near an edge.
-        let edge = [p.x + 0.5, self.n as f32 - 0.5 - p.x, p.y + 0.5, self.n as f32 - 0.5 - p.y];
-        let (nearest, distance) = edge
-            .iter()
-            .enumerate()
-            .fold((0, f32::MAX), |best, (k, &d)| if d < best.1 { (k, d) } else { best });
+        let edge = [
+            p.x + 0.5,
+            self.n as f32 - 0.5 - p.x,
+            p.y + 0.5,
+            self.n as f32 - 0.5 - p.y,
+        ];
+        let (nearest, distance) =
+            edge.iter().enumerate().fold(
+                (0, f32::MAX),
+                |best, (k, &d)| if d < best.1 { (k, d) } else { best },
+            );
         let mut gully = self.gullies_on(face, p, world);
         if distance < EDGE_BLEND {
             // The neighbouring face across the nearest edge: the direction just past it.
@@ -522,7 +596,8 @@ impl PlanetSurface {
                 gully = gully * own + self.gullies_on(other, q, world) * (1. - own);
             }
         }
-        height + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * DETAIL_AMPLITUDE * strength
+        height
+            + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * DETAIL_AMPLITUDE * strength
     }
 
     /// Karst relief (world units) in a direction: steep limestone towers with rounded tops
@@ -563,7 +638,8 @@ impl PlanetSurface {
     /// faces west), sinuous and of varied size. A whole number of dunes round the planet keeps
     /// them seamless.
     fn dunes(&self, direction: Vec3) -> f32 {
-        let count = (std::f32::consts::TAU * self.radius * DUNE_LATITUDE.cos() / DUNE_WAVELENGTH).round();
+        let count =
+            (std::f32::consts::TAU * self.radius * DUNE_LATITUDE.cos() / DUNE_WAVELENGTH).round();
         let longitude = direction.z.atan2(direction.x);
         let world = direction * self.radius;
         let noise = Noise::new(self.seed ^ 0xD0E5);
@@ -583,8 +659,10 @@ impl PlanetSurface {
     fn gullies_on(&self, face: usize, p: Vec2, world: Vec3) -> f32 {
         let e = 0.5;
         let gradient = Vec2::new(
-            self.heights.bicubic(face, p + Vec2::X * e) - self.heights.bicubic(face, p - Vec2::X * e),
-            self.heights.bicubic(face, p + Vec2::Y * e) - self.heights.bicubic(face, p - Vec2::Y * e),
+            self.heights.bicubic(face, p + Vec2::X * e)
+                - self.heights.bicubic(face, p - Vec2::X * e),
+            self.heights.bicubic(face, p + Vec2::Y * e)
+                - self.heights.bicubic(face, p - Vec2::Y * e),
         ) / (2. * e);
         let slope_mask = smoothstep(0.12, 0.6, gradient.length());
         if slope_mask <= 0. {
@@ -644,10 +722,18 @@ impl PlanetSurface {
             / 8.;
         let exposure = 1. + WIND_EXPOSURE.0 * ((height - ring) / WIND_EXPOSURE.1).tanh();
         // Steep slopes: the wind blowing up them turns along them.
-        let tx = (self.direction(face, p + Vec2::X) - self.direction(face, p - Vec2::X)) * self.radius / 2.;
-        let ty = (self.direction(face, p + Vec2::Y) - self.direction(face, p - Vec2::Y)) * self.radius / 2.;
-        let dx = (self.heights.bilinear(face, p + Vec2::X) - self.heights.bilinear(face, p - Vec2::X)) / 2.;
-        let dy = (self.heights.bilinear(face, p + Vec2::Y) - self.heights.bilinear(face, p - Vec2::Y)) / 2.;
+        let tx = (self.direction(face, p + Vec2::X) - self.direction(face, p - Vec2::X))
+            * self.radius
+            / 2.;
+        let ty = (self.direction(face, p + Vec2::Y) - self.direction(face, p - Vec2::Y))
+            * self.radius
+            / 2.;
+        let dx = (self.heights.bilinear(face, p + Vec2::X)
+            - self.heights.bilinear(face, p - Vec2::X))
+            / 2.;
+        let dy = (self.heights.bilinear(face, p + Vec2::Y)
+            - self.heights.bilinear(face, p - Vec2::Y))
+            / 2.;
         let slope = tx * (dx / tx.length_squared()) + ty * (dy / ty.length_squared());
         let steepness = slope.length();
         if steepness > 1e-4 {
@@ -743,14 +829,22 @@ impl Channels {
                 };
                 let reach = reach(p.width.max(q.width));
                 let (lo, hi) = (
-                    ((segment.a.min(segment.b) - reach) / BUCKET).floor().as_ivec3(),
-                    ((segment.a.max(segment.b) + reach) / BUCKET).floor().as_ivec3(),
+                    ((segment.a.min(segment.b) - reach) / BUCKET)
+                        .floor()
+                        .as_ivec3(),
+                    ((segment.a.max(segment.b) + reach) / BUCKET)
+                        .floor()
+                        .as_ivec3(),
                 );
                 let id = channels.segments.len() as u32;
                 for x in lo.x..=hi.x {
                     for y in lo.y..=hi.y {
                         for z in lo.z..=hi.z {
-                            channels.buckets.entry(IVec3::new(x, y, z)).or_default().push(id);
+                            channels
+                                .buckets
+                                .entry(IVec3::new(x, y, z))
+                                .or_default()
+                                .push(id);
                         }
                     }
                 }
@@ -835,7 +929,11 @@ fn reach(width: f32) -> f32 {
 
 /// sRGB component to linear.
 fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// Bicubic interpolation (Catmull-Rom) through four values, at `t` between the middle two.
