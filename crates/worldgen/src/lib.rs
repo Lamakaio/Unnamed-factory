@@ -160,6 +160,18 @@ pub enum Biome {
     Desert,
     DeciduousForest,
     ConiferForest,
+    /// Tropical rainforest (Af, Am): jungle trees, bamboo, ferns.
+    Rainforest,
+    /// Tropical mountain forest (cool and wet at altitude): jungle trees and conifers.
+    CloudForest,
+    /// Tropical wet and dry (Aw): grass with scattered acacias.
+    Savanna,
+    /// Sheltered tropical shores: mangroves standing in the shallows.
+    Mangrove,
+    /// Polar lowlands (ET): low shrubs, moss, stones; no trees.
+    Tundra,
+    /// Above the tree line on mountains (ET away from the poles): grass, flowers, rocks.
+    AlpineMeadow,
     Alpine,
     Rock,
     Snow,
@@ -179,6 +191,12 @@ impl Biome {
             Biome::Desert => [0.90, 0.74, 0.50],
             Biome::DeciduousForest => [0.26, 0.48, 0.18],
             Biome::ConiferForest => [0.17, 0.34, 0.20],
+            Biome::Rainforest => [0.14, 0.38, 0.14],
+            Biome::CloudForest => [0.20, 0.42, 0.24],
+            Biome::Savanna => [0.66, 0.64, 0.32],
+            Biome::Mangrove => [0.30, 0.40, 0.22],
+            Biome::Tundra => [0.56, 0.58, 0.48],
+            Biome::AlpineMeadow => [0.52, 0.62, 0.38],
             Biome::Alpine => [0.55, 0.60, 0.45],
             Biome::Rock => [0.48, 0.45, 0.42],
             Biome::Snow => [0.94, 0.95, 0.97],

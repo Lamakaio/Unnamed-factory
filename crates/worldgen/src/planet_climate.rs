@@ -548,6 +548,16 @@ impl Koppen {
         Koppen::Dfb, Koppen::Dfc, Koppen::Dw, Koppen::ET, Koppen::EF,
     ];
 
+    /// The class's index in [`Koppen::ALL`].
+    pub fn id(self) -> u8 {
+        Koppen::ALL.iter().position(|&k| k == self).unwrap() as u8
+    }
+
+    /// The class of an index in [`Koppen::ALL`] (clamped).
+    pub fn from_id(id: u8) -> Koppen {
+        Koppen::ALL[(id as usize).min(Koppen::ALL.len() - 1)]
+    }
+
     /// Classify twelve months (temperatures in °C at the place's altitude, precipitation in mm);
     /// `north`: the place is in the northern hemisphere (summer is April–September).
     pub fn classify(t: [f32; 12], p: [f32; 12], north: bool) -> Koppen {

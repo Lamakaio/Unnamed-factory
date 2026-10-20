@@ -22,6 +22,7 @@ use bevy::{
 use worldgen::{
     Biome,
     noise::{Noise, hash, smoothstep},
+    planet_climate::Koppen,
     planet_springs::PlanetSpringKind,
     surface::PlanetSurface,
 };
@@ -47,6 +48,14 @@ const DROP_DISTANCE: f32 = 320.;
 const BEACH_HEIGHT: f32 = 0.3;
 /// Beaches within this latitude (its sine) are tropical (palms).
 const TROPICAL_SIN: f32 = 0.45;
+/// Mangroves stand in water down to this height.
+const MANGROVE_DEPTH: f32 = -0.25;
+/// Tropical forests in a temperate climate (cooled by altitude) above this height are cloud
+/// forests (about 1000 m).
+const CLOUD_FOREST_HEIGHT: f32 = 10.;
+/// Above this latitude (its sine) treeless polar climates (ET) are tundra, else alpine
+/// meadows.
+const TUNDRA_SIN: f32 = 0.8;
 /// Scale of the rock a hillside spring comes out of (on top of [`METERS_TO_WORLD`]), as on the
 /// flat map.
 const SPRING_ROCK_SCALE: f32 = 5.;
@@ -409,9 +418,11 @@ fn place(
             let species = species_index(name);
             let kind = SPECIES[species as usize].kind;
             let height = surface.height(chunk.face, p);
-            // (Land below sea level is fine away from the ocean.)
+            // (Land below sea level is fine away from the ocean; mangroves stand in the water.)
             let lowest = if surface.ocean.bilinear(chunk.face, p) < 0.02 {
                 f32::MIN
+            } else if name.starts_with("mangrove") {
+                MANGROVE_DEPTH
             } else if kind == Kind::Rock {
                 0.03
             } else {
@@ -563,12 +574,25 @@ fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
 fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves: f32) -> Biome {
     let height = surface.heights.bilinear(face, p);
     let ocean = surface.ocean.bilinear(face, p);
+    let tropical = surface.direction(face, p).y.abs() < TROPICAL_SIN;
+    // Mangroves: on low tropical shores in stretches (sheltered coasts, estuaries, marshes),
+    // standing in the shallows; not on reefs.
+    if tropical
+        && height > MANGROVE_DEPTH
+        && height < BEACH_HEIGHT
+        && ocean > COAST.0
+        && ocean < 0.85
+        && surface.reef.bilinear(face, p) < 0.1
+        && (groves > 0.75 || surface.marsh.bilinear(face, p) > 0.15)
+        && surface.lake_depth.bilinear(face, p) < 0.02
+    {
+        return Biome::Mangrove;
+    }
     if ocean > 0.5 || height <= 0. && ocean > 0.02 || surface.lake_depth.bilinear(face, p) > 0.02 {
         return Biome::Sea;
     }
     // (Beaches only along the ocean: dry basins below sea level are land.) Tropical ones, and
     // reef islets, have palms.
-    let tropical = surface.direction(face, p).y.abs() < TROPICAL_SIN;
     if height > 0. && surface.reef.bilinear(face, p) > 0.3 {
         return Biome::TropicalBeach;
     }
@@ -597,6 +621,7 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
         return Biome::Meadow;
     };
     let [dryness, forest, desert, snow, cold] = weights.each_ref().map(|w| w.bilinear(face, p));
+    let koppen = surface.koppen_at(face, p);
     if snow > 0.5 {
         Biome::Snow
     } else if slope > 0.9 {
@@ -604,11 +629,20 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     } else if desert > 0.5 {
         Biome::Desert
     } else if forest * (0.6 + 0.8 * groves) > 0.45 {
-        if cold > 0.5 {
-            Biome::ConiferForest
-        } else {
-            Biome::DeciduousForest
+        match koppen {
+            Some(Koppen::Af | Koppen::Am) => Biome::Rainforest,
+            // (Cooler and wet at altitude in the tropics.)
+            Some(Koppen::Cfa | Koppen::Cfb | Koppen::Cfc | Koppen::Cwa) if tropical && height > CLOUD_FOREST_HEIGHT => {
+                Biome::CloudForest
+            }
+            _ if cold > 0.5 => Biome::ConiferForest,
+            _ => Biome::DeciduousForest,
         }
+    } else if koppen == Some(Koppen::Aw) {
+        Biome::Savanna
+    } else if koppen == Some(Koppen::ET) {
+        // Polar lowlands, or above the tree line on mountains.
+        if surface.direction(face, p).y.abs() > TUNDRA_SIN { Biome::Tundra } else { Biome::AlpineMeadow }
     } else if cold > 0.6 {
         Biome::Alpine
     } else if dryness > 0.65 {

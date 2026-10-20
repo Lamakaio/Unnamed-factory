@@ -86,6 +86,11 @@ impl FaceField {
         catmull_rom([row(-1), row(0), row(1), row(2)], t.y)
     }
 
+    /// The nearest cell's value at continuous cell coordinates of a face.
+    pub fn nearest(&self, face: usize, p: Vec2) -> f32 {
+        self.at(face, p.x.round() as i64, p.y.round() as i64)
+    }
+
     /// Bilinear value at continuous cell coordinates of a face.
     pub fn bilinear(&self, face: usize, p: Vec2) -> f32 {
         let cell = p.floor();
@@ -112,6 +117,9 @@ pub struct PlanetSurface {
     /// Ground colour of each cell (linear RGB), from its climate (Köppen class at its altitude);
     /// `None` without a climate.
     pub ground: Option<[FaceField; 3]>,
+    /// The climate class of each cell at its height (`Koppen::id`; see
+    /// [`PlanetSurface::koppen_at`]).
+    pub koppen: Option<FaceField>,
     /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
     pub weights: Option<[FaceField; 5]>,
     /// The rock of each cell (`geology::Rock` id; see [`PlanetSurface::rock_at`]), fresh lava
@@ -158,10 +166,12 @@ impl PlanetSurface {
                 FaceField::new(planet, &colours.iter().map(|c| c[k]).collect::<Vec<_>>())
             })
         });
-        let weights = climate.map(|climate| {
-            crate::par::map(planet.grid.len(), |i| {
-                climate.koppen_at(planet.grid.direction(i), planet.heights[i]).ground_weights()
-            })
+        let koppen = climate.map(|climate| {
+            crate::par::map(planet.grid.len(), |i| climate.koppen_at(planet.grid.direction(i), planet.heights[i]))
+        });
+        let weights = koppen.as_ref().map(|koppen| koppen.iter().map(|k| k.ground_weights()).collect::<Vec<_>>());
+        let koppen = koppen.map(|koppen| {
+            FaceField::new(planet, &koppen.iter().map(|k| k.id() as f32).collect::<Vec<_>>())
         });
         // Marsh where wet ground meets a wet enough climate (not frozen), salt flats on closed
         // flats where it is dry.
@@ -193,6 +203,7 @@ impl PlanetSurface {
         let mut surface = Self {
             wind: climate.map(|climate| std::sync::Arc::new(climate.wind_field())),
             weights,
+            koppen,
             ground,
             ocean: FaceField::new(planet, &ocean),
             rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
@@ -424,6 +435,12 @@ impl PlanetSurface {
             wind += -uphill * turned + along * turned * wind.dot(along).signum();
         }
         (wind * exposure, strength * exposure)
+    }
+
+    /// The climate class at a point of a face (the nearest cell's), `None` without a climate.
+    pub fn koppen_at(&self, face: usize, p: Vec2) -> Option<crate::planet_climate::Koppen> {
+        let id = self.koppen.as_ref()?.nearest(face, p);
+        Some(crate::planet_climate::Koppen::from_id(id.round() as u8))
     }
 
     /// Glacier ice in a direction (0..1, see [`PlanetSurface::ice`]).

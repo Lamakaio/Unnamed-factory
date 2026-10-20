@@ -155,6 +155,12 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   vegetation, grass and rocks, trims river sources under the ice (they start at the snouts)
   and goes to the shader as the rock field's negative alpha (bare ice, crevasses where it
   steepens, firn on top, moraines at the edge).
+- **Biomes from the climate class** (`PlanetSurface::koppen_at`, the nearest cell's Köppen
+  class at its height; `planet/vegetation.rs::biome`): rainforest (Af, Am: jungle trees,
+  bamboo), cloud forest (tropical forest cooled to a temperate class above
+  `CLOUD_FOREST_HEIGHT`), savanna (Aw: grass, scattered acacias), mangroves (low tropical
+  shores in stretches, standing in the shallows down to `MANGROVE_DEPTH`), tundra (ET poleward
+  of `TUNDRA_SIN`: shrubs, stones) and alpine meadows (ET on mountains: grass, flowers, rocks).
 - **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
   spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
