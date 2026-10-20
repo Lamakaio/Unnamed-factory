@@ -143,6 +143,9 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Karst** (`surface.rs::karst`): tower karst in humid tropics, dolines elsewhere (D. Ford and
   P. Williams, *Karst Hydrogeology and Geomorphology*, 2007); towers placed with cellular
   (Worley) noise (S. Worley, *A Cellular Texture Basis Function*, SIGGRAPH 1996).
+- **Barrier islands** (`barriers.rs`): sand bars on low, gently sloping coasts with lagoons
+  and tidal inlets behind them, as described in coastal geomorphology (e.g. R. Davis and
+  D. FitzGerald, *Beaches and Coasts*, 2004).
 - **Reefs and atolls** (`reefs.rs`): fringing reefs, barrier reefs round sinking volcanic
   islands and atolls on sunk ones, after C. Darwin, *The Structure and Distribution of Coral
   Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.

@@ -187,6 +187,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
   are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
   `PlanetSurface::volcanoes` (the inspector reports them).
+- **Barrier islands** (`barriers.rs`, right after the reefs): on low coasts (land below
+  `LOW_COAST` near the shore) with a shallow shelf, between `LATITUDE`s, in noise stretches: a
+  sand bar `BAR_DISTANCE` offshore (flat top, gentle `SHOREFACE`, steeper `BACK`), broken by
+  inlets, a shallow lagoon behind; their rock is the mainland's (not the sea floor's basalt).
+  The terrain shader keeps beaches sand on their steep seaward slopes.
 - **Geothermal fields** (`volcanoes::Built::geothermal`, `Planet::geothermal`): patches on
   the lower flanks of volcanoes younger than `GEOTHERMAL_AGE`; drawn as sinter, microbial mats
   and hot pools (the rock field's fraction on basalt), bare of plants.

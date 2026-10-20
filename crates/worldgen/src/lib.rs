@@ -7,6 +7,7 @@
 //! planet uses the cube-sphere ([`sphere`]). ([`WorldgenSettings`] holds their parameters: the
 //! former flat continent's, scaled by the planet.)
 
+mod barriers;
 pub(crate) mod detail;
 pub mod geology;
 mod fjords;

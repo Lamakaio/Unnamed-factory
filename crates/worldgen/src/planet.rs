@@ -847,6 +847,9 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes.
     let reef = crate::reefs::build(&grid, radius, settings.seed, &volcanoes, &mut heights, &mut sea);
     lap("  volcanoes", &mut timings);
+    // Barrier islands and lagoons on low coasts with a shallow shelf.
+    crate::barriers::build(&grid, radius, settings.seed, &reef, &mut heights, &mut sea, &mut rock);
+    lap("  barrier islands", &mut timings);
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
     let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
         crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);

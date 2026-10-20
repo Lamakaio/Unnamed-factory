@@ -367,7 +367,8 @@ fn ground(
         sand = mix(srgb(0.30, 0.29, 0.30), srgb(0.38, 0.36, 0.36), patches(blotches, 0.2));
     }
     let beach = (1.0 - smoothstep(0.15, 0.45, height + 0.15 * large)) * c.b;
-    color = mix(color, sand, border(max(a.r, beach), medium));
+    let sandy = border(max(a.r, beach), medium);
+    color = mix(color, sand, sandy);
 
     // Deserts: stony (reg: gravel pavement strewn with dark pebbles, cracked clay flats), sand
     // seas (erg: warm sand in wind ripples) and badlands (bare banded soft rock).
@@ -398,7 +399,8 @@ fn ground(
     let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
     // (Badlands: bare wherever the ground slopes a little.)
     let bare = badlands * smoothstep(0.02, 0.1, steep) + 0.2 * medium;
-    let bare_rock = max(rock, crisp(0.5, bare, fwidth(bare)));
+    // (Beaches stay sand where they slope steeply into the water: bars, spits.)
+    let bare_rock = max(rock, crisp(0.5, bare, fwidth(bare))) * (1.0 - sandy * (1.0 - smoothstep(0.2, 0.45, height)));
     color = mix(color, rock_color(xz, height, up, footprint, rock_type, level) * rock_tone, bare_rock);
 
     // Fresh lava: bare, black, in ropy swirls with a ragged edge (no grass, no forest).
