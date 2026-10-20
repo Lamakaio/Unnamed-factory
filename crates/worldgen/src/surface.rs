@@ -207,6 +207,8 @@ pub struct PlanetSurface {
     /// (0..1, round active volcanoes) and the volcanoes.
     pub rock: FaceField,
     pub lava: FaceField,
+    /// Geothermal fields (hot springs: 0..1, see `volcanoes::Built::geothermal`).
+    pub geothermal: FaceField,
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
     /// Coral reef (0..1, see `reefs`).
     pub reef: FaceField,
@@ -305,6 +307,7 @@ impl PlanetSurface {
             ocean: FaceField::new(planet, &ocean),
             rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
             lava: FaceField::new(planet, &planet.lava),
+            geothermal: FaceField::new(planet, &planet.geothermal),
             reef: FaceField::new(planet, &planet.reef),
             ice: FaceField::new(planet, &ice),
             erg: FaceField::new(planet, &erg),

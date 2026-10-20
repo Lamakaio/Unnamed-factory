@@ -312,6 +312,7 @@ fn ground(
     ice: f32,
     erg: f32,
     badlands: f32,
+    geothermal: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -405,6 +406,19 @@ fn ground(
     let swirls = fbm(xz * 1.3 + vec2(fbm(xz * 0.4, 2, footprint * 0.4) * 2.0, 0.0), 3, footprint * 1.3);
     let lava_color = mix(srgb(0.11, 0.10, 0.11), srgb(0.22, 0.20, 0.20), patches(swirls, 0.25));
     color = mix(color, lava_color, crisp(0.5, lava_edge, fwidth(lava_edge)));
+
+    // Geothermal fields: white sinter crusts, rust and yellow microbial mats round deep
+    // turquoise hot pools.
+    if geothermal > 0.02 {
+        let field_edge = geothermal + 0.25 * medium;
+        let pool_noise = fbm(xz * 0.9 + vec2(2.0, 6.0), 3, footprint * 0.9);
+        var hot = mix(srgb(0.92, 0.90, 0.84), srgb(0.80, 0.78, 0.72), patches(blotches, 0.2));
+        hot = mix(hot, srgb(0.86, 0.52, 0.22), patches(pool_noise, 0.25));
+        hot = mix(hot, srgb(0.94, 0.80, 0.30), patches(pool_noise, 0.38));
+        hot = mix(hot, srgb(0.10, 0.62, 0.68), patches(pool_noise, 0.48));
+        hot = mix(hot, srgb(0.05, 0.40, 0.58), patches(pool_noise, 0.6));
+        color = mix(color, hot, crisp(0.5, field_edge, fwidth(field_edge)));
+    }
 
     // Snow: settles on flat ground (steep rock stays bare), with a ragged edge and wind-blown
     // drifts.
@@ -538,13 +552,20 @@ fn fragment(
     var ice = 0.0;
     var erg = 0.0;
     var badlands = 0.0;
+    var geothermal = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
         let cell = clamp(vec2<i32>(floor(xz + warp + 0.5)), vec2(0), vec2(n - 1));
         let id = textureLoad(rock_field, cell, 0).r;
         rock_type = clamp(i32(floor(id + 0.05)), 0, 5);
-        badlands = saturate((id - f32(rock_type)) / 0.9);
+        // (The fraction: geothermal fields on basalt, else badlands.)
+        let extra = saturate((id - f32(rock_type)) / 0.9);
+        if rock_type == 2 {
+            geothermal = extra;
+        } else {
+            badlands = extra;
+        }
         let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
         level = height / planet.z + offset;
         let field = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0);
@@ -554,7 +575,7 @@ fn fragment(
         ice = max(-field.a, 0.0);
     }
     let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
-        rock_type, level, lava, reef, ice, erg, badlands)
+        rock_type, level, lava, reef, ice, erg, badlands, geothermal)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

@@ -600,7 +600,10 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
         return if tropical { Biome::TropicalBeach } else { Biome::Beach };
     }
     // Fresh lava and glacier ice: bare.
-    if surface.lava.bilinear(face, p) > 0.4 || surface.ice.bilinear(face, p) > 0.3 {
+    if surface.lava.bilinear(face, p) > 0.4
+        || surface.ice.bilinear(face, p) > 0.3
+        || surface.geothermal.bilinear(face, p) > 0.4
+    {
         return Biome::Sea;
     }
     // Wetlands: marsh, or bare salt flats.

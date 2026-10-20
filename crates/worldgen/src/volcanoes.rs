@@ -49,6 +49,8 @@ impl Volcano {
 
 /// Volcanoes younger than this are active (lava fields).
 const ACTIVE_AGE: f32 = 0.15;
+/// Volcanoes younger than this (age) have geothermal fields.
+const GEOTHERMAL_AGE: f32 = 0.3;
 /// Arc volcanoes: spacing along the arc (cells), height (world units) and radius per height.
 const ARC_SPACING: f32 = 80.;
 const STRATO_HEIGHT: (f32, f32) = (9., 18.);
@@ -152,6 +154,9 @@ pub struct Built {
     pub volcanic: Vec<bool>,
     pub lava: Vec<f32>,
     pub ruggedness: Vec<f32>,
+    /// Geothermal fields (hot springs, fumaroles: 0..1) in patches on the flanks of young
+    /// volcanoes.
+    pub geothermal: Vec<f32>,
 }
 
 /// Build the volcanoes on the heights (world units; sea level 0). On land a cone sits on the
@@ -170,6 +175,7 @@ pub fn build(
         volcanic: vec![false; cells],
         lava: vec![0.; cells],
         ruggedness: vec![0.; cells],
+        geothermal: vec![0.; cells],
     };
     let noise = Noise::new(seed as u32 ^ 0x1A7A);
     let mut seen = vec![0u32; cells];
@@ -240,6 +246,12 @@ pub fn build(
                 let reach_here = 0.35 + 0.75 * lobes;
                 let lava = smoothstep(reach_here, reach_here - 0.15, x);
                 built.lava[i] = built.lava[i].max(lava);
+            }
+            // Geothermal fields: patches on the lower flanks of young volcanoes, on land.
+            if v.age < GEOTHERMAL_AGE && built_height > 0.2 {
+                let ring = smoothstep(0.45, 0.65, x) * smoothstep(1.25, 1.0, x);
+                let patch = smoothstep(0.3, 0.55, noise.layer(200 + k as u32).fbm3(d * radius / 7., 2));
+                built.geothermal[i] = built.geothermal[i].max(ring * patch);
             }
         }
     }

@@ -166,6 +166,8 @@ pub struct Planet {
     /// The volcanoes (see `volcanoes`), and fresh lava over each cell (0..1, active ones).
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
     pub lava: Vec<f32>,
+    /// Geothermal fields (hot springs: 0..1, round young volcanoes).
+    pub geothermal: Vec<f32>,
     /// Coral reef over each cell (0..1, see `reefs`).
     pub reef: Vec<f32>,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
@@ -924,6 +926,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         rock,
         strata,
         lava: volcanic.lava,
+        geothermal: volcanic.geothermal,
         reef,
         volcanoes,
         strata_scale,

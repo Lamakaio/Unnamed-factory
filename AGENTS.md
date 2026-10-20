@@ -184,6 +184,9 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
   are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
   `PlanetSurface::volcanoes` (the inspector reports them).
+- **Geothermal fields** (`volcanoes::Built::geothermal`, `Planet::geothermal`): patches on
+  the lower flanks of volcanoes younger than `GEOTHERMAL_AGE`; drawn as sinter, microbial mats
+  and hot pools (the rock field's fraction on basalt), bare of plants.
 - **Reefs** (`reefs.rs`, right after the volcanoes): in the tropics (`TROPICS`), fringing reefs
   a little offshore (`FRINGE` cells: rim just under the water, shallow lagoon behind), further
   out round volcanic islands from `BARRIER_AGE` (barrier reefs), atolls on sunk shield
