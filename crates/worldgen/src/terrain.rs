@@ -11,7 +11,6 @@
 use std::time::{Duration, Instant};
 
 use crate::{
-    WorldgenSettings,
     geology::Rock,
     par,
     flow::FlowGraph,
@@ -57,6 +56,22 @@ impl Shape {
     }
 }
 
+/// Erosion parameters.
+#[derive(Clone, Debug)]
+pub(crate) struct ErosionSettings {
+    pub seed: u64,
+    /// Steps and their length (relative time).
+    pub steps: usize,
+    pub dt: f32,
+    /// Stream power: erodibility and the drainage area's exponent.
+    pub erodibility: f32,
+    pub area_exponent: f32,
+    /// Random weight on the slopes when routing (stochastic D8), against grid-aligned valleys.
+    pub routing_jitter: f32,
+    /// Length of a cell (in full-size cells: coarse grids have longer ones).
+    pub cell_size: f32,
+}
+
 /// Share of its depth a lake fills with sediment per erosion step.
 const LAKE_FILL: f32 = 0.05;
 /// Glaciers: the last steps of erosion, where they flow (relative height above the 75th
@@ -86,12 +101,12 @@ pub(crate) struct ErosionTimings {
 /// [`erode`], also returning the time spent in each of its parts.
 pub(crate) fn erode_timed(
     grid: &impl Grid,
-    settings: &WorldgenSettings,
+    settings: &ErosionSettings,
     shape: &Shape,
 ) -> (Vec<f32>, ErosionTimings) {
     let mut timings = ErosionTimings::default();
     let mut heights = shape.heights.clone();
-    let dt = settings.erosion_dt;
+    let dt = settings.dt;
     // Hillslope diffusion acts on the land cells, between side neighbours (one cell apart):
     // listed once (compressed rows), the grid's topology doesn't change.
     let diffusing: Vec<u32> = (0..heights.len() as u32)
@@ -111,7 +126,7 @@ pub(crate) fn erode_timed(
     // (Lengths in cells of `cell_size`: the Laplacian divides by its square.)
     let max_k = shape.diffusion.iter().fold(0f32, |a, &d| a.max(d)) * Rock::max_diffusion() * dt
         / settings.cell_size.powi(2);
-    for step in 0..settings.erosion_steps {
+    for step in 0..settings.steps {
         let mut clock = Instant::now();
         let mut lap = |total: &mut Duration| {
             *total += clock.elapsed();
@@ -163,7 +178,7 @@ pub(crate) fn erode_timed(
         lap(&mut timings.incision);
 
         // Glaciers in the high valleys, digging unevenly along their course (overdeepening).
-        if step + GLACIAL_STEPS >= settings.erosion_steps {
+        if step + GLACIAL_STEPS >= settings.steps {
             let mut land: Vec<f32> = (0..heights.len())
                 .filter(|&i| !shape.base_level[i])
                 .map(|i| heights[i])
@@ -237,36 +252,4 @@ pub(crate) fn cap_plateaus(shape: &Shape, heights: &mut [f32]) {
 pub(crate) fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
     let h = (k - (a - b).abs()).max(0.) / k;
     a.min(b) - h * h * k / 4.
-}
-
-/// Separable box blur of radius `radius` (cells).
-pub(crate) fn blur(size: usize, values: &[f32], radius: usize) -> Vec<f32> {
-    let pass = |input: &[f32], horizontal: bool| -> Vec<f32> {
-        let mut output = vec![0.; input.len()];
-        for line in 0..size {
-            let at = |k: usize| {
-                if horizontal {
-                    input[line * size + k]
-                } else {
-                    input[k * size + line]
-                }
-            };
-            let mut sum: f32 = (0..=radius.min(size - 1)).map(at).sum();
-            let mut count = radius.min(size - 1) + 1;
-            for k in 0..size {
-                let index = if horizontal { line * size + k } else { k * size + line };
-                output[index] = sum / count as f32;
-                if k + radius + 1 < size {
-                    sum += at(k + radius + 1);
-                    count += 1;
-                }
-                if k >= radius {
-                    sum -= at(k - radius);
-                    count -= 1;
-                }
-            }
-        }
-        output
-    };
-    pass(&pass(values, true), false)
 }

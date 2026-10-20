@@ -2,35 +2,12 @@
 //! steepest-descent receivers, upstream ordering and drainage accumulation.
 //!
 //! "Base level" cells (the sea) are outlets: they never drain anywhere and anchor every flow
-//! path. On the flat map, its border cells are outlets too.
+//! path. So are a grid's border cells, if it has any (`Grid::is_border`; the sphere has none).
 
 #[cfg(test)]
 use std::{cmp::Ordering, collections::BinaryHeap};
 
 use crate::{grid::Grid, par};
-
-/// The 8 neighbour offsets, and their distances (in cells).
-pub const NEIGHBOURS: [(i32, i32, f32); 8] = [
-    (-1, 0, 1.),
-    (1, 0, 1.),
-    (0, -1, 1.),
-    (0, 1, 1.),
-    (-1, -1, std::f32::consts::SQRT_2),
-    (1, -1, std::f32::consts::SQRT_2),
-    (-1, 1, std::f32::consts::SQRT_2),
-    (1, 1, std::f32::consts::SQRT_2),
-];
-
-/// Iterate over the in-bounds neighbours of cell `i` of a square `size × size` grid (cells
-/// indexed `z * size + x`) as `(index, distance)`.
-pub fn neighbours(size: usize, i: usize) -> impl Iterator<Item = (usize, f32)> {
-    let (x, z) = ((i % size) as i32, (i / size) as i32);
-    NEIGHBOURS.iter().filter_map(move |&(dx, dz, distance)| {
-        let (nx, nz) = (x + dx, z + dz);
-        (nx >= 0 && nz >= 0 && nx < size as i32 && nz < size as i32)
-            .then(|| (nz as usize * size + nx as usize, distance))
-    })
-}
 
 /// A cell in the Priority-Flood queue: height and index (32 bits, to keep entries small).
 #[cfg(test)]

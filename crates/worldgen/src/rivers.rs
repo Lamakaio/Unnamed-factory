@@ -1,4 +1,4 @@
-//! Rivers on the planet: as on the flat map (`rivers.rs`), cells draining a large enough area
+//! Rivers on the planet:, cells draining a large enough area
 //! are rivers, traced from their mouths upstream (main stem = largest tributary), smoothed,
 //! given a width and depth from their discharge, and meandering where the land is flat. Paths
 //! live on the sphere (positions in cells from the centre, kept on the sphere).
@@ -12,7 +12,7 @@ use crate::{RiverEnd, flow::FlowGraph, grid::Grid, noise::smoothstep, sphere::Sp
 /// Spacing of the output points, in cells.
 const SPACING: f32 = 0.5;
 /// Drainage area (mean cells) from which a cell is a river, width and depth there (world
-/// units, as on the flat map), meander amplitude (channel widths) and the valley slope above
+/// units), meander amplitude (channel widths) and the valley slope above
 /// which rivers don't meander.
 pub const RIVER_MIN_AREA: f32 = 400.;
 /// Width and depth of the smallest rivers, and how they grow with the area drained (power of
@@ -36,8 +36,7 @@ pub struct PlanetRiverPoint {
     pub depth: f32,
 }
 
-/// A point of a river's un-meandered valley path, to shape its floodplain (as on the flat
-/// map, `rivers::ValleyPoint`).
+/// A point of a river's un-meandered valley path, to shape its floodplain.
 #[derive(Clone, Copy, Debug)]
 pub struct ValleyPoint {
     pub direction: Vec3,
@@ -54,7 +53,7 @@ pub struct PlanetRiver {
     /// A side channel of a river splitting on flat land: it leaves this river (index) and
     /// rejoins it (`end`).
     pub branch_of: Option<usize>,
-    /// A delta's distributary (see `planet_mouths`).
+    /// A delta's distributary (see `mouths`).
     pub distributary: bool,
 }
 
@@ -315,7 +314,7 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
 
 /// Tributaries join their parent this many points downstream of the nearest (so they meet at
 /// an angle leaning downstream, as real confluences do), the move spread over this many
-/// points of their end (as on the flat map, `rivers::JOIN_LEAD`).
+/// points of their end.
 const JOIN_LEAD: usize = 2;
 const JOIN_BLEND: usize = 8;
 
@@ -351,7 +350,7 @@ fn join_parent(points: &mut Vec<PlanetRiverPoint>, parent: &PlanetRiver, radius:
 }
 
 /// Lead rivers through the lakes they flow into or out of, to or from the lake's deepest
-/// point, at its level (as on the flat map, `lakes::extend_through_lakes`): their channels are
+/// point, at its level: their channels are
 /// carved through the bed, and they clearly join the lake rather than stop at its edge.
 fn through_lakes(
     grid: &SphereGrid,
@@ -471,8 +470,7 @@ fn through_lakes(
 }
 
 /// Smallest radius of a river bend, relative to the channel width (and at least this many
-/// cells), so the channel and its banks never fold over themselves (as on the flat map,
-/// `rivers::relax_bends`), and the most rounds of relaxing.
+/// cells), so the channel and its banks never fold over themselves, and the most rounds of relaxing.
 const MIN_BEND_RADIUS: f32 = 1.2;
 const MIN_BEND_RADIUS_CELLS: f32 = 1.5;
 const RELAX_ROUNDS: usize = 200;

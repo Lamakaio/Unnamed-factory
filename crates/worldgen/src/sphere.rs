@@ -1,7 +1,7 @@
 //! The planet's grid: a cube-sphere. Each face of a cube is an `n × n` square grid, projected
 //! onto the sphere *equiangularly* (cells are spaced evenly in angle along each face axis, which
 //! keeps their sizes within about ±30% of each other, against ±70% for a plain projection).
-//! Within a face, cells are neighbours as on the flat map; across face edges and corners,
+//! Within a face, cells are neighbours as on a square grid; across face edges and corners,
 //! neighbours are found through their direction on the sphere.
 //!
 //! Equiangular cube-sphere as in Ronchi, Iacono & Paolucci, "The Cubed Sphere" (1996).

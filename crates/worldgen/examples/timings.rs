@@ -8,7 +8,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use worldgen::{planet::*, planet_climate::*, surface::PlanetSurface};
+use worldgen::{planet::*, climate::*, surface::PlanetSurface};
 
 /// The process's CPU time so far (seconds, all threads).
 #[cfg(windows)]
@@ -90,7 +90,7 @@ fn main() {
     let surface = PlanetSurface::new(&planet, Some(&climate));
     stages.push(("surface".into(), t.elapsed().as_secs_f64()));
     let t = Instant::now();
-    let _ = worldgen::planet_sea::sea_field(&planet, &surface);
+    let _ = worldgen::sea::sea_field(&planet, &surface);
     stages.push(("sea".into(), t.elapsed().as_secs_f64()));
     done.store(true, Ordering::Relaxed);
     sampler.join().unwrap();

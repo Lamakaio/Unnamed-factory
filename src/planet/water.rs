@@ -1,5 +1,5 @@
 //! The planet's water, drawn with `PlanetWaterMaterial` (`planet_water.wesl`, the flat map's
-//! toon water on the sphere), as on the former flat map:
+//! toon water on the sphere):
 //! - rivers: ribbons along the water line of the flat map's river profile (pools and falls of
 //!   varied slant, sloping chutes, domed steep stretches), with the flow speed and whitewater
 //!   for the flow map. They fade out where they reach the sea or go under their lake (carrying
@@ -8,10 +8,10 @@
 //! - lakes: per face, outlined by marching squares where the ground rises above the water (a
 //!   lake covers its extent, the lower ground connected to it and a little of the shore, not
 //!   ground beyond its rim), reaching just into the river channels at its edge;
-//! - springs (`worldgen::planet_springs`): pond surfaces the river fades in out of, and
+//! - springs (`worldgen::springs`): pond surfaces the river fades in out of, and
 //!   hillside spouts (a row up in the notch, whitewater below);
 //! - the sea: a sphere at sea level, built face by face, each face with its wave field
-//!   (`worldgen::planet_sea`, a texture by cell: swell crests along the travel time to the
+//!   (`worldgen::sea`, a texture by cell: swell crests along the travel time to the
 //!   shore, bigger where they come with a strong wind).
 //!
 //! Lakes and the sea carry the local wind (UV0, see `PlanetSurface::wind_at`): ripples drift
@@ -35,9 +35,9 @@ use half::f16;
 use worldgen::{
     RiverEnd, RiverPoint,
     planet::Planet,
-    planet_rivers::PlanetRiver,
-    planet_sea::sea_field,
-    planet_springs::{PlanetSpringKind, SPOUT_HEIGHT},
+    rivers::PlanetRiver,
+    sea::sea_field,
+    springs::{PlanetSpringKind, SPOUT_HEIGHT},
     sphere::FACES,
     surface::PlanetSurface,
 };
@@ -48,7 +48,7 @@ use super::river_profile::{
 };
 use crate::shaders::{PlanetWaterMaterial, PlanetWaterShader};
 
-// Lake outlines, river fades and confluences, as on the flat map.
+// Lake outlines, river fades and confluences.
 /// Lake surfaces reach under the shore up to where the ground is this much above them.
 const SHORE_MARGIN: f32 = 0.03;
 
@@ -100,7 +100,7 @@ const FADE_STEP: f32 = 0.5;
 /// A junction cap looks for its parent's edge this far (world units) around the junction.
 const CAP_SEARCH: f32 = 30.;
 /// Rivers fade in out of their pond over this distance, inside it (opaque from its rim);
-/// hillside springs foam on their first rows (as on the flat map).
+/// hillside springs foam on their first rows.
 const POND_FADE: f32 = 0.8;
 const SPRING_FOAM: [f32; 4] = [1., 0.8, 0.55, 0.3];
 /// Highest dome of a steep stretch (world units): the flat map's scale with the width, but
@@ -250,7 +250,7 @@ fn river_rows(surface: &PlanetSurface, river: &PlanetRiver) -> Vec<Row> {
 }
 
 /// Fade a river out from row `start` on over `length`, carrying it on straight past its end
-/// if needed, and drop the rows past the fade (as the flat map did).
+/// if needed, and drop the rows past the fade.
 fn fade_out(rows: &mut Vec<Row>, start: usize, length: f32) {
     let remaining = rows[rows.len() - 1].along - rows[start].along;
     if remaining < length && rows.len() >= 2 {
@@ -696,7 +696,7 @@ enum Sample {
     River,
 }
 
-/// Lake surfaces of one face, as on the flat map: on the cells'
+/// Lake surfaces of one face: on the cells'
 /// samples, a lake covers its extent and the lower ground connected to it (never across the
 /// shore: that is its rim), and up to `SHORE_STEPS` samples onto the shore; the outline is the
 /// contour where the ground rises [`SHORE_MARGIN`] above the water, reaching just into river

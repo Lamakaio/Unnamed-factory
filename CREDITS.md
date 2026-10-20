@@ -60,7 +60,7 @@ someone else's work, add it here (and mention it in the code comment where it is
   Solid Angle of a Plane Triangle*, IEEE Trans. Biomedical Engineering 30, 1983.
 - **3D gradient noise with cube-edge gradients**: K. Perlin, *Improving Noise*, SIGGRAPH 2002.
   (`noise.rs::get3`)
-- **Planet climate** (`planet_climate.rs`): energy balance model after M. I. Budyko (1969),
+- **Planet climate** (`climate.rs`): energy balance model after M. I. Budyko (1969),
   W. D. Sellers (1969) and G. R. North, R. F. Cahalan, J. A. Coakley, *Energy balance climate
   models*, Rev. Geophys. 19, 1981 (outgoing longwave `A + B T`, diffusive heat transport,
   ice-albedo feedback); daily mean insolation (standard formula, e.g. Wikipedia,

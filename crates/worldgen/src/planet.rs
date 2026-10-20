@@ -9,10 +9,10 @@
 //! mid-ocean ridges in the sea floor. Inside continents, old sutures between ancient blocks are
 //! worn-down ranges: the older, the lower and rounder (more hillslope diffusion, standing in
 //! for a long erosion history). The interiors are provinces of plains, broad hills and
-//! plateaus (plateaus away from the coasts, lowlands toward them). Then the same stream power
-//! erosion as the flat map (`terrain::erode`, on the [`SphereGrid`]).
+//! plateaus (plateaus away from the coasts, lowlands toward them). Then stream power erosion
+//! (`terrain::erode_timed`, on the [`SphereGrid`]).
 //!
-//! Lengths are in cells, as on the flat map, so the landforms keep their size; the sphere's
+//! Lengths are in cells, so the landforms keep their size; the sphere's
 //! radius is `2n/π` cells. Planet-scale features (continents) are sized relative to it.
 
 use std::time::{Duration, Instant};
@@ -21,7 +21,6 @@ use bevy_math::Vec3;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::{
-    WorldgenSettings,
     grid::Grid,
     noise::{Noise, hash, smoothstep},
     par,
@@ -74,7 +73,7 @@ pub struct PlanetSettings {
     /// noise and plate-boundary rules.
     pub history: Option<crate::tectonics::TectonicSettings>,
     /// Mean area of a province (cells), and the share of each province type
-    /// (`[plains, hills, plateau]`) and how softly they blend (cells), as on the flat map.
+    /// (`[plains, hills, plateau]`) and how softly they blend (cells).
     pub province_cells: f32,
     pub province_weights: [f32; 3],
     pub province_blend: f32,
@@ -88,11 +87,11 @@ pub struct PlanetSettings {
     pub range_width: f32,
     pub ridge_spacing: f32,
     /// Height of the highest ranges (99th percentile of range summits) and depth of the open
-    /// sea (world units, one per cell like the flat map).
+    /// sea (world units, about one per cell).
     pub max_height: f32,
     pub sea_depth: f32,
     /// Erosion: steps, time step, erodibility, drainage area exponent, hillslope diffusion,
-    /// routing jitter (as in [`WorldgenSettings`]).
+    /// routing jitter (see `terrain::ErosionSettings`).
     pub erosion_steps: usize,
     /// The first `coarse_steps` erosion steps run on a grid `coarse_factor` times coarser (the
     /// large drainage network forms there, at a fraction of the cost); the rest refine it at
@@ -108,7 +107,6 @@ pub struct PlanetSettings {
 
 impl Default for PlanetSettings {
     fn default() -> Self {
-        let flat = WorldgenSettings::default();
         Self {
             seed: 1082,
             n: 256,
@@ -118,22 +116,22 @@ impl Default for PlanetSettings {
             history: Some(crate::tectonics::TectonicSettings::default()),
             province_cells: 8_000.,
             province_weights: [0.35, 0.45, 0.2],
-            province_blend: flat.province_blend,
-            plateau_level: flat.plateau_level,
+            province_blend: 20.,
+            plateau_level: 17.,
             craton_cells: 20_000.,
             old_range_share: 0.5,
-            range_width: flat.range_width,
-            ridge_spacing: flat.ridge_spacing,
-            max_height: flat.max_height,
-            sea_depth: flat.sea_depth,
-            erosion_steps: flat.erosion_steps,
+            range_width: 28.,
+            ridge_spacing: 13.,
+            max_height: 38.,
+            sea_depth: 20.,
+            erosion_steps: 60,
             coarse_steps: 45,
             coarse_factor: 2,
-            erosion_dt: flat.erosion_dt,
-            erodibility: flat.erodibility,
-            area_exponent: flat.area_exponent,
-            diffusion: flat.diffusion,
-            routing_jitter: flat.routing_jitter,
+            erosion_dt: 2.,
+            erodibility: 0.25,
+            area_exponent: 0.45,
+            diffusion: 0.05,
+            routing_jitter: 1.,
         }
     }
 }
@@ -155,11 +153,11 @@ pub struct Planet {
     /// Depth of the lake water over each cell (0: no lake), from filling the basins.
     pub lake_depth: Vec<f32>,
     /// Wet ground (0..1): closed flats and dry basins, lake shores, floodplains, delta land;
-    /// and the dry basins alone (no outlet: salt flats where dry). See `planet_lakes`.
+    /// and the dry basins alone (no outlet: salt flats where dry). See `lakes`.
     pub wetland: Vec<f32>,
     pub basins: Vec<f32>,
-    /// The rivers (see `planet_rivers`).
-    pub rivers: Vec<crate::planet_rivers::PlanetRiver>,
+    /// The rivers (see `rivers`).
+    pub rivers: Vec<crate::rivers::PlanetRiver>,
     /// The rock of each cell (`geology::Rock` ids) and its strata offset (erosion units), and
     /// world units per erosion unit: a bed at erosion height `e` is at world height
     /// `e * strata_scale` (strata height `height / strata_scale + offset`).
@@ -670,8 +668,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             rock,
             strata,
             uplift,
-            // Rift floors sink in segments along the axis (a chain of basins, rift lakes), as
-            // on the flat map.
+            // Rift floors sink in segments along the axis (a chain of basins, rift lakes).
             subsidence: b.rift
                 * smoothstep(-0.1, 0.35, hills.layer(11).fbm3(p / 45., 2))
                 * RIFT_SUBSIDENCE
@@ -718,18 +715,16 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     }
     };
 
-    // Erosion, as on the flat map: first on the coarse grid, then refined at full resolution
+    // Erosion: first on the coarse grid, then refined at full resolution
     // from its result.
-    let erosion = |steps: usize, scale: f32| WorldgenSettings {
+    let erosion = |steps: usize, scale: f32| terrain::ErosionSettings {
         seed: settings.seed,
-        erosion_steps: steps,
-        erosion_dt: settings.erosion_dt,
+        steps,
+        dt: settings.erosion_dt,
         erodibility: settings.erodibility,
         area_exponent: settings.area_exponent,
-        diffusion: settings.diffusion,
         routing_jitter: settings.routing_jitter,
         cell_size: scale,
-        ..Default::default()
     };
     let report = |name: &'static str, t: &terrain::ErosionTimings, timings: &mut Vec<(&'static str, Duration)>| {
         timings.extend([
@@ -808,7 +803,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         })
         .collect();
     let shelf_floor = grid.blur(&shelf_floor, 3);
-    // Shores, as on the flat map (`terrain::shape_coast`): from a blurred signed distance to
+    // Shores: from a blurred signed distance to
     // the shore (so the coast doesn't follow the cells' staircase), land rises gently from
     // the water line and the sea floor slopes down from it.
     let signed: Vec<f32> = (0..cells)
@@ -864,12 +859,12 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     crate::barriers::build(&grid, radius, settings.seed, &reef, &mut heights, &mut sea, &mut rock);
     lap("  barrier islands", &mut timings);
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
-    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, wetland, basins } =
-        crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
+    let crate::lakes::Hydrology { filled, drainage, lake_depth, base, wetland, basins } =
+        crate::lakes::shape_lakes(&grid, &mut heights, &mut sea);
     lap("  lakes", &mut timings);
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i).max(volcanic.ruggedness[i])).collect();
     let (mut rivers, valley) =
-        crate::planet_rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
+        crate::rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
     // Floodplains: flat valley floors where rivers meander.
     lap("  rivers", &mut timings);
     let floodplain = flatten_floodplains(&grid, radius, &mut heights, &lake_depth, &valley);
@@ -895,7 +890,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     lap("  floodplains, wetlands", &mut timings);
     let sea_before_mouths = sea.clone();
     // Deltas and estuaries at the river mouths (deltas build land out into the sea).
-    crate::planet_mouths::shape_mouths(
+    crate::mouths::shape_mouths(
         &grid,
         radius,
         settings.seed,
@@ -910,7 +905,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     // base: the sea as it is now, and the dry basins' sinks).
     let base: Vec<bool> = (0..cells).map(|i| sea[i] || base[i] && !sea_before_mouths[i]).collect();
     lap("  mouths", &mut timings);
-    let (drainage, lake_depth, flats) = crate::planet_lakes::settle(&grid, &mut heights, &base, &lake_depth);
+    let (drainage, lake_depth, flats) = crate::lakes::settle(&grid, &mut heights, &base, &lake_depth);
     lap("  settle", &mut timings);
     for i in flats {
         wetland[i] = 1.;
@@ -1109,20 +1104,19 @@ fn rock_of(b: Boundary, old: f32, [plains, hilly, plateau]: [f32; 3], noise: f32
 }
 
 /// Lake shores within this distance (world units) stay above their lake's level when
-/// floodplains are flattened (as on the flat map, `LAKE_RIM`).
+/// floodplains are flattened.
 const LAKE_RIM: f32 = 3.;
 
-/// Lower the valley floor to just above the water where rivers meander (as on the flat map,
-/// `flatten_floodplains`), so meanders have a flat floodplain to wind through; lake shores stay
+/// Lower the valley floor to just above the water where rivers meander, so meanders have a flat floodplain to wind through; lake shores stay
 /// above their lake. Returns how much each cell is floodplain (0..1).
 fn flatten_floodplains(
     grid: &SphereGrid,
     radius: f32,
     heights: &mut [f32],
     lake_depth: &[f32],
-    valley: &[crate::planet_rivers::ValleyPoint],
+    valley: &[crate::rivers::ValleyPoint],
 ) -> Vec<f32> {
-    use crate::planet_rivers::for_cells_within;
+    use crate::rivers::for_cells_within;
     let cells = grid.len();
     // Lowest height allowed per cell: the level of any lake nearby. (From the lakes' shore
     // cells: a lake's level is the same all over it.)

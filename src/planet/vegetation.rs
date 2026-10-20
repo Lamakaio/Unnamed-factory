@@ -1,12 +1,12 @@
-//! Vegetation on the planet: the flat map's trees, rocks and ground cover (`map::vegetation`:
-//! the models, their levels of detail and the species of each biome), placed on the cube
-//! faces' cells of the terrain chunks near the camera.
+//! Vegetation on the planet: trees, rocks and ground cover (`nature`: the models, their levels
+//! of detail and the species of each biome), placed on the cube faces' cells of the terrain
+//! chunks near the camera.
 //!
 //! - Large things (trees, bushes, rocks) are placed in chunks within [`PLACE_DISTANCE`] and
 //!   drawn far as one merged LOD2 mesh per chunk; chunks farther than [`DROP_DISTANCE`] drop
 //!   theirs (the terrain's forest colours carry the landscape from orbit).
 //! - Near chunks ([`NEAR_DISTANCE`]) swap to the merged LOD1 mesh and place their ground cover;
-//!   LOD0 models are spawned around the camera, as on the flat map.
+//!   LOD0 models are spawned around the camera.
 //!
 //! Biomes come from the climate's ground weights (forests where the forest weight, through a
 //! clearings noise, is high enough; conifers where it is cold), marsh on wetlands (nothing on
@@ -22,8 +22,8 @@ use bevy::{
 use worldgen::{
     Biome,
     noise::{Noise, hash, smoothstep},
-    planet_climate::Koppen,
-    planet_springs::PlanetSpringKind,
+    climate::Koppen,
+    springs::PlanetSpringKind,
     surface::PlanetSurface,
 };
 
@@ -309,7 +309,7 @@ fn near_detail(
 }
 
 /// Spawn the LOD0 models (and ground cover) of near chunks around the camera and despawn the
-/// ones left behind, as on the flat map (`map::vegetation::update_details`).
+/// ones left behind.
 fn update_details(
     mut commands: Commands,
     world: Res<PlanetWorld>,
@@ -371,8 +371,8 @@ fn update_details(
     }
 }
 
-/// Instances of one jittered grid (`spacing` world units apart) over a chunk, as on the flat
-/// map (`map::vegetation::Placement::place`), on the face's cells.
+/// Instances of one jittered grid (`spacing` world units apart) over a chunk, on the face's
+/// cells.
 fn place(
     surface: &PlanetSurface,
     chunk: &PlanetChunk,
@@ -530,7 +530,7 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
 const ROCK_CELL: f32 = 1.1;
 const ROCK_CHANCE: f32 = 0.35;
 
-/// Rock outcrops the hillside springs of a chunk spout from (`map::vegetation::spring_rocks`):
+/// Rock outcrops the hillside springs of a chunk spout from:
 /// a tall rock right behind the spout (hiding its top) and boulders on both sides.
 fn spring_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> {
     let (min, max) = (chunk.min - 0.5, chunk.min - 0.5 + CHUNK_CELLS as f32);

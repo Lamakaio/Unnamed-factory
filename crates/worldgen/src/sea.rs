@@ -1,4 +1,4 @@
-//! The planet's sea wave field, as on the flat map (`map::sea` in the game): per cell, the
+//! The planet's sea wave field: per cell, the
 //! swell's travel time to the shore (waves slow down in shallow water, so fronts bend around
 //! headlands into bays and bunch up near the shore), the water depth, the exposure (how much
 //! the waves reaching a cell come with the wind, and how strong that wind is: the climate's

@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use crate::{grid::Grid, planet::Planet, planet_climate::PlanetClimate};
+use crate::{grid::Grid, planet::Planet, climate::PlanetClimate};
 
 /// Permanent ice where the warmest month is below this (°C at the cell's height); glacier
 /// tongues reach down while it is below `TONGUE_WARMEST`, for at most `TONGUE_LENGTH` cells.

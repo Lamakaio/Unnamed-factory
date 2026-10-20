@@ -81,10 +81,13 @@ src/planet/             PlanetPlugin: generation task, chunks (mesh.rs, LOD), ca
                         inspect.rs (click reports, issue reports)
 src/shaders.rs          materials: PlanetTerrain, PlanetWater, Toon, LodToon, SwayToon, GrassBlade
 src/ui.rs               loading text (BSN), `label()` text scene, PointerOverUi system param
-crates/worldgen/        world generation (no Bevy ECS): planet.rs, tectonics.rs, terrain.rs (erosion), flow.rs,
-                        planet_lakes.rs, planet_rivers.rs, planet_mouths.rs (+ mouths.rs channels), planet_springs.rs,
-                        planet_climate.rs, planet_sea.rs, surface.rs, sphere.rs/grid.rs, noise.rs, detail.rs (gullies)
-crates/worldgen/examples planet_preview, planet_probe, climate_preview, tectonics_preview, tectonics_stats
+crates/worldgen/        world generation (no Bevy ECS), in pipeline order:
+                        tectonics.rs → planet.rs (shape, `terrain.rs` erosion, coasts) → fjords.rs, volcanoes.rs,
+                        reefs.rs, barriers.rs → lakes.rs → rivers.rs → mouths.rs (+ channels.rs) → climate.rs →
+                        surface.rs (glaciers.rs, deserts, karst, riparian; springs.rs) → sea.rs (wave field);
+                        shared: sphere.rs + grid.rs (cube-sphere grid), flow.rs (routing, filling), par.rs
+                        (all parallelism), noise.rs, geology.rs (rock types), detail.rs (gullies)
+crates/worldgen/examples planet_preview, planet_probe, climate_preview, tectonics_preview, tectonics_stats, timings
 tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
 assets/shaders/         planet_terrain.wesl, planet_water.wesl, toon.wesl, toon_sway.wesl, grass_blades.wesl
@@ -124,11 +127,13 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   reports of points) agents check spots without a human. See §6.
 
 ### 3.2 World generation (`crates/worldgen`) and the planet (`src/planet`)
-- **`worldgen` crate** (workspace member, no Bevy ECS; depends on `bevy_math` and `rand`;
-  `opt-level = 3` even in dev). Noise is the crate's own `noise.rs` (Perlin 2D/3D + fBm /
-  ridged / warp). Erosion, flow routing and blurs are generic over a `Grid` (`grid.rs`; the
-  planet's is the cube-sphere, `sphere.rs`). `WorldgenSettings` holds the erosion and detail
-  parameters (the former flat continent's, scaled by the planet).
+- **`worldgen` crate** (workspace member, no Bevy ECS; depends on `bevy_math`, `bevy_tasks`
+  (its own thread pool, see `par.rs`) and `rand`; `opt-level = 3` even in dev). Noise is the
+  crate's own `noise.rs` (Perlin 2D/3D + fBm / ridged / warp). Erosion, flow routing and blurs
+  are generic over a `Grid` (`grid.rs`; the only one is the cube-sphere, `sphere.rs`).
+  Parameters: `PlanetSettings` (planet.rs), `terrain::ErosionSettings` (built from it per
+  erosion stage), `ClimateSettings`; everything else is module constants. Disc queries ("every
+  cell within r") go through `SphereGrid::for_cells_within` (a window scan inside a face).
 - **Rock types** (`geology.rs`, `Rock`): granite (cratons, old ranges' roots, some plains and
   hills), metamorphic (young belts' cores), basalt (arcs, rifts, the sea floor), sandstone
   (plateaus, foothills), shale (plains), limestone (patches) — `planet.rs::rock_of`, from the
@@ -233,13 +238,13 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   erodibility, diffusion, rain, provinces, ranges, subsidence, glacial noise, rock and strata:
   the rock's bed at each cell's height scales its erodibility and diffusion):
      implicitly from the outlets upstream (Braun & Willett 2013), plus hillslope diffusion.
-     Each step does a Priority-Flood with epsilon (Barnes 2014; depressions are filled), then
-     **stochastic D8** routing (random slope weights against grid-aligned valleys), then
-     drainage accumulation. The sea is base level, fixed at 0 during erosion. Afterwards:
-- **Planet** (milestone 1 of `docs/living-world.md`, not in the game yet):
+     Each step routes through the depressions (`FlowGraph::with_depressions`, below) with
+     **stochastic D8** (random slope weights against grid-aligned valleys), then accumulates
+     the drainage. The sea is base level, fixed at 0 during erosion. Afterwards:
+- **Planet** (milestone 1 of `docs/living-world.md`; the game since 2026-10-20):
   - `grid.rs`: the `Grid` trait (cells, neighbours with distances in cells, border, blur).
-    `flow.rs` (Priority-Flood, `FlowGraph`) and `terrain::erode` are generic over it; the flat
-    map passes a `PlaneGrid`. Erosion routes with `FlowGraph::with_depressions` (Cordonnier et
+    `flow.rs` (depression filling, `FlowGraph`) and `terrain::erode_timed` are generic over
+    it. Erosion routes with `FlowGraph::with_depressions` (Cordonnier et
     al. 2019 basin graph: steepest descent, pits' basins linked through their lowest passes,
     minimum spanning tree to the outlets, pits carved out over their pass; also returns the
     water surface, equal to Priority-Flood without epsilon), not a Priority-Flood per step.
@@ -260,11 +265,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     plateaus, about `province_cells` each) blended softly; near the sea, plateaus give way to
     lowlands and interior uplift ramps down. Then `terrain::erode`, in two stages: the first
     `coarse_steps` (45 of 60) on a grid `coarse_factor` (2) times coarser (shaped the same way:
-    `shape_on(grid, scale)` keeps every length in full-size cells; `WorldgenSettings::cell_size`
+    `shape_on(grid, scale)` keeps every length in full-size cells; `ErosionSettings::cell_size`
     tells erosion how long a cell is), then upsampled (`upsample`) and refined at full
     resolution (`--coarse 0` in the preview: all at full resolution). Then scaling, `cap_plateaus`, a
     sea floor of shelf / slope / abyss (raised at ridges, deepened at trenches). Both shaping
-    passes run on all cores (`par_map`); provinces and blocks are found through a coarse
+    passes run on all cores (`par::map`); provinces and blocks are found through a coarse
     `PointIndex`. Landforms are sized in cells (radius `2n/π` cells; n = 1024 is the target
     planet, 256 the fast default for previews).
   - `tectonics.rs` (milestone 4, v1): `run(&TectonicSettings) -> Tectonics`, a deep-time
@@ -283,7 +288,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     the crust (noise details the coasts), young uplift → belts / foothills / island arcs, old
     uplift → worn ranges, young ocean floor → ridges; ridges run along belts (`across` from the
     belt strength's contours).
-  - `planet_climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
+  - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
     were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,
     ice albedo, ocean/land heat capacity, implicit diffusive transport weaker over land,
@@ -331,7 +336,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   from `map_material.wesl` with face cell coordinates (UV0) for its patterns, radial heights and
   up, and ground materials from the climate per vertex (see Lakes below for the channels),
   see `Koppen::ground_weights`), re-meshed when the camera moved by 25% of their distance. The
-  Rivers (`worldgen::planet_rivers`: traced on the sphere as on the flat map, smoothed,
+  Rivers (`worldgen::rivers`: traced on the sphere as on the flat map, smoothed,
   resampled every 0.5 cells, meandering on flat valleys; width `RIVER_WIDTH.0` × (area /
   `RIVER_MIN_AREA`)^`RIVER_WIDTH.1`, some 20× from the smallest to the largest; tributaries end
   on their parent's final path `JOIN_LEAD` points downstream of the nearest, the move eased
@@ -345,7 +350,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   island, capped on the river's edge at both ends by `planet/water.rs` (its rows backwards
   for the start); rivers left with one point after the coast cut are kept, so indices hold) get their water levels clamped
   under the surface across the channel and end where they reach the sea (`PlanetSurface::new`).
-  Lakes (`planet_lakes.rs::shape_lakes`, after the coasts, before the rivers): sea patches
+  Lakes (`lakes.rs::shape_lakes`, after the coasts, before the rivers): sea patches
   cut off from the ocean (under `SEA_MIN_SHARE` of the cells) become land below sea level, a
   dry basin (its lowest cell a sink in the routing base) while under `LOWLAND_MAX_INFLOW`
   drains in; every depression is a lake only from `LAKE_MIN_CELLS`, `LAKE_MIN_DEPTH` and
@@ -359,7 +364,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   outlet, then down it until lower ground (exposed beds: wet ground). Outlines are rounded by
   `LAKE_ROUNDING` blur passes. Salt-flat potential (`basins`) is only the dry basins (no
   outlet); filled hollows and drained beds are wetland.
-  After the floodplains and mouths reshape the ground, `planet_lakes::settle` fills the new
+  After the floodplains and mouths reshape the ground, `lakes::settle` fills the new
   hollows outside lakes and recomputes the drainage and lake depths (they were stale: lake
   levels sloped where a mouth's sediment plain had lowered a lake). `Planet::wetland` (closed flats, dry
   basins, lake shores, floodplains, low flat ground near streams, delta land) and
@@ -369,17 +374,17 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   stops only along it; the sea's wave field has depth -1 over basins not open to the sea and
   the water shader discards there. Terrain vertices: colour = (dryness, forest, marsh / -salt,
   wet bed), UV1 = (cold + snow, coast); the shader takes deserts from dryness.
-  Floodplains (`planet.rs::flatten_floodplains`, as on the flat map): `planet_rivers::extract`
+  Floodplains (`planet.rs::flatten_floodplains`, as on the flat map): `rivers::extract`
   also returns the un-meandered valley points (level, floodplain half-width where the river
   meanders); the cells around are lowered to water + 0.4 (lake shores kept above their lake),
-  walking the grid with `planet_rivers::for_cells_within`, and calmed (no fine detail).
-  Springs (`planet_springs.rs`, the flat map's `map::springs` in the plane tangent at each
+  walking the grid with `rivers::for_cells_within`, and calmed (no fine detail).
+  Springs (`springs.rs`, the flat map's `map::springs` in the plane tangent at each
   source: x downstream, y across): river sources off lakes and other rivers get a pond (flat
   ground) or a hillside notch, carved after the channels in `PlanetSurface::height` (bucketed
   in 3D; ponds count as wet). `planet/water.rs` draws the ponds (rivers fade in from the rim)
   and hillside spouts (a raised row in the notch, whitewater below); `planet/vegetation.rs`
   puts the flat map's rock outcrop round each spout.
-  Mouths (`planet_mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
+  Mouths (`mouths.rs`, the flat map's `mouths.rs` in the plane tangent at each mouth,
   cells walked on the sphere's grid; deltas rarer than estuaries; distributaries never cross
   land above `DELTA_MAX_GROUND` (forks left without branches go too), grow toward the sea mask
   (not land below sea level), fan at most `MAX_TURN` (tighter than the flat map's: sideways
@@ -388,7 +393,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   floor round it is raised into a sloping front (`FRONT_*`) and the whole smoothed, and each
   tip gets a path to the open sea if land closes it in; the new land keeps above the sea, and
   a corridor of land runs along every channel but its tip; a fork's branches start
-  `FORK_GAP` past its end, which the dropping rules match by): deltas (distributaries from `mouths::grow_channels`,
+  `FORK_GAP` past its end, which the dropping rules match by): deltas (distributaries from `channels::grow_channels`,
   low land raised along them, `sea` updated) and estuaries, with a sediment plain around;
   `PlanetSurface` carves their channels (parabolic channel + banks, segments bucketed in 3D).
   `planet/water.rs` draws the water with the flat map's toon water on the sphere
@@ -404,7 +409,7 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   face as on the flat map (BFS over the cell samples from the lakes: lower ground, up to
   `SHORE_STEPS` onto the shore, just into river channels; marching squares on
   level + `SHORE_MARGIN` - ground, clipped to the face; samples one past the edges); the sea is a per-face grid at sea level, subdivided so it sags less than
-  `SEA_SAG`. Each face of the sea has its wave field (`worldgen::planet_sea::sea_field`, the
+  `SEA_SAG`. Each face of the sea has its wave field (`worldgen::sea::sea_field`, the
   flat map's `map::sea` on the sphere's grid: Dijkstra travel time from the shore, stopped at
   `MAX_TRAVEL`, depth, exposure from the local wind's direction and strength, wind speed; a
   `Rgba16Float` texture per face, a texel per cell, `PlanetWaterShader::sea`), and the shader's

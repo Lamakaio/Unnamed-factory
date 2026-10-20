@@ -7,15 +7,13 @@ use std::collections::HashMap;
 use bevy_math::{IVec3, Vec2, Vec3};
 
 use crate::{
-    WorldgenSettings,
     detail::gullies,
     grid::Grid,
-    heightmap::catmull_rom,
     noise::{Noise, hash, smoothstep},
     planet::Planet,
-    planet_climate::{PlanetClimate, WindField},
-    planet_rivers::PlanetRiver,
-    planet_springs::{PlanetSpring, Springs, find_springs},
+    climate::{PlanetClimate, WindField},
+    rivers::PlanetRiver,
+    springs::{PlanetSpring, Springs, find_springs},
     sphere::{FACES, SphereGrid},
 };
 
@@ -23,6 +21,10 @@ use crate::{
 /// detail near a face's edge is also evaluated on the neighbouring face, up to
 /// [`EDGE_BLEND`] cells past its edge.
 const PAD: usize = 14;
+/// Fine detail: gully wavelength (cells), octaves and depth (world units).
+const DETAIL_WAVELENGTH: f32 = 8.;
+const DETAIL_OCTAVES: u32 = 3;
+const DETAIL_AMPLITUDE: f32 = 1.2;
 /// Dunes: wavelength (world units, at `DUNE_LATITUDE`), height (world units) and where along
 /// a wavelength the crest is (the slip face beyond it).
 const DUNE_WAVELENGTH: f32 = 5.;
@@ -78,8 +80,8 @@ const KARST_SINKHOLES: f32 = 0.35;
 
 /// Karst of each cell: towers (positive) where limestone meets the humid tropics and
 /// subtropics, sinkholes (negative) in other wet climates; none in dry or polar ones.
-fn karst(planet: &Planet, koppen: &[crate::planet_climate::Koppen]) -> Vec<f32> {
-    use crate::{geology::Rock, planet_climate::Koppen};
+fn karst(planet: &Planet, koppen: &[crate::climate::Koppen]) -> Vec<f32> {
+    use crate::{geology::Rock, climate::Koppen};
     let raw: Vec<f32> = (0..planet.grid.len())
         .map(|i| {
             if planet.sea[i] || Rock::from_id(planet.rock[i]) != Rock::Limestone {
@@ -107,8 +109,8 @@ const ERG_HEIGHT: (f32, f32) = (12., 20.);
 const BADLANDS_SLOPE: (f32, f32) = (0.15, 0.4);
 
 /// Sand seas (ergs) and badlands of each cell (0..1), from the climate classes.
-fn deserts(planet: &Planet, koppen: &[crate::planet_climate::Koppen]) -> (Vec<f32>, Vec<f32>) {
-    use crate::{geology::Rock, planet_climate::Koppen};
+fn deserts(planet: &Planet, koppen: &[crate::climate::Koppen]) -> (Vec<f32>, Vec<f32>) {
+    use crate::{geology::Rock, climate::Koppen};
     let grid = &planet.grid;
     let radius = planet.radius();
     let noise = Noise::new(planet.settings.seed as u32 ^ 0xE6C5);
@@ -224,8 +226,8 @@ impl FaceField {
     }
 }
 
-/// The planet's surface for rendering: heights (with fine detail: roughness and gullies, as
-/// on the flat map's `detail.rs`) and lake depths between cells.
+/// The planet's surface for rendering: heights (with fine detail: roughness and gullies, see
+/// `detail`) and lake depths between cells.
 #[derive(Clone)]
 pub struct PlanetSurface {
     pub n: usize,
@@ -282,15 +284,10 @@ pub struct PlanetSurface {
     springs: Springs,
     grid: std::sync::Arc<SphereGrid>,
     seed: u32,
-    /// Gully wavelength (cells), octaves and depth (world units), as on the flat map.
-    detail_wavelength: f32,
-    detail_octaves: u32,
-    detail_amplitude: f32,
 }
 
 impl PlanetSurface {
     pub fn new(planet: &Planet, climate: Option<&PlanetClimate>) -> Self {
-        let flat = WorldgenSettings::default();
         let ground = climate.map(|climate| {
             let colours: Vec<[f32; 3]> = crate::par::map(planet.grid.len(), |i| {
                 let [r, g, b] = climate
@@ -391,9 +388,6 @@ impl PlanetSurface {
             riparian: FaceField::new(planet, &riparian(planet)),
             grid: std::sync::Arc::new(SphereGrid::new(planet.grid.n())),
             seed: planet.settings.seed as u32 ^ 0xD37A,
-            detail_wavelength: flat.detail_wavelength,
-            detail_octaves: flat.detail_octaves,
-            detail_amplitude: flat.detail_amplitude,
         };
         // River water levels: never above the ground across the channel (smoothing and
         // meanders move points over lower ground), never rising downstream.
@@ -427,7 +421,7 @@ impl PlanetSurface {
             }
         }
         // Rivers end where they reach the sea (the shaped coast may lie upstream of the cell
-        // they drained into), as on the flat map (`end_rivers_at_coast`).
+        // they drained into).
         for river in &mut rivers {
             let reached = river
                 .points
@@ -528,7 +522,7 @@ impl PlanetSurface {
                 gully = gully * own + self.gullies_on(other, q, world) * (1. - own);
             }
         }
-        height + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * self.detail_amplitude * strength
+        height + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * DETAIL_AMPLITUDE * strength
     }
 
     /// Karst relief (world units) in a direction: steep limestone towers with rounded tops
@@ -598,7 +592,7 @@ impl PlanetSurface {
         }
         let noise = Noise::new(self.seed);
         let patchiness = smoothstep(-0.4, 0.5, noise.layer(1).fbm3(world / 45., 3));
-        gullies(p, gradient, self.seed, self.detail_wavelength, self.detail_octaves)
+        gullies(p, gradient, self.seed, DETAIL_WAVELENGTH, DETAIL_OCTAVES)
             * slope_mask
             * (0.3 + 0.7 * patchiness)
     }
@@ -667,9 +661,9 @@ impl PlanetSurface {
     }
 
     /// The climate class at a point of a face (the nearest cell's), `None` without a climate.
-    pub fn koppen_at(&self, face: usize, p: Vec2) -> Option<crate::planet_climate::Koppen> {
+    pub fn koppen_at(&self, face: usize, p: Vec2) -> Option<crate::climate::Koppen> {
         let id = self.koppen.as_ref()?.nearest(face, p);
-        Some(crate::planet_climate::Koppen::from_id(id.round() as u8))
+        Some(crate::climate::Koppen::from_id(id.round() as u8))
     }
 
     /// Glacier ice in a direction (0..1, see [`PlanetSurface::ice`]).
@@ -689,7 +683,7 @@ impl PlanetSurface {
         crate::geology::Rock::from_id(self.rock.bilinear(face, p.round()).round() as u8)
     }
 
-    /// The river springs (see `planet_springs`).
+    /// The river springs (see `springs`).
     pub fn springs(&self) -> &[PlanetSpring] {
         &self.springs.springs
     }
@@ -708,8 +702,7 @@ impl PlanetSurface {
 /// Depth of the sea floor where a river has reached the sea.
 const SEA_REACHED: f32 = 0.05;
 /// Bank width relative to the channel width (at least [`MIN_BANK`]), widened to keep the
-/// bank's mean slope under [`MAX_BANK_SLOPE`], up to [`MAX_BANK`] (as on the flat map,
-/// `map/rivers.rs`).
+/// bank's mean slope under [`MAX_BANK_SLOPE`], up to [`MAX_BANK`].
 const BANK_PER_WIDTH: f32 = 1.;
 const MIN_BANK: f32 = 0.8;
 const MAX_BANK_SLOPE: f32 = 0.5;
@@ -843,4 +836,12 @@ fn reach(width: f32) -> f32 {
 /// sRGB component to linear.
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Bicubic interpolation (Catmull-Rom) through four values, at `t` between the middle two.
+fn catmull_rom([p0, p1, p2, p3]: [f32; 4], t: f32) -> f32 {
+    0.5 * (2. * p1
+        + (p2 - p0) * t
+        + (2. * p0 - 5. * p1 + 4. * p2 - p3) * t * t
+        + (3. * (p1 - p2) + p3 - p0) * t * t * t)
 }

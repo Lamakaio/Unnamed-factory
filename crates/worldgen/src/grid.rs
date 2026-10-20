@@ -1,8 +1,7 @@
-//! Grids of cells the simulations run on: the flat square map ([`PlaneGrid`]) and the planet
-//! ([`crate::sphere::SphereGrid`]). Flow routing, erosion and smoothing only need a cell's
-//! neighbours and their distances, so they are written against [`Grid`].
-
-use crate::flow;
+//! The grid the simulations run on, as far as flow routing, erosion and smoothing need it: a
+//! cell's neighbours and their distances. The planet's is [`crate::sphere::SphereGrid`] (the
+//! flat map's square grid is gone; the trait keeps those algorithms apart from the sphere's
+//! geometry).
 
 /// Cells with neighbours.
 pub trait Grid: Sync {
@@ -35,36 +34,5 @@ pub trait Grid: Sync {
             });
         }
         values
-    }
-}
-
-/// The flat square map: `size × size` cells, indexed `z * size + x`, open on its border.
-#[derive(Clone, Copy)]
-pub struct PlaneGrid {
-    pub size: usize,
-}
-
-impl PlaneGrid {
-    pub fn new(size: usize) -> Self {
-        Self { size }
-    }
-}
-
-impl Grid for PlaneGrid {
-    fn len(&self) -> usize {
-        self.size * self.size
-    }
-
-    fn neighbours(&self, i: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
-        flow::neighbours(self.size, i)
-    }
-
-    fn is_border(&self, i: usize) -> bool {
-        let (x, z) = (i % self.size, i / self.size);
-        x == 0 || z == 0 || x == self.size - 1 || z == self.size - 1
-    }
-
-    fn blur(&self, values: &[f32], radius: usize) -> Vec<f32> {
-        crate::terrain::blur(self.size, values, radius)
     }
 }

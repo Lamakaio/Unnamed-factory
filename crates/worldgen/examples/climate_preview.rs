@@ -10,7 +10,7 @@ use bevy_math::Vec3;
 use worldgen::{
     grid::Grid,
     planet::{PlanetSettings, generate_planet},
-    planet_climate::{ClimateSettings, Koppen, simulate},
+    climate::{ClimateSettings, Koppen, simulate},
 };
 
 fn main() {

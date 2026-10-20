@@ -24,7 +24,7 @@ use bevy::{
 };
 use worldgen::{
     planet::{PlanetSettings, generate_planet},
-    planet_climate::{ClimateSettings, PlanetClimate, simulate},
+    climate::{ClimateSettings, PlanetClimate, simulate},
     sphere::FACES,
     surface::PlanetSurface,
 };

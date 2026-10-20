@@ -1,4 +1,4 @@
-//! Grass blades as geometry very close to the camera, as on the flat map (`map::grass`): the
+//! Grass blades as geometry very close to the camera: the
 //! terrain shader's grass carpet flattens at grazing angles, so real blades stand in front of
 //! it. Tiles are 1×1 squares of a face's cells around the point the camera looks at, only
 //! where the terrain draws grass (`planet_terrain.wesl`: not forest floors, desert, beaches,
@@ -31,7 +31,7 @@ const MAX_CAMERA_HEIGHT: f32 = 7.;
 /// distance from the camera.
 const RADIUS: f32 = 6.;
 const FADE: std::ops::Range<f32> = 4.5..7.;
-/// Blades per tile of full grass, their height and width (world units), as on the flat map.
+/// Blades per tile of full grass, their height and width (world units).
 const BLADES: usize = 500;
 const HEIGHT: (f32, f32) = (0.05, 0.11);
 const WIDTH: f32 = 0.012;
@@ -75,7 +75,7 @@ fn update_near_grass(
                 base: StandardMaterial {
                     base_color: Color::WHITE,
                     perceptual_roughness: 1.,
-                    // Both faces drawn, but not double-sided lighting (see `map::grass`).
+                    // Both faces drawn, but not double-sided lighting.
                     cull_mode: None,
                     ..default()
                 },

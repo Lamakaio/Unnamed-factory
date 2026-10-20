@@ -1,4 +1,4 @@
-//! River springs on the planet, as on the flat map (`map::springs` in the game): where a river
+//! River springs on the planet: where a river
 //! starts (not out of a lake or on another river), it comes out of a little pond on flat
 //! ground, or out of a notch in the hillside on a slope. Both are carved into the surface (like
 //! the river channels, `PlanetSurface::height`); the game draws the pond surfaces and the
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use bevy_math::{IVec3, Vec2, Vec3};
 
-use crate::planet_rivers::PlanetRiver;
+use crate::rivers::PlanetRiver;
 
 /// Ground flatter than this (slope around the source) gets a pond, steeper a hillside spring.
 const POND_MAX_SLOPE: f32 = 0.18;

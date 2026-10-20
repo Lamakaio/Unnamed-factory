@@ -353,8 +353,8 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
         let distance = spring.direction.distance(direction) * surface.radius;
         if distance < 10. {
             let _ = writeln!(out, "  spring of river {} ({:?}), {distance:.2} away", spring.river, match spring.kind {
-                worldgen::planet_springs::PlanetSpringKind::Pond { .. } => "pond",
-                worldgen::planet_springs::PlanetSpringKind::Hillside => "hillside",
+                worldgen::springs::PlanetSpringKind::Pond { .. } => "pond",
+                worldgen::springs::PlanetSpringKind::Hillside => "hillside",
             });
         }
     }

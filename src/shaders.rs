@@ -34,7 +34,7 @@ pub struct PlanetWaterShader {
     /// x: the sea level radius, y: cells along a face edge, z: 1 with a sea wave field.
     #[uniform(101)]
     pub planet: Vec4,
-    /// The sea wave field of one cube face, by cell (see `worldgen::planet_sea`): travel time
+    /// The sea wave field of one cube face, by cell (see `worldgen::sea`): travel time
     /// to the shore, depth, exposure, wind speed.
     #[texture(102)]
     #[sampler(103)]
@@ -178,7 +178,7 @@ impl MaterialExtension for SwayToonShader {
 pub type SwayToonMaterial = ExtendedMaterial<StandardMaterial, SwayToonShader>;
 
 /// [`ToonShader`] for the grass blades drawn as geometry close to the camera
-/// (`map::grass`): `grass_blades.wesl` bends each blade with the wind (UV0.x: 0 at the base,
+/// (`planet::grass`): `grass_blades.wesl` bends each blade with the wind (UV0.x: 0 at the base,
 /// 1 at the tip). Same bindings as [`SwayToonShader`].
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
