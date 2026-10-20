@@ -169,6 +169,9 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   desert (reg: gravel, pebbles, clay flats); salt flats as before. `PlanetSurface::{erg,
   badlands}` reach the shader packed in the rock field (lava's negative, the rock id's
   fraction); `Biome::{Desert, Erg, Badlands}`.
+- **Sea ice** (`PlanetSurface::sea_ice`, static): pack ice where the warmest month at sea
+  level stays below `SEA_ICE_WARMEST`; sent as the sea wave field's 4th channel
+  (`water::sea_textures`) and drawn by `planet_water.wesl` as floes and leads (no waves).
 - **Karst** (`surface.rs::karst`): on limestone, tower karst in the humid tropics and
   subtropics (Af, Am, Aw, Cwa, Cfa) and sinkholes in other wet climates, added to the heights
   (`PlanetSurface::karst_relief`: features on a jittered lattice `KARST_SPACING` apart).

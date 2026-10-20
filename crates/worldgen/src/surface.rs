@@ -29,6 +29,10 @@ const DUNE_WAVELENGTH: f32 = 5.;
 const DUNE_LATITUDE: f32 = 0.45;
 const DUNE_HEIGHT: f32 = 0.6;
 const DUNE_CREST: f32 = 0.78;
+/// Sea ice: none where the warmest month at sea level reaches the first (°C), pack ice where
+/// it stays below the second.
+const SEA_ICE_WARMEST: (f32, f32) = (4., 0.);
+
 /// Karst: features this far apart (world units), towers this high, sinkholes this deep (world
 /// units) round this share of the features.
 const KARST_SPACING: f32 = 4.5;
@@ -214,6 +218,9 @@ pub struct PlanetSurface {
     pub reef: FaceField,
     /// Glacier ice (0..1, see `glaciers`; its thickness is in the heights).
     pub ice: FaceField,
+    /// Sea ice over the sea (0..1): pack ice where the warmest month at sea level stays below
+    /// `SEA_ICE_WARMEST.1`, thinning out to `SEA_ICE_WARMEST.0`.
+    pub sea_ice: FaceField,
     /// Deserts (see [`deserts`]): sand seas (ergs, with dunes in the heights) and badlands
     /// (0..1); the rest of a hot or cold desert is stony (reg).
     pub erg: FaceField,
@@ -289,6 +296,20 @@ impl PlanetSurface {
             Some(koppen) => deserts(planet, koppen),
             None => (vec![0.; planet.grid.len()], vec![0.; planet.grid.len()]),
         };
+        let sea_ice: Vec<f32> = match climate {
+            Some(climate) => {
+                let raw = crate::par::map(planet.grid.len(), |i| {
+                    if !planet.sea[i] {
+                        return 0.;
+                    }
+                    let (t, _) = climate.months_at(planet.grid.direction(i), 0.);
+                    let warmest = t.iter().copied().fold(f32::MIN, f32::max);
+                    smoothstep(SEA_ICE_WARMEST.0, SEA_ICE_WARMEST.1, warmest)
+                });
+                planet.grid.blur(&raw, 2)
+            }
+            None => vec![0.; planet.grid.len()],
+        };
         let karst_cells = match &koppen_cells {
             Some(koppen) => karst(planet, koppen),
             None => vec![0.; planet.grid.len()],
@@ -310,6 +331,7 @@ impl PlanetSurface {
             geothermal: FaceField::new(planet, &planet.geothermal),
             reef: FaceField::new(planet, &planet.reef),
             ice: FaceField::new(planet, &ice),
+            sea_ice: FaceField::new(planet, &sea_ice),
             erg: FaceField::new(planet, &erg),
             badlands: FaceField::new(planet, &badlands),
             karst: FaceField::new(planet, &karst_cells),

@@ -38,7 +38,7 @@ import bevy_pbr::prepass::utils::prepass_depth;
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
 // x: the sea level radius, y: cells along a face edge, z: 1 with a sea wave field.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
-// The face's sea wave field: (travel time to the shore, depth, exposure, wind speed).
+// The face's sea wave field: (travel time to the shore, depth, exposure, sea ice).
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var sea_field: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var sea_sampler: sampler;
 // Wind direction where the mesh carries none (in the pattern coordinates).
@@ -144,6 +144,8 @@ struct Sea {
     swash: f32,
     // Wind ripple strength.
     chop: f32,
+    // Sea ice cover (0..1).
+    ice: f32,
 }
 
 fn sea_waves(xz: vec2<f32>, time: f32, footprint: f32, wind_dir: vec2<f32>) -> Sea {
@@ -161,6 +163,7 @@ fn sea_waves(xz: vec2<f32>, time: f32, footprint: f32, wind_dir: vec2<f32>) -> S
     let depth = field.y;
     let exposure = field.z;
     out.depth = depth;
+    out.ice = field.w;
     out.exposure = exposure;
     out.travel = travel;
 
@@ -332,11 +335,30 @@ fn fragment(
         crest = max(crest, ripples(xz, wind_dir, time, footprint, min(chop, 1.0)));
     }
 
+    // Sea ice: pack ice broken into floes by dark leads, looser towards its edge (no waves,
+    // no glints there).
+    var floe = 0.0;
+    if !river && sea.ice > 0.02 {
+        let breakup = value_noise(xz * 0.35) * 0.5 + 0.5;
+        let cells = 1.0 - abs(value_noise(xz * 0.9 + vec2(value_noise(xz * 0.2) * 2.0, 0.0)));
+        let leads = crisp(0.93 - 0.25 * (1.0 - sea.ice), cells);
+        let cover = sea.ice * 1.3 - 0.3 * breakup;
+        floe = crisp(0.5, cover) * (1.0 - leads);
+        let snowy = value_noise(xz * 0.5 + vec2(9.0, 3.0)) * 0.5 + 0.5;
+        let ice_color = mix(vec3(0.80, 0.88, 0.94), vec3(0.95, 0.97, 1.0), crisp(0.45, snowy));
+        color = mix(color, ice_color, floe);
+        alpha = mix(alpha, 1.0, floe);
+        crest *= 1.0 - floe;
+        foam *= 1.0 - floe;
+        chop *= 1.0 - floe;
+    }
+
     // Glints: where two drifting noise layers are both high.
     let a = value_noise(xz * 12.0 + vec2(time * 1.2, time * 0.4));
     let b = value_noise(xz * 15.0 - vec2(time * 0.7, time * 1.1) + vec2(13.0, 7.0));
     // Faded out where a pixel covers more than a few glints (they would flicker).
-    let glint = crisp(0.85, a * b + 0.4 * max(a, b)) * (1.0 - smoothstep(0.008, 0.025, footprint));
+    let glint = crisp(0.85, a * b + 0.4 * max(a, b)) * (1.0 - smoothstep(0.008, 0.025, footprint))
+        * (1.0 - floe);
 
     // Shore foam: a band of shallow water along the shore, its edge wobbling.
     // Muddled: the foam's reach varies along the shore (two drifting noise layers), and its
@@ -363,7 +385,7 @@ fn fragment(
     let lit = crisp(0.5, shadow);
     color = mix(color, mix(color, FOAM, 0.35) * 1.1, crest);
     color = mix(color, GLINT, glint * lit * 0.8);
-    foam = max(foam, shore);
+    foam = max(foam, shore * (1.0 - floe));
     color = mix(color, FOAM, foam);
     alpha = max(alpha, max(foam * 0.95, crest * 0.75));
     color *= mix(SHADOW, vec3(1.0), lit) * sun_level;

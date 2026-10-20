@@ -886,17 +886,22 @@ fn wind(surface: &PlanetSurface, face: usize, p: Vec2) -> Vec2 {
     Vec2::new(wind.dot(ex) / ex.length_squared(), wind.dot(ey) / ey.length_squared())
 }
 
-/// The sea wave field of each face as texture data (`Rgba16Float`, a texel per cell).
+/// The sea wave field of each face as texture data (`Rgba16Float`, a texel per cell): travel
+/// time, depth, exposure (see `sea_field`) and sea ice (in place of the wind speed: the shader
+/// takes the wind from the mesh).
 pub fn sea_textures(planet: &Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
     let field = sea_field(planet, surface);
-    let per_face = surface.n * surface.n;
+    let n = surface.n;
+    let per_face = n * n;
     field
         .chunks(per_face)
-        .map(|face| {
+        .enumerate()
+        .map(|(face, texels)| {
             let mut data = Vec::with_capacity(per_face * 8);
-            for texel in face {
-                for value in texel {
-                    data.extend(f16::from_f32(*value).to_le_bytes());
+            for (k, texel) in texels.iter().enumerate() {
+                let ice = surface.sea_ice.bilinear(face, Vec2::new((k % n) as f32, (k / n) as f32));
+                for value in [texel[0], texel[1], texel[2], ice] {
+                    data.extend(f16::from_f32(value).to_le_bytes());
                 }
             }
             data
