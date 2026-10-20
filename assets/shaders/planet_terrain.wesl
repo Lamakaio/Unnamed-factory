@@ -310,6 +310,8 @@ fn ground(
     lava: f32,
     reef: f32,
     ice: f32,
+    erg: f32,
+    badlands: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -366,15 +368,21 @@ fn ground(
     let beach = (1.0 - smoothstep(0.15, 0.45, height + 0.15 * large)) * c.b;
     color = mix(color, sand, border(max(a.r, beach), medium));
 
-    // Desert: warm sand in dune ripples, cracked clay flats.
+    // Deserts: stony (reg: gravel pavement strewn with dark pebbles, cracked clay flats), sand
+    // seas (erg: warm sand in wind ripples) and badlands (bare banded soft rock).
     let along = dot(xz, wind.xy);
     let ripples = sin(along * 1.4 + fbm(xz * 0.15, 3, footprint * 0.15) * 4.0);
-    var desert = mix(srgb(0.90, 0.72, 0.47), srgb(0.80, 0.60, 0.38), patches(ripples, 0.55));
+    let dune_sand = mix(srgb(0.92, 0.72, 0.46), srgb(0.82, 0.60, 0.38), patches(ripples, 0.55));
+    let fine = 1.0 - smoothstep(0.03, 0.08, footprint);
+    var desert = mix(srgb(0.68, 0.55, 0.42), srgb(0.58, 0.47, 0.38), patches(blotches, 0.1));
+    let pebbles = patches(value_noise(xz * 3.1 + vec2(7.0, 2.0)), 0.78) * fine;
+    desert = mix(desert, srgb(0.32, 0.27, 0.24), pebbles * 0.8);
     let flats = patches(fbm(xz * 0.1 + vec2(13.0, 4.0), 3, footprint * 0.1), 0.3);
-    let cracks = patches(1.0 - abs(value_noise(xz * 2.5)), 0.93)
-        * (1.0 - smoothstep(0.03, 0.08, footprint));
+    let cracks = patches(1.0 - abs(value_noise(xz * 2.5)), 0.93) * fine;
     let clay = mix(srgb(0.82, 0.63, 0.47), srgb(0.62, 0.45, 0.33), cracks);
     desert = mix(desert, clay, flats);
+    let sea_of_sand = erg + 0.25 * medium + 0.15 * large;
+    desert = mix(desert, dune_sand, crisp(0.5, sea_of_sand, fwidth(sea_of_sand)));
     let desertness = border(c.r, medium);
     color = mix(color, desert, desertness);
 
@@ -387,7 +395,10 @@ fn ground(
     let steep_value = steep + 0.06 * medium;
     let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
     let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
-    color = mix(color, rock_color(xz, height, up, footprint, rock_type, level) * rock_tone, rock);
+    // (Badlands: bare wherever the ground slopes a little.)
+    let bare = badlands * smoothstep(0.02, 0.1, steep) + 0.2 * medium;
+    let bare_rock = max(rock, crisp(0.5, bare, fwidth(bare)));
+    color = mix(color, rock_color(xz, height, up, footprint, rock_type, level) * rock_tone, bare_rock);
 
     // Fresh lava: bare, black, in ropy swirls with a ragged edge (no grass, no forest).
     let lava_edge = lava + 0.25 * medium;
@@ -525,20 +536,25 @@ fn fragment(
     var lava = 0.0;
     var reef = 0.0;
     var ice = 0.0;
+    var erg = 0.0;
+    var badlands = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
         let cell = clamp(vec2<i32>(floor(xz + warp + 0.5)), vec2(0), vec2(n - 1));
-        rock_type = clamp(i32(textureLoad(rock_field, cell, 0).r + 0.5), 0, 5);
+        let id = textureLoad(rock_field, cell, 0).r;
+        rock_type = clamp(i32(floor(id + 0.05)), 0, 5);
+        badlands = saturate((id - f32(rock_type)) / 0.9);
         let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
         level = height / planet.z + offset;
         let field = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0);
-        lava = field.b;
+        lava = max(field.b, 0.0);
+        erg = max(-field.b, 0.0);
         reef = max(field.a, 0.0);
         ice = max(-field.a, 0.0);
     }
     let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
-        rock_type, level, lava, reef, ice)
+        rock_type, level, lava, reef, ice, erg, badlands)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

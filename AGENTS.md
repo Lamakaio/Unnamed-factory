@@ -161,6 +161,14 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   `CLOUD_FOREST_HEIGHT`), savanna (Aw: grass, scattered acacias), mangroves (low tropical
   shores in stretches, standing in the shallows down to `MANGROVE_DEPTH`), tundra (ET poleward
   of `TUNDRA_SIN`: shrubs, stones) and alpine meadows (ET on mountains: grass, flowers, rocks).
+- **Desert types** (`surface.rs::deserts`): in desert climates (BWh, BWk), sand seas (ergs)
+  on gentle low ground in noise stretches (`ERG_*`), with transverse dunes added to the
+  heights (`PlanetSurface::dunes`: crests north–south, a whole number round the planet,
+  slip faces west); badlands on soft rocks (shale, sandstone) sloping more than
+  `BADLANDS_SLOPE` in dry climates (deeper gullies, bare banded rock); the rest is stony
+  desert (reg: gravel, pebbles, clay flats); salt flats as before. `PlanetSurface::{erg,
+  badlands}` reach the shader packed in the rock field (lava's negative, the rock id's
+  fraction); `Biome::{Desert, Erg, Badlands}`.
 - **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
   spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains

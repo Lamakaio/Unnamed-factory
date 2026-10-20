@@ -626,8 +626,10 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
         Biome::Snow
     } else if slope > 0.9 {
         Biome::Rock
+    } else if surface.badlands.bilinear(face, p) > 0.5 {
+        Biome::Badlands
     } else if desert > 0.5 {
-        Biome::Desert
+        if surface.erg.bilinear(face, p) > 0.5 { Biome::Erg } else { Biome::Desert }
     } else if forest * (0.6 + 0.8 * groves) > 0.45 {
         match koppen {
             Some(Koppen::Af | Koppen::Am) => Biome::Rainforest,

@@ -23,6 +23,61 @@ use crate::{
 /// detail near a face's edge is also evaluated on the neighbouring face, up to
 /// [`EDGE_BLEND`] cells past its edge.
 const PAD: usize = 14;
+/// Dunes: wavelength (world units, at `DUNE_LATITUDE`), height (world units) and where along
+/// a wavelength the crest is (the slip face beyond it).
+const DUNE_WAVELENGTH: f32 = 5.;
+const DUNE_LATITUDE: f32 = 0.45;
+const DUNE_HEIGHT: f32 = 0.6;
+const DUNE_CREST: f32 = 0.78;
+/// Badlands' gullies are this much deeper.
+const BADLANDS_GULLIES: f32 = 1.5;
+/// Sand seas: in desert climates (BWh, BWk) where a noise (wavelength `ERG_WAVELENGTH`, world
+/// units) is high, on gentle ground (slope below `ERG_SLOPE`) below `ERG_HEIGHT`.
+const ERG_WAVELENGTH: f32 = 90.;
+const ERG_SLOPE: (f32, f32) = (0.12, 0.35);
+const ERG_HEIGHT: (f32, f32) = (12., 20.);
+/// Badlands: soft rocks (shale, sandstone) in dry climates (deserts and steppes), on slopes
+/// steeper than `BADLANDS_SLOPE`, in stretches.
+const BADLANDS_SLOPE: (f32, f32) = (0.15, 0.4);
+
+/// Sand seas (ergs) and badlands of each cell (0..1), from the climate classes.
+fn deserts(planet: &Planet, koppen: &[crate::planet_climate::Koppen]) -> (Vec<f32>, Vec<f32>) {
+    use crate::{geology::Rock, planet_climate::Koppen};
+    let grid = &planet.grid;
+    let radius = planet.radius();
+    let noise = Noise::new(planet.settings.seed as u32 ^ 0xE6C5);
+    let raw: Vec<(f32, f32)> = crate::par::map(grid.len(), |i| {
+        let desert = matches!(koppen[i], Koppen::BWh | Koppen::BWk);
+        let steppe = matches!(koppen[i], Koppen::BSh | Koppen::BSk);
+        if planet.sea[i] || !desert && !steppe {
+            return (0., 0.);
+        }
+        let slope = grid
+            .neighbours(i)
+            .map(|(j, d)| (planet.heights[j] - planet.heights[i]).abs() / d)
+            .fold(0., f32::max);
+        let world = grid.direction(i) * radius;
+        let erg = if desert {
+            smoothstep(-0.05, 0.25, noise.fbm3(world / ERG_WAVELENGTH, 3))
+                * (1. - smoothstep(ERG_SLOPE.0, ERG_SLOPE.1, slope))
+                * (1. - smoothstep(ERG_HEIGHT.0, ERG_HEIGHT.1, planet.heights[i]))
+        } else {
+            0.
+        };
+        let soft = matches!(Rock::from_id(planet.rock[i]), Rock::Shale | Rock::Sandstone);
+        let badlands = if soft {
+            smoothstep(BADLANDS_SLOPE.0, BADLANDS_SLOPE.1, slope)
+                * smoothstep(-0.2, 0.2, noise.layer(1).fbm3(world / 50., 2))
+        } else {
+            0.
+        };
+        (erg, badlands)
+    });
+    // (Blurred wide: the climate classes' borders are coarse.)
+    let erg = grid.blur(&raw.iter().map(|r| r.0).collect::<Vec<_>>(), 5);
+    let badlands = grid.blur(&raw.iter().map(|r| r.1).collect::<Vec<_>>(), 1);
+    (erg, badlands)
+}
 /// Near a face's edge, fine detail blends with the neighbouring face's over this many cells
 /// (each face's gullies follow its own cell axes).
 const EDGE_BLEND: f32 = 8.;
@@ -131,6 +186,10 @@ pub struct PlanetSurface {
     pub reef: FaceField,
     /// Glacier ice (0..1, see `glaciers`; its thickness is in the heights).
     pub ice: FaceField,
+    /// Deserts (see [`deserts`]): sand seas (ergs, with dunes in the heights) and badlands
+    /// (0..1); the rest of a hot or cold desert is stony (reg).
+    pub erg: FaceField,
+    pub badlands: FaceField,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -170,6 +229,7 @@ impl PlanetSurface {
             crate::par::map(planet.grid.len(), |i| climate.koppen_at(planet.grid.direction(i), planet.heights[i]))
         });
         let weights = koppen.as_ref().map(|koppen| koppen.iter().map(|k| k.ground_weights()).collect::<Vec<_>>());
+        let koppen_cells = koppen.clone();
         let koppen = koppen.map(|koppen| {
             FaceField::new(planet, &koppen.iter().map(|k| k.id() as f32).collect::<Vec<_>>())
         });
@@ -194,6 +254,10 @@ impl PlanetSurface {
         let lake_depth: Vec<f32> =
             planet.lake_depth.iter().zip(&ice).map(|(&d, &ice)| if ice > 0. { 0. } else { d }).collect();
         let calm: Vec<f32> = planet.calm.iter().zip(&ice).map(|(c, i)| c.max(*i)).collect();
+        let (erg, badlands) = match &koppen_cells {
+            Some(koppen) => deserts(planet, koppen),
+            None => (vec![0.; planet.grid.len()], vec![0.; planet.grid.len()]),
+        };
         let marsh: Vec<f32> = marsh.iter().zip(&ice).map(|(m, i)| m * (1. - i)).collect();
         let weights = weights.map(|weights: Vec<[f32; 5]>| {
             [0, 1, 2, 3, 4].map(|k| {
@@ -210,6 +274,8 @@ impl PlanetSurface {
             lava: FaceField::new(planet, &planet.lava),
             reef: FaceField::new(planet, &planet.reef),
             ice: FaceField::new(planet, &ice),
+            erg: FaceField::new(planet, &erg),
+            badlands: FaceField::new(planet, &badlands),
             volcanoes: planet.volcanoes.clone(),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
@@ -325,8 +391,13 @@ impl PlanetSurface {
         if height <= 0. {
             return height;
         }
-        let strength = self.ruggedness.bilinear(face, p)
-            * (1. - self.calm.bilinear(face, p).clamp(0., 1.));
+        let calm = 1. - self.calm.bilinear(face, p).clamp(0., 1.);
+        // Dunes on the sand seas.
+        let erg = self.erg.bilinear(face, p);
+        let height = if erg > 0.01 { height + self.dunes(direction) * erg * calm } else { height };
+        // Badlands: dense gullies.
+        let badlands = self.badlands.bilinear(face, p);
+        let strength = self.ruggedness.bilinear(face, p).max(badlands) * calm;
         if strength <= 0.01 {
             return height;
         }
@@ -352,7 +423,27 @@ impl PlanetSurface {
                 gully = gully * own + self.gullies_on(other, q, world) * (1. - own);
             }
         }
-        height + (gully + roughness) * self.detail_amplitude * strength
+        height + (gully * (1. + BADLANDS_GULLIES * badlands) + roughness) * self.detail_amplitude * strength
+    }
+
+    /// Dune height (world units) in a direction: transverse dunes, crests running north–south
+    /// (across the trade winds blowing from the east: gentle slopes facing east, steep slip
+    /// faces west), sinuous and of varied size. A whole number of dunes round the planet keeps
+    /// them seamless.
+    fn dunes(&self, direction: Vec3) -> f32 {
+        let count = (std::f32::consts::TAU * self.radius * DUNE_LATITUDE.cos() / DUNE_WAVELENGTH).round();
+        let longitude = direction.z.atan2(direction.x);
+        let world = direction * self.radius;
+        let noise = Noise::new(self.seed ^ 0xD0E5);
+        let warp = 1.2 * noise.fbm3(world / 14., 2) + 2. * noise.layer(1).fbm3(world / 40., 2);
+        let along = (-longitude / std::f32::consts::TAU * count + warp).rem_euclid(1.);
+        let profile = if along < DUNE_CREST {
+            smoothstep(0., DUNE_CREST, along)
+        } else {
+            1. - smoothstep(DUNE_CREST, 1., along)
+        };
+        let size = 0.65 + 0.35 * noise.layer(2).fbm3(world / 25., 2);
+        DUNE_HEIGHT * profile * size
     }
 
     /// Gullies (about -1..1, already masked by slope and patchiness) at cell coordinates `p` of

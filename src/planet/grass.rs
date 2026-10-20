@@ -163,6 +163,7 @@ fn grass_at(surface: &PlanetSurface, face: usize, p: Vec2) -> Option<(Vec3, f32)
         || surface.marsh.bilinear(face, p).abs() > 0.5
         || surface.lava.bilinear(face, p) > 0.4
         || surface.ice.bilinear(face, p) > 0.2
+        || surface.badlands.bilinear(face, p) > 0.5
     {
         return None;
     }

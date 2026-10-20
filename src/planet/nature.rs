@@ -324,6 +324,13 @@ pub(super) fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
             ("rock_c", 0.008),
             ("dead_tree_b", 0.002),
         ],
+        Biome::Erg => &[("desert_shrub", 0.004), ("dead_tree_b", 0.0008)],
+        Biome::Badlands => &[
+            ("desert_shrub", 0.012),
+            ("rock_tall_d", 0.006),
+            ("rock_large_b", 0.006),
+            ("dead_tree_b", 0.002),
+        ],
         Biome::Sea | Biome::Lake => &[],
     }
 }
@@ -355,7 +362,8 @@ pub(super) fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
             ("flowers_b", 0.02),
         ],
         Biome::Steppe => &[("grass_b", 0.07), ("grass_a", 0.03)],
-        Biome::Desert => &[("pebbles_a", 0.02), ("pebbles_b", 0.01)],
+        Biome::Desert => &[("pebbles_a", 0.05), ("pebbles_b", 0.03)],
+        Biome::Badlands => &[("pebbles_b", 0.02)],
         Biome::Marsh => &[("grass_a", 0.12), ("plant", 0.04)],
         Biome::Alpine => &[("grass_b", 0.04), ("pebbles_a", 0.02)],
         Biome::Rainforest | Biome::CloudForest => &[("fern", 0.3), ("plant", 0.12), ("mushrooms", 0.01)],

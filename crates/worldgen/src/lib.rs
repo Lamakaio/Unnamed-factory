@@ -156,8 +156,12 @@ pub enum Biome {
     Marsh,
     Meadow,
     Steppe,
-    /// Driest warm land: sand, clay flats, cacti.
+    /// Stony desert (reg): gravel, clay flats, shrubs, cacti.
     Desert,
+    /// Sand sea (erg): dunes, almost bare.
+    Erg,
+    /// Badlands: soft rock gullied bare in dry climates, a few shrubs.
+    Badlands,
     DeciduousForest,
     ConiferForest,
     /// Tropical rainforest (Af, Am): jungle trees, bamboo, ferns.
@@ -188,7 +192,9 @@ impl Biome {
             Biome::Marsh => [0.36, 0.42, 0.22],
             Biome::Meadow => [0.50, 0.68, 0.30],
             Biome::Steppe => [0.72, 0.68, 0.40],
-            Biome::Desert => [0.90, 0.74, 0.50],
+            Biome::Desert => [0.70, 0.58, 0.44],
+            Biome::Erg => [0.92, 0.74, 0.48],
+            Biome::Badlands => [0.74, 0.50, 0.38],
             Biome::DeciduousForest => [0.26, 0.48, 0.18],
             Biome::ConiferForest => [0.17, 0.34, 0.20],
             Biome::Rainforest => [0.14, 0.38, 0.14],

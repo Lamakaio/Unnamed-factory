@@ -136,6 +136,10 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Glaciers** (`glaciers.rs`): ice where summers stay below freezing (the equilibrium line
   idea of glaciology, e.g. Benn and Evans, *Glaciers and Glaciation*), tongues down the
   valleys, moraines at the margins.
+- **Desert types** (`surface.rs::deserts`): ergs, regs and badlands as classified in desert
+  geomorphology (e.g. A. Goudie, *Arid and Semi-Arid Geomorphology*, 2013); transverse dunes
+  with a gentle stoss side and a steep slip face (R. A. Bagnold, *The Physics of Blown Sand
+  and Desert Dunes*, 1941).
 - **Reefs and atolls** (`reefs.rs`): fringing reefs, barrier reefs round sinking volcanic
   islands and atolls on sunk ones, after C. Darwin, *The Structure and Distribution of Coral
   Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.

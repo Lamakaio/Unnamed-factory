@@ -338,9 +338,9 @@ fn finish_chunk_meshes(
     }
 }
 
-/// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id,
-/// strata offset, fresh lava, coral reef (positive) or glacier ice (negative: the two never
-/// meet).
+/// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id
+/// (plus badlands × 0.9), strata offset, fresh lava (positive) or sand sea (negative), coral
+/// reef (positive) or glacier ice (negative: the two never meet).
 fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
     let n = planet.grid.n();
     let per_face = planet.grid.n() * planet.grid.n();
@@ -350,7 +350,10 @@ fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> 
             for i in face * per_face..(face + 1) * per_face {
                 let cell = Vec2::new(((i - face * per_face) % n) as f32, ((i - face * per_face) / n) as f32);
                 let ice = surface.ice.bilinear(face, cell);
-                for value in [planet.rock[i] as f32, planet.strata[i], planet.lava[i], planet.reef[i] - ice] {
+                let erg = surface.erg.bilinear(face, cell);
+                let badlands = surface.badlands.bilinear(face, cell).clamp(0., 1.);
+                let rock = planet.rock[i] as f32 + 0.9 * badlands;
+                for value in [rock, planet.strata[i], planet.lava[i] - erg, planet.reef[i] - ice] {
                     data.extend(half::f16::from_f32(value).to_le_bytes());
                 }
             }
