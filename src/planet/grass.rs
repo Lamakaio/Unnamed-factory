@@ -157,6 +157,10 @@ fn grass_at(surface: &PlanetSurface, face: usize, p: Vec2) -> Option<(Vec3, f32)
         return Some((srgb(0.40, 0.66, 0.24), 1.));
     };
     let [dryness, forest, desert, snow, cold] = weights.each_ref().map(|w| w.bilinear(face, p));
+    // (Greener along rivers in dry country, as the terrain: see `mesh::ground_materials`.)
+    let riparian = surface.riparian.bilinear(face, p);
+    let dryness = dryness * (1. - super::mesh::RIPARIAN_GREEN * riparian);
+    let desert = desert * (1. - riparian);
     if forest > 0.5
         || desert > 0.5
         || snow > 0.5

@@ -33,8 +33,8 @@ const LATITUDE: (f32, f32) = (24., 60.);
 /// Share of the eligible coasts with barrier islands (a noise over `STRETCH` world units), and
 /// how often inlets break them (higher: more).
 const STRETCH: f32 = 70.;
-const COVER: f32 = 0.35;
-const INLETS: f32 = 0.3;
+const COVER: f32 = 0.12;
+const INLETS: f32 = 0.5;
 
 /// Raise barrier islands and their lagoons on the heights (world units; cells raised above the
 /// sea become land), their sand from the mainland's rock (not the sea floor's basalt).
@@ -122,7 +122,7 @@ fn raise(grid: &SphereGrid, radius: f32, seed: u64, reef: &[f32], heights: &[f32
         }
         // The bar: a flat top, a gentle shoreface down to the sea, a steeper back to the
         // lagoon; inlets break it.
-        let inlet = smoothstep(INLETS, INLETS - 0.12, 0.5 + 0.5 * noise.layer(2).fbm3(p / 9., 2));
+        let inlet = smoothstep(INLETS, INLETS - 0.12, 0.5 + 0.5 * noise.layer(2).fbm3(p / 14., 2));
         let down = if dx > 0. { SHOREFACE * (dx - BAR_HALF_WIDTH).max(0.) } else { BACK * (-dx - BAR_HALF_WIDTH).max(0.) };
         let top = BAR_CREST * smoothstep(BAR_HALF_WIDTH * 1.4, 0., dx.abs()).sqrt();
         let bar = top - down;

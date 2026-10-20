@@ -138,7 +138,7 @@ fn patches(noise: f32, threshold: f32) -> f32 {
 const ROCK_LIGHT: array<vec3<f32>, 6> = array(
     vec3(0.74, 0.69, 0.65), // granite
     vec3(0.60, 0.60, 0.57), // metamorphic
-    vec3(0.38, 0.36, 0.36), // basalt
+    vec3(0.46, 0.43, 0.41), // basalt
     vec3(0.80, 0.53, 0.34), // sandstone (hard beds)
     vec3(0.55, 0.50, 0.46), // shale (hard beds)
     vec3(0.85, 0.82, 0.73), // limestone (hard beds)
@@ -146,7 +146,7 @@ const ROCK_LIGHT: array<vec3<f32>, 6> = array(
 const ROCK_DARK: array<vec3<f32>, 6> = array(
     vec3(0.62, 0.56, 0.53),
     vec3(0.48, 0.49, 0.48),
-    vec3(0.28, 0.27, 0.28),
+    vec3(0.35, 0.33, 0.32),
     vec3(0.66, 0.43, 0.33),
     vec3(0.44, 0.40, 0.38),
     vec3(0.70, 0.68, 0.62),
@@ -513,6 +513,7 @@ fn fragment(
     // c = (desert, salt flat, -, -).
     var climate = vec4(0.3, 0.0, 0.0, 0.0);
     var cover = vec2(0.0);
+    var geothermal = 0.0;
 @if(VERTEX_COLORS)
     climate = in.color;
 @if(VERTEX_UVS_B)
@@ -525,7 +526,8 @@ fn fragment(
     let a = vec4(0.0, 0.0, snow, marsh);
     let b = vec4(climate.r, forest * (1.0 - cold), forest * cold, (1.0 - forest) * cold * 0.8);
     // (c.b: how near the ocean, for the beaches.)
-    let c = vec4(smoothstep(0.75, 1.0, climate.r), salt, cover.y, 0.0);
+    let c = vec4(smoothstep(0.75, 1.0, climate.r), salt, max(cover.y, 0.0), 0.0);
+    geothermal = max(-cover.y, 0.0);
     let wet = climate.a;
 
     // The view direction in face coordinates (for the grass parallax): from the screen space
@@ -554,20 +556,13 @@ fn fragment(
     var ice = 0.0;
     var erg = 0.0;
     var badlands = 0.0;
-    var geothermal = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
         let cell = clamp(vec2<i32>(floor(xz + warp + 0.5)), vec2(0), vec2(n - 1));
         let id = textureLoad(rock_field, cell, 0).r;
         rock_type = clamp(i32(floor(id + 0.05)), 0, 5);
-        // (The fraction: geothermal fields on basalt, else badlands.)
-        let extra = saturate((id - f32(rock_type)) / 0.9);
-        if rock_type == 2 {
-            geothermal = extra;
-        } else {
-            badlands = extra;
-        }
+        badlands = saturate((id - f32(rock_type)) / 0.9);
         let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
         level = height / planet.z + offset;
         let field = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0);

@@ -182,8 +182,11 @@ impl Builder<'_> {
 /// The coast (beaches) where the blurred ocean (`PlanetSurface::ocean`) is between these.
 pub const COAST: (f32, f32) = (0.1, 0.3);
 
+/// How much greener (less dry) the banks of rivers are (see `PlanetSurface::riparian`).
+pub const RIPARIAN_GREEN: f32 = 0.75;
+
 /// Ground materials at a point (see `PlanetTerrainShader`): (dryness, forest, marsh / -salt,
-/// wet bed) and (cold + snow, coast).
+/// wet bed) and (cold + snow, coast or -geothermal).
 fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4], [f32; 2]) {
     let wet = surface.wetness(face, p);
     let marsh = surface.marsh.bilinear(face, p);
@@ -194,7 +197,12 @@ fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4],
         return ([0.3, 0., marsh, wet], [0., coast]);
     };
     let [dryness, forest, _, snow, cold] = weights.each_ref().map(|field| field.bilinear(face, p));
-    // (Snow only where it is cold: the two share a channel, snow above 1.)
+    // Greener along rivers in dry country.
+    let dryness = dryness * (1. - RIPARIAN_GREEN * surface.riparian.bilinear(face, p));
+    // (Snow only where it is cold: the two share a channel, snow above 1. Geothermal fields
+    // and the coast share one too: hot springs negative.)
+    let geothermal = surface.geothermal.bilinear(face, p);
+    let coast = if geothermal > coast { -geothermal } else { coast };
     ([dryness, forest, marsh, wet], [cold.min(1.) + snow, coast])
 }
 

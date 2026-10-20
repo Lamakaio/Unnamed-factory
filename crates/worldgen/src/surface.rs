@@ -29,6 +29,42 @@ const DUNE_WAVELENGTH: f32 = 5.;
 const DUNE_LATITUDE: f32 = 0.45;
 const DUNE_HEIGHT: f32 = 0.6;
 const DUNE_CREST: f32 = 0.78;
+/// River banks reach `RIPARIAN_REACH.0` plus `RIPARIAN_REACH.1` × the river's width (world
+/// units) from its centre.
+const RIPARIAN_REACH: (f32, f32) = (1.5, 1.2);
+
+/// How near each cell is to a river (see [`PlanetSurface::riparian`]).
+fn riparian(planet: &Planet) -> Vec<f32> {
+    let grid = &planet.grid;
+    let radius = planet.radius();
+    let mut near = vec![0f32; grid.len()];
+    let mut seen = vec![0u32; grid.len()];
+    let mut stamp = 0u32;
+    for river in &planet.rivers {
+        for point in &river.points {
+            stamp += 1;
+            let reach = RIPARIAN_REACH.0 + RIPARIAN_REACH.1 * point.width;
+            let start = grid.cell_at(point.direction);
+            seen[start] = stamp;
+            let mut queue = std::collections::VecDeque::from([start]);
+            while let Some(i) = queue.pop_front() {
+                let r = grid.direction(i).distance(point.direction) * radius;
+                if r > reach {
+                    continue;
+                }
+                near[i] = near[i].max(smoothstep(reach, point.width * 0.5, r));
+                for (j, _) in grid.neighbours(i) {
+                    if seen[j] != stamp {
+                        seen[j] = stamp;
+                        queue.push_back(j);
+                    }
+                }
+            }
+        }
+    }
+    near
+}
+
 /// Sea ice: none where the warmest month at sea level reaches the first (°C), pack ice where
 /// it stays below the second.
 const SEA_ICE_WARMEST: (f32, f32) = (4., 0.);
@@ -199,6 +235,9 @@ pub struct PlanetSurface {
     pub lake_depth: FaceField,
     pub ruggedness: FaceField,
     pub calm: FaceField,
+    /// River banks (0..1: 1 at the water, fading over `RIPARIAN_REACH`, wider along bigger
+    /// rivers): green strips and gallery forests in dry country.
+    pub riparian: FaceField,
     /// Ground colour of each cell (linear RGB), from its climate (Köppen class at its altitude);
     /// `None` without a climate.
     pub ground: Option<[FaceField; 3]>,
@@ -346,6 +385,7 @@ impl PlanetSurface {
             lake_depth: FaceField::new(planet, &lake_depth),
             ruggedness: FaceField::new(planet, &planet.ruggedness),
             calm: FaceField::new(planet, &calm),
+            riparian: FaceField::new(planet, &riparian(planet)),
             grid: std::sync::Arc::new(SphereGrid::new(planet.grid.n())),
             seed: planet.settings.seed as u32 ^ 0xD37A,
             detail_wavelength: flat.detail_wavelength,

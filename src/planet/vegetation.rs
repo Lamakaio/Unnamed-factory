@@ -48,6 +48,9 @@ const DROP_DISTANCE: f32 = 320.;
 const BEACH_HEIGHT: f32 = 0.3;
 /// Beaches within this latitude (its sine) are tropical (palms).
 const TROPICAL_SIN: f32 = 0.45;
+/// River banks this near the water (`PlanetSurface::riparian`) in dry country have their own
+/// vegetation.
+const RIPARIAN_BIOME: f32 = 0.4;
 /// Mangroves stand in water down to this height.
 const MANGROVE_DEPTH: f32 = -0.25;
 /// Tropical forests in a temperate climate (cooled by altitude) above this height are cloud
@@ -625,10 +628,17 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     };
     let [dryness, forest, desert, snow, cold] = weights.each_ref().map(|w| w.bilinear(face, p));
     let koppen = surface.koppen_at(face, p);
+    let dry = desert > 0.3 || dryness > 0.6;
     if snow > 0.5 {
         Biome::Snow
     } else if slope > 0.9 {
         Biome::Rock
+    } else if dry && surface.riparian.bilinear(face, p) > RIPARIAN_BIOME {
+        // River banks in dry country: palms where it is hot, gallery forests elsewhere.
+        match koppen {
+            Some(Koppen::BWh | Koppen::BSh | Koppen::Aw) => Biome::Oasis,
+            _ => Biome::Riparian,
+        }
     } else if surface.badlands.bilinear(face, p) > 0.5 {
         Biome::Badlands
     } else if desert > 0.5 {

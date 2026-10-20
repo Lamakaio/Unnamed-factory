@@ -292,6 +292,21 @@ pub(super) fn large_rules(biome: Biome) -> &'static [(&'static str, f32)] {
             ("rock_e", 0.004),
             ("boulder_c", 0.003),
         ],
+        Biome::Riparian => &[
+            ("poplar", 0.12),
+            ("common_tree_a", 0.04),
+            ("oak_round", 0.03),
+            ("bush_common", 0.1),
+            ("bush_flowers", 0.02),
+        ],
+        Biome::Oasis => &[
+            ("palm_tall", 0.09),
+            ("palm_detailed", 0.05),
+            ("palm_bend", 0.04),
+            ("palm_short", 0.04),
+            ("bush_common", 0.08),
+            ("acacia", 0.01),
+        ],
         Biome::Mangrove => &[("mangrove", 0.2), ("mangrove_b", 0.15), ("palm_short", 0.01)],
         Biome::Tundra => &[
             ("tundra_shrub", 0.06),
@@ -343,6 +358,7 @@ pub(super) fn patch_rules(biome: Biome) -> &'static [(&'static str, f32)] {
         Biome::Marsh => &[("reeds", 0.6), ("tall_grass", 0.2)],
         Biome::Alpine => &[("dry_tall_grass", 0.15)],
         Biome::Savanna => &[("dry_tall_grass", 0.6), ("tall_grass", 0.1)],
+        Biome::Riparian | Biome::Oasis => &[("reeds", 0.25), ("tall_grass", 0.35)],
         Biome::AlpineMeadow => &[("tall_grass", 0.15), ("wispy_grass", 0.1)],
         Biome::Tundra => &[("wispy_grass", 0.1)],
         _ => &[],
@@ -369,6 +385,7 @@ pub(super) fn ground_rules(biome: Biome) -> &'static [(&'static str, f32)] {
         Biome::Rainforest | Biome::CloudForest => &[("fern", 0.3), ("plant", 0.12), ("mushrooms", 0.01)],
         Biome::Savanna => &[("grass_b", 0.06), ("grass_a", 0.02)],
         Biome::Mangrove => &[("plant", 0.03)],
+        Biome::Riparian | Biome::Oasis => &[("grass_a", 0.08), ("fern", 0.04), ("plant", 0.04)],
         Biome::Tundra => &[("grass_b", 0.05), ("pebbles_a", 0.04), ("pebbles_b", 0.02)],
         Biome::AlpineMeadow => &[
             ("grass_a", 0.05),

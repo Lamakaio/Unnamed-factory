@@ -171,6 +171,10 @@ pub enum Biome {
     CloudForest,
     /// Tropical wet and dry (Aw): grass with scattered acacias.
     Savanna,
+    /// River banks in dry country: gallery forests (poplars, willows) and, where it is hot,
+    /// palm groves.
+    Riparian,
+    Oasis,
     /// Sheltered tropical shores: mangroves standing in the shallows.
     Mangrove,
     /// Polar lowlands (ET): low shrubs, moss, stones; no trees.
@@ -202,6 +206,8 @@ impl Biome {
             Biome::CloudForest => [0.20, 0.42, 0.24],
             Biome::Savanna => [0.66, 0.64, 0.32],
             Biome::Mangrove => [0.30, 0.40, 0.22],
+            Biome::Riparian => [0.34, 0.52, 0.24],
+            Biome::Oasis => [0.38, 0.54, 0.24],
             Biome::Tundra => [0.56, 0.58, 0.48],
             Biome::AlpineMeadow => [0.52, 0.62, 0.38],
             Biome::Alpine => [0.55, 0.60, 0.45],

@@ -339,7 +339,7 @@ fn finish_chunk_meshes(
 }
 
 /// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id
-/// (plus 0.9 × badlands, or on basalt geothermal fields: volcanoes are never badlands), strata offset, fresh lava (positive) or sand sea (negative), coral
+/// (plus 0.9 × badlands), strata offset, fresh lava (positive) or sand sea (negative), coral
 /// reef (positive) or glacier ice (negative: the two never meet).
 fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
     let n = planet.grid.n();
@@ -352,8 +352,7 @@ fn rock_textures(planet: &worldgen::planet::Planet, surface: &PlanetSurface) -> 
                 let ice = surface.ice.bilinear(face, cell);
                 let erg = surface.erg.bilinear(face, cell);
                 let badlands = surface.badlands.bilinear(face, cell).clamp(0., 1.);
-                let extra = if planet.rock[i] == worldgen::geology::Rock::Basalt as u8 { planet.geothermal[i] } else { badlands };
-                let rock = planet.rock[i] as f32 + 0.9 * extra.clamp(0., 1.);
+                let rock = planet.rock[i] as f32 + 0.9 * badlands;
                 for value in [rock, planet.strata[i], planet.lava[i] - erg, planet.reef[i] - ice] {
                     data.extend(half::f16::from_f32(value).to_le_bytes());
                 }

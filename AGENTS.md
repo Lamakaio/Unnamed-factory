@@ -148,7 +148,10 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   drainage for `LENGTH` cells and carved into U-shaped troughs below sea level (deepest a
   little inland, a sill at the mouth); the sea floods the carved cells.
 - **Glaciers and ice caps** (`glaciers.rs`, static, at the surface stage since they need the
-  climate): ice where the warmest month at the cell's height is below `ICE_WARMEST`, tongues
+  climate): ice where the warmest month at the cell's height is below `ICE_WARMEST`, only in
+  valleys (`VALLEY_DEPTH` below the ground blurred `VALLEY_RADIUS`) and on flat ground, never
+  steeper than `MAX_SLOPE` (ridges stay bare; below `SHEET_WARMEST` ice sheets cover all but
+  steep ground; small holes closed), valley fill capped at `MAX_FILL`; tongues
   down the steepest way while it is below `TONGUE_WARMEST` (at most `TONGUE_LENGTH` cells).
   The thickness (filling valleys to the smoothed ground, doming away from the edge) is added
   to `PlanetSurface::heights`; `PlanetSurface::ice` (0..1) clears lakes, marsh, gullies,
@@ -183,18 +186,23 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   `build` raises cones (strato: concave, summit crater) or shields (broad, caldera) on the
   heights: on land on the ground, at sea from the floor to a summit above the water that
   sinks with age (`SUBSIDENCE`: worn islands, then seamounts); cells raised above the sea
-  become land. Volcanic cells are basalt; active ones (`ACTIVE_AGE`) get fresh lava lobes
+  become land. Volcanic cells are basalt; active ones (`ACTIVE_AGE`) get fresh lava (rare on
+  Earth: only the summit crater and a few narrow flows within `LAVA_REACH`)
   (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
   are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
   `PlanetSurface::volcanoes` (the inspector reports them).
+- **River banks** (`PlanetSurface::riparian`, from the river points, wider along big
+  rivers): greener ground and grass in dry country (`mesh::RIPARIAN_GREEN`), and
+  `Biome::{Riparian, Oasis}` (gallery forests; palms where hot) beyond `RIPARIAN_BIOME`.
 - **Barrier islands** (`barriers.rs`, right after the reefs): on low coasts (land below
   `LOW_COAST` near the shore) with a shallow shelf, between `LATITUDE`s, in noise stretches: a
   sand bar `BAR_DISTANCE` offshore (flat top, gentle `SHOREFACE`, steeper `BACK`), broken by
   inlets, a shallow lagoon behind; their rock is the mainland's (not the sea floor's basalt).
   The terrain shader keeps beaches sand on their steep seaward slopes.
 - **Geothermal fields** (`volcanoes::Built::geothermal`, `Planet::geothermal`): patches on
-  the lower flanks of volcanoes younger than `GEOTHERMAL_AGE`; drawn as sinter, microbial mats
-  and hot pools (the rock field's fraction on basalt), bare of plants.
+  the flanks of volcanoes younger than `GEOTHERMAL_AGE`, only on gentle ground
+  (`GEOTHERMAL_SLOPE`); drawn as sinter, microbial mats and hot pools (sent per vertex: UV1.y
+  negative, sharing the coast's channel), bare of plants.
 - **Reefs** (`reefs.rs`, right after the volcanoes): in the tropics (`TROPICS`), fringing reefs
   a little offshore (`FRINGE` cells: rim just under the water, shallow lagoon behind), further
   out round volcanic islands from `BARRIER_AGE` (barrier reefs), atolls on sunk shield

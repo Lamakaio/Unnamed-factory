@@ -49,8 +49,12 @@ impl Volcano {
 
 /// Volcanoes younger than this are active (lava fields).
 const ACTIVE_AGE: f32 = 0.15;
-/// Volcanoes younger than this (age) have geothermal fields.
+/// Volcanoes younger than this (age) have geothermal fields, on ground sloping less than
+/// `GEOTHERMAL_SLOPE` (world units per cell, fading between the two).
 const GEOTHERMAL_AGE: f32 = 0.3;
+const GEOTHERMAL_SLOPE: (f32, f32) = (0.12, 0.3);
+/// Lava flows reach at most this far down the cone (share of its radius).
+const LAVA_REACH: f32 = 0.55;
 /// Arc volcanoes: spacing along the arc (cells), height (world units) and radius per height.
 const ARC_SPACING: f32 = 80.;
 const STRATO_HEIGHT: (f32, f32) = (9., 18.);
@@ -238,21 +242,33 @@ pub fn build(
                 built.volcanic[i] = true;
                 built.ruggedness[i] = built.ruggedness[i].max((0.25 + 0.6 * v.age) * smoothstep(1., 0.6, x));
             }
-            // Fresh lava: lobes down from the summit (a noise of the angle round it), on active
-            // volcanoes.
-            if v.active() && x < 1.1 {
+            // Fresh lava (rare: most volcanoes are vegetated or bare rock and ash): the summit
+            // crater and a few narrow flows down from it (where a noise of the angle round it
+            // is high), on active volcanoes.
+            if v.active() && x < LAVA_REACH {
                 let side = d.cross(v.direction).normalize_or_zero();
-                let lobes = 0.5 + 0.5 * noise.layer(100 + k as u32).fbm3(side * 3. + v.direction * 7., 2);
-                let reach_here = 0.35 + 0.75 * lobes;
-                let lava = smoothstep(reach_here, reach_here - 0.15, x);
-                built.lava[i] = built.lava[i].max(lava);
+                let lobes = 0.5 + 0.5 * noise.layer(100 + k as u32).fbm3(side * 4. + v.direction * 7., 2);
+                let flow = smoothstep(0.62, 0.72, lobes) * smoothstep(LAVA_REACH * lobes, LAVA_REACH * lobes - 0.1, x);
+                let summit = smoothstep(0.12, 0.08, x);
+                built.lava[i] = built.lava[i].max(flow.max(summit));
             }
-            // Geothermal fields: patches on the lower flanks of young volcanoes, on land.
+            // Geothermal fields: patches on the flanks of young volcanoes, on land (kept to
+            // gentle ground below).
             if v.age < GEOTHERMAL_AGE && built_height > 0.2 {
-                let ring = smoothstep(0.45, 0.65, x) * smoothstep(1.25, 1.0, x);
+                let ring = smoothstep(0.3, 0.45, x) * smoothstep(1.0, 0.8, x);
                 let patch = smoothstep(0.3, 0.55, noise.layer(200 + k as u32).fbm3(d * radius / 7., 2));
                 built.geothermal[i] = built.geothermal[i].max(ring * patch);
             }
+        }
+    }
+    // Hot springs on gentle ground only (terraces, valley floors), not on steep slopes.
+    for i in 0..cells {
+        if built.geothermal[i] > 0. {
+            let slope = grid
+                .neighbours(i)
+                .map(|(j, d)| (heights[j] - heights[i]).abs() / d)
+                .fold(0., f32::max);
+            built.geothermal[i] *= smoothstep(GEOTHERMAL_SLOPE.1, GEOTHERMAL_SLOPE.0, slope);
         }
     }
     built
