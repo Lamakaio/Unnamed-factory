@@ -816,21 +816,21 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         .collect();
     let shore = grid.blur(&grid.blur(&signed, 2), 2);
     let variation = noise.layer(10);
-    for i in 0..cells {
+    let mut heights = par::map(cells, |i| {
         let p = grid.direction(i) * radius;
         let d = shore[i];
         if sea[i] {
             let open = smoothstep(0., 6., -d);
             let floor_height = (-0.3 + (shelf_floor[i] + 0.3) * open)
                 * (0.9 + 0.1 * floor.fbm3(p / 60., 3));
-            heights[i] = floor_height.max(0.15 + 0.35 * (d - 0.5)).min(-0.05);
+            floor_height.max(0.15 + 0.35 * (d - 0.5)).min(-0.05)
         } else {
             let slope = 0.25 + 0.3 * (0.5 + 0.5 * variation.fbm3(p / 60., 3)) + 0.5 * shape.range[i];
             let ramp = 0.15 + slope * (d - 0.5);
             // (Land cells may end up just under water: the shore follows `shore`.)
-            heights[i] = terrain::smooth_min(heights[i], ramp, 1.).max(-0.3);
+            terrain::smooth_min(heights[i], ramp, 1.).max(-0.3)
         }
-    }
+    });
     // Fjords: glacial troughs flooded by the sea at cold, mountainous coasts.
     crate::fjords::carve(&grid, radius, settings.seed, &mut heights, &mut sea);
     lap("  fjords", &mut timings);
@@ -864,7 +864,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     crate::barriers::build(&grid, radius, settings.seed, &reef, &mut heights, &mut sea, &mut rock);
     lap("  barrier islands", &mut timings);
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
-    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
+    let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, wetland, basins } =
         crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
     lap("  lakes", &mut timings);
     let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i).max(volcanic.ruggedness[i])).collect();
@@ -880,17 +880,16 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let smooth = grid.blur(&heights, 2);
     let streams: Vec<f32> = drainage.iter().map(|&d| if d >= WET_DRAINAGE { 1. } else { 0. }).collect();
     let near_stream = grid.blur(&streams, 3);
-    for i in 0..cells {
-        let slope = grid
+    let wetland: Vec<f32> = par::map(cells, |i| {
+        let (sum, count) = grid
             .neighbours(i)
-            .map(|(j, d)| (smooth[j] - smooth[i]).abs() / d)
-            .sum::<f32>()
-            / grid.neighbours(i).count() as f32;
+            .fold((0., 0.), |(sum, count), (j, d)| (sum + (smooth[j] - smooth[i]).abs() / d, count + 1.));
+        let slope = sum / count;
         let flat_valley = smoothstep(WET_SLOPE, WET_SLOPE * 0.4, slope)
             * smoothstep(0.03, 0.15, near_stream[i])
             * smoothstep(WET_HEIGHT, WET_HEIGHT * 0.5, heights[i]);
-        wetland[i] = wetland[i].max(0.9 * floodplain[i]).max(0.8 * flat_valley);
-    }
+        wetland[i].max(0.9 * floodplain[i]).max(0.8 * flat_valley)
+    });
     let wetland = grid.blur(&wetland, 1);
     let mut wetland = wetland;
     lap("  floodplains, wetlands", &mut timings);
@@ -1125,9 +1124,12 @@ fn flatten_floodplains(
 ) -> Vec<f32> {
     use crate::planet_rivers::for_cells_within;
     let cells = grid.len();
-    // Lowest height allowed per cell: the level of any lake nearby.
+    // Lowest height allowed per cell: the level of any lake nearby. (From the lakes' shore
+    // cells: a lake's level is the same all over it.)
     let mut floor = vec![f32::MIN; cells];
-    for i in (0..cells).filter(|&i| lake_depth[i] > 0.05) {
+    let lake = |i: usize| lake_depth[i] > 0.05;
+    let shore = par::map(cells, |i| lake(i) && grid.neighbours(i).any(|(j, _)| !lake(j)));
+    for i in (0..cells).filter(|&i| shore[i]) {
         let level = heights[i] + lake_depth[i] + 0.05;
         for_cells_within(grid, radius, grid.direction(i), LAKE_RIM, |n, _| {
             floor[n] = floor[n].max(level);

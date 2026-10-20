@@ -173,6 +173,48 @@ impl SphereGrid {
         top + (bottom - top) * fz
     }
 
+    /// `f(cell, angle)` for every cell whose centre is within `angle` (radians) of `center`.
+    /// Within a face (the common case) a window of its cells is scanned; a disc crossing a
+    /// face's edge is walked breadth first.
+    pub fn for_cells_within(&self, center: Vec3, angle: f32, mut f: impl FnMut(usize, f32)) {
+        let center = center.normalize();
+        let (face, p) = self.face_coords(center);
+        // (Equiangular cells are never more than about √2 times smaller than the mean.)
+        let half = (angle / self.spacing * 1.5).ceil() as i64 + 1;
+        let (x0, z0) = (p.x.round() as i64 - half, p.y.round() as i64 - half);
+        let (x1, z1) = (p.x.round() as i64 + half, p.y.round() as i64 + half);
+        let n = self.n as i64;
+        if x0 >= 0 && z0 >= 0 && x1 < n && z1 < n {
+            for z in z0..=z1 {
+                for x in x0..=x1 {
+                    let i = self.index(face, x as usize, z as usize);
+                    let a = angle_between(self.direction(i), center);
+                    if a <= angle {
+                        f(i, a);
+                    }
+                }
+            }
+            return;
+        }
+        let start = self.cell_at(center);
+        let mut seen = std::collections::HashSet::from([start]);
+        let mut queue = std::collections::VecDeque::from([start]);
+        while let Some(i) = queue.pop_front() {
+            let a = angle_between(self.direction(i), center);
+            if a <= angle {
+                f(i, a);
+            }
+            if a > angle + 1.5 * self.spacing {
+                continue;
+            }
+            for (j, _) in self.neighbours(i) {
+                if seen.insert(j) {
+                    queue.push_back(j);
+                }
+            }
+        }
+    }
+
     /// The cell containing a direction.
     pub fn cell_at(&self, direction: Vec3) -> usize {
         let (face, p) = self.face_coords(direction);
@@ -316,6 +358,36 @@ mod tests {
             assert!(sea[cell], "cell {i} ends at {cell}, not the sea");
         }
         assert_eq!(graph.order.len(), grid.len());
+    }
+
+    #[test]
+    fn parallel_flood_matches_priority_flood() {
+        // The parallel depression filling gives Priority-Flood's surface: exactly without
+        // epsilon, within a few epsilon with it (the flats' slope may start a cell further);
+        // every cell drains either way.
+        let grid = SphereGrid::new(24);
+        let heights: Vec<f32> = (0..grid.len())
+            .map(|i| crate::noise::hash(11, i as u32, 0) as f32 / u32::MAX as f32)
+            .collect();
+        let sea: Vec<bool> = (0..grid.len()).map(|i| grid.direction(i).y < -0.8).collect();
+        for epsilon in [0., 1e-4] {
+            let fast = crate::flow::priority_flood(&grid, &heights, &sea, epsilon);
+            let reference = crate::flow::priority_flood_reference(&grid, &heights, &sea, epsilon);
+            for i in 0..grid.len() {
+                let off = (fast[i] - reference[i]).abs();
+                assert!(off < 3. * epsilon + 1e-6, "epsilon {epsilon}, cell {i}: {} vs {}", fast[i], reference[i]);
+            }
+            if epsilon > 0. {
+                let graph = crate::flow::FlowGraph::new(&grid, &fast, &sea);
+                for i in 0..grid.len() {
+                    let mut cell = i;
+                    while graph.receivers[cell] != cell {
+                        cell = graph.receivers[cell];
+                    }
+                    assert!(sea[cell], "cell {i} ends at {cell}, not the sea");
+                }
+            }
+        }
     }
 
     #[test]

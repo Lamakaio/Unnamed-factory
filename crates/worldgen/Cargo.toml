@@ -6,6 +6,7 @@ description = "Continent generation: macro shape, stream-power erosion, rivers a
 
 [dependencies]
 bevy_math = { version = "0.20", default-features = false, features = ["std"] }
+bevy_tasks = { version = "0.20", features = ["multi_threaded"] }
 rand = "0.10"
 
 [dev-dependencies]

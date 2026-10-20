@@ -6768,6 +6768,7 @@ name = "worldgen"
 version = "0.1.0"
 dependencies = [
  "bevy_math",
+ "bevy_tasks",
  "png",
  "rand",
 ]

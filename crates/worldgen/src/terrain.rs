@@ -127,32 +127,39 @@ pub(crate) fn erode_timed(
         let area = graph.accumulate(|i| shape.rain[i]);
         lap(&mut timings.accumulation);
 
-        for &i in &graph.order {
-            if shape.base_level[i] {
-                continue;
+        // (Implicit, from the outlets upstream: each cell after its receiver. The trees are
+        // independent: on all cores. Single-cell trees are outlets: nothing to do.)
+        let shared = par::Shared::new(&mut heights);
+        graph.for_each_tree(|cells| {
+            for &i in cells {
+                if shape.base_level[i] {
+                    continue;
+                }
+                // SAFETY: the tree's cells are this thread's alone.
+                let height = unsafe { shared.get(i) };
+                let r = graph.receivers[i];
+                let uplifted = *height + (shape.uplift[i] - shape.subsidence[i]) * dt;
+                // Under a lake: still water, sediment settling.
+                let depth = water[i] - uplifted;
+                if depth > 1e-3 {
+                    *height = uplifted + depth * LAKE_FILL;
+                    continue;
+                }
+                if r == i {
+                    *height = uplifted;
+                    continue;
+                }
+                // (The rock's bed at the cell's height: hard caprock, soft shale...)
+                let rock = shape.rock[i].hardness(*height + shape.strata[i]).0;
+                let f = settings.erodibility
+                    * shape.erodibility[i]
+                    * rock
+                    * dt
+                    * area[i].powf(settings.area_exponent)
+                    / (graph.receiver_distance[i] * settings.cell_size);
+                *height = (uplifted + f * water[r]) / (1. + f);
             }
-            let r = graph.receivers[i];
-            let uplifted = heights[i] + (shape.uplift[i] - shape.subsidence[i]) * dt;
-            // Under a lake: still water, sediment settling.
-            let depth = water[i] - uplifted;
-            if depth > 1e-3 {
-                heights[i] = uplifted + depth * LAKE_FILL;
-                continue;
-            }
-            if r == i {
-                heights[i] = uplifted;
-                continue;
-            }
-            // (The rock's bed at the cell's height: hard caprock, soft shale...)
-            let rock = shape.rock[i].hardness(heights[i] + shape.strata[i]).0;
-            let f = settings.erodibility
-                * shape.erodibility[i]
-                * rock
-                * dt
-                * area[i].powf(settings.area_exponent)
-                / (graph.receiver_distance[i] * settings.cell_size);
-            heights[i] = (uplifted + f * water[r]) / (1. + f);
-        }
+        });
         lap(&mut timings.incision);
 
         // Glaciers in the high valleys, digging unevenly along their course (overdeepening).

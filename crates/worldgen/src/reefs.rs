@@ -116,20 +116,21 @@ pub fn build(
             v.age >= BARRIER_AGE && v.age < ATOLL_AGE && d.distance(v.direction) * radius < v.radius * 0.9
         })
     };
-    for i in 0..cells {
+    // (Each cell on its own: on all cores.)
+    let fringed = crate::par::map(cells, |i| {
         if !sea[i] || !distance[i].is_finite() || heights[i] < -REEF_MAX_DEPTH || reef[i] > 0. {
-            continue;
+            return None;
         }
         let d = grid.direction(i);
         let warm = tropical(d);
         if warm <= 0. {
-            continue;
+            return None;
         }
         let p = d * radius;
         // Not everywhere: reefs come in stretches.
         let stretch = smoothstep(-0.2, 0.2, noise.layer(2).fbm3(p / 60., 2)) * warm;
         if stretch <= 0. {
-            continue;
+            return None;
         }
         let (near, far) = if barrier_near(d) { BARRIER } else { FRINGE };
         let rim = (distance[i] - (near + far) / 2.) / ((far - near) / 2.);
@@ -137,8 +138,13 @@ pub fn build(
         let lagoon = smoothstep(0., -1., rim) * stretch;
         let target = REEF_TOP * crest + LAGOON_FLOOR.min(heights[i]) * lagoon * (1. - crest);
         let blend = crest.max(lagoon);
-        heights[i] = heights[i] * (1. - blend) + target * blend;
-        reef[i] = reef[i].max(crest);
+        Some((heights[i] * (1. - blend) + target * blend, crest))
+    });
+    for (i, fringe) in fringed.into_iter().enumerate() {
+        if let Some((height, crest)) = fringe {
+            heights[i] = height;
+            reef[i] = reef[i].max(crest);
+        }
     }
     reef
 }

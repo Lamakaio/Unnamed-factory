@@ -306,9 +306,15 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   - Preview: `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n
     <cells>] [seeds…]` writes `<seed>_map.png` (equirectangular relief with rivers),
     `<seed>_globes.png` (two orthographic views) and `<seed>_plates.png` (continental plates
-    bright, oceanic dark), with lakes. Whole planet at n = 1024: ~13 s (shape 3 s, erosion 8 s,
-    of which routing's sequential part is 5 s); n = 512: ~3 s. Per-cell passes run on all
-    cores through `par.rs` (scoped threads, results identical to sequential).
+    bright, oceanic dark), with lakes. Whole world at n = 1024 (planet, climate, surface, sea
+    field): ~23 s on 20 threads; `cargo run -p worldgen --release --example timings [-- <n>]`
+    prints each stage's time and how many cores it kept busy. All parallel work goes through
+    `par.rs` (`map`, `for_each_mut`, `for_each_group`, `Shared` for disjoint writes) on
+    worldgen's own `bevy_tasks` pool (persistent threads, chunks handed out dynamically;
+    results identical to sequential): no other threads, no rayon. `priority_flood` is computed
+    from the depression routing's water surface plus a parallel epsilon relaxation (checked
+    against the classic queue version in the tests); `FlowGraph::trees` lets accumulation and
+    erosion's incision walk the independent trees on all cores.
     In-face neighbour distances are precomputed per face position (`local_distance`).
 - **The game** (`cargo run --release -- [--n <cells>] [--seed <n>]`, milestone 2,
   work in progress; `src/planet/`): `PlanetPlugin` replaces `MapPlugin` (the flat map's

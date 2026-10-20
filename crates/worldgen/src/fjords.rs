@@ -36,36 +36,26 @@ pub fn carve(grid: &SphereGrid, radius: f32, seed: u64, heights: &mut [f32], sea
     let filled = priority_flood(grid, heights, sea, 1e-4);
     let graph = FlowGraph::new(grid, &filled, sea);
     let drainage = graph.accumulate(|i| grid.area(i));
-    let mut mouths: Vec<usize> = (0..cells)
-        .filter(|&i| {
-            !sea[i]
-                && drainage[i] >= MIN_DRAINAGE
-                && sea[graph.receivers[i]]
-                && cold(i) > hash(seed as u32 ^ 0xF10D, i as u32, 0) as f32 / u32::MAX as f32
-        })
-        .collect();
+    let is_mouth = crate::par::map(cells, |i| {
+        !sea[i]
+            && drainage[i] >= MIN_DRAINAGE
+            && sea[graph.receivers[i]]
+            && cold(i) > hash(seed as u32 ^ 0xF10D, i as u32, 0) as f32 / u32::MAX as f32
+    });
+    let mut mouths: Vec<usize> = (0..cells).filter(|&i| is_mouth[i]).collect();
     mouths.sort_by(|&a, &b| drainage[b].total_cmp(&drainage[a]));
-    // The highest ground near each mouth (mountains behind the coast).
-    let relief = |heights: &[f32], i: usize| {
-        let centre = grid.direction(i);
+    // The highest ground near each mouth (mountains behind the coast), before any carving (it
+    // only lowers valleys).
+    let relief = crate::par::map(mouths.len(), |k| {
         let mut highest = f32::MIN;
-        let mut seen = std::collections::HashSet::from([i]);
-        let mut queue = std::collections::VecDeque::from([i]);
-        while let Some(c) = queue.pop_front() {
-            highest = highest.max(heights[c]);
-            for (j, _) in grid.neighbours(c) {
-                if grid.direction(j).distance(centre) * radius <= RELIEF_RADIUS && seen.insert(j) {
-                    queue.push_back(j);
-                }
-            }
-        }
+        grid.for_cells_within(grid.direction(mouths[k]), RELIEF_RADIUS / radius, |i, _| highest = highest.max(heights[i]));
         highest
-    };
+    });
     let mut chosen: Vec<usize> = Vec::new();
-    let mut carved = std::collections::HashSet::new();
-    for mouth in mouths {
+    let mut carved = vec![false; cells];
+    for (k, &mouth) in mouths.iter().enumerate() {
         let d = grid.direction(mouth);
-        if chosen.iter().any(|&m| grid.direction(m).distance(d) * radius < SPACING) || relief(heights, mouth) < MIN_RELIEF {
+        if chosen.iter().any(|&m| grid.direction(m).distance(d) * radius < SPACING) || relief[k] < MIN_RELIEF {
             continue;
         }
         chosen.push(mouth);
@@ -100,33 +90,20 @@ pub fn carve(grid: &SphereGrid, radius: f32, seed: u64, heights: &mut [f32], sea
             let t = along / total;
             let depth = DEPTH * smoothstep(0., 0.15, t) * (0.6 + 0.4 * smoothstep(0.0, 0.25, t)) * (1. - t * t)
                 + 0.4 * (1. - t);
-            let centre = grid.direction(c);
-            let mut seen = std::collections::HashSet::from([c]);
-            let mut queue = std::collections::VecDeque::from([c]);
-            while let Some(i) = queue.pop_front() {
-                let r = grid.direction(i).distance(centre) * radius;
-                if r > half {
-                    continue;
-                }
+            grid.for_cells_within(grid.direction(c), half / radius, |i, angle| {
+                let r = angle * radius;
                 let floor = -depth * (1. - (r / half).powi(2)) + 0.05;
                 if floor < heights[i] {
                     heights[i] = floor;
-                    carved.insert(i);
+                    carved[i] = true;
                 }
-                for (j, _) in grid.neighbours(i) {
-                    if seen.insert(j) {
-                        queue.push_back(j);
-                    }
-                }
-            }
+            });
         }
     }
     // The sea floods the troughs: from their cells next to the sea, through the carved cells
     // below its level.
-    let mut queue: std::collections::VecDeque<usize> = carved
-        .iter()
-        .copied()
-        .filter(|&i| heights[i] < 0. && grid.neighbours(i).any(|(j, _)| sea[j]))
+    let mut queue: std::collections::VecDeque<usize> = (0..cells)
+        .filter(|&i| carved[i] && heights[i] < 0. && grid.neighbours(i).any(|(j, _)| sea[j]))
         .collect();
     while let Some(i) = queue.pop_front() {
         if sea[i] {
@@ -134,7 +111,7 @@ pub fn carve(grid: &SphereGrid, radius: f32, seed: u64, heights: &mut [f32], sea
         }
         sea[i] = true;
         for (j, _) in grid.neighbours(i) {
-            if !sea[j] && heights[j] < 0. && carved.contains(&j) {
+            if !sea[j] && heights[j] < 0. && carved[j] {
                 queue.push_back(j);
             }
         }

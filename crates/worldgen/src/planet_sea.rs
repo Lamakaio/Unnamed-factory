@@ -38,7 +38,9 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     let depth: Vec<f32> = planet.heights.iter().map(|h| (-h).max(0.)).collect();
     // The sea reaches the land below its level connected to it.
     let mut reached = sea.clone();
-    let mut queue: std::collections::VecDeque<usize> = (0..cells).filter(|&i| sea[i]).collect();
+    // (From the sea's cells along the coast: the open sea's would only find more sea.)
+    let coast = par::map(cells, |i| sea[i] && grid.neighbours(i).any(|(j, _)| !sea[j]));
+    let mut queue: std::collections::VecDeque<usize> = (0..cells).filter(|&i| coast[i]).collect();
     while let Some(i) = queue.pop_front() {
         for (j, _) in grid.neighbours(i) {
             if !reached[j] && planet.heights[j] < 0. {
@@ -56,9 +58,19 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     let mut source: Vec<usize> = (0..cells).collect();
     let mut path = vec![0f32; cells];
     let mut heap = BinaryHeap::new();
+    // (Land counts as shore, but only its cells along the sea have any to reach.)
+    let shore = par::map(cells, |i| {
+        if sea[i] {
+            grid.neighbours(i).any(|(j, d)| d < 1.2 && !sea[j])
+        } else {
+            grid.neighbours(i).any(|(j, _)| sea[j])
+        }
+    });
     for i in 0..cells {
-        if !sea[i] || grid.neighbours(i).any(|(j, d)| d < 1.2 && !sea[j]) {
+        if !sea[i] || shore[i] {
             travel[i] = 0.;
+        }
+        if shore[i] {
             heap.push(Visit(0., i));
         }
     }
@@ -71,7 +83,8 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
                 continue;
             }
             let t = time + length * 2. / (speed[i] + speed[j]);
-            if t < travel[j] {
+            // (Times are kept up to `MAX_TRAVEL` only: no need to search the open ocean.)
+            if t < travel[j] && t < MAX_TRAVEL {
                 travel[j] = t;
                 source[j] = source[i];
                 path[j] = path[i] + length;
@@ -83,12 +96,14 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
     // differently so by direction: fronts come out polygonal (chevrons along straight coasts).
     // Rescale each time by the straight distance to its shore cell over the path's length.
     let cells_per_radian = 2. * grid.n() as f32 / std::f32::consts::PI;
-    for i in 0..cells {
+    let travel = par::map(cells, |i| {
         if path[i] > 0. && travel[i] < MAX_TRAVEL {
             let straight = grid.direction(i).angle_between(grid.direction(source[i])) * cells_per_radian;
-            travel[i] *= (straight / path[i]).clamp(0.85, 1.);
+            travel[i] * (straight / path[i]).clamp(0.85, 1.)
+        } else {
+            travel[i]
         }
-    }
+    });
     // Smooth the grid's artifacts, keeping the shore at 0.
     let mut travel = grid.blur(&travel, 3);
     for (t, &sea) in travel.iter_mut().zip(sea) {

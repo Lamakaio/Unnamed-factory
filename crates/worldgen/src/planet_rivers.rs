@@ -550,7 +550,7 @@ fn resample(path: &[(Vec3, f32, f32)], spacing: f32) -> Vec<(Vec3, f32, f32)> {
 }
 
 /// Call `f(cell, distance)` for every cell whose centre lies within `radius` (world units) of
-/// `center` (a unit direction), walking the grid from the cell there.
+/// `center` (a unit direction; see [`SphereGrid::for_cells_within`]).
 pub(crate) fn for_cells_within(
     grid: &SphereGrid,
     radius_of_planet: f32,
@@ -558,21 +558,5 @@ pub(crate) fn for_cells_within(
     radius: f32,
     mut f: impl FnMut(usize, f32),
 ) {
-    let start = grid.cell_at(center);
-    let mut seen = std::collections::HashSet::from([start]);
-    let mut queue = std::collections::VecDeque::from([start]);
-    while let Some(i) = queue.pop_front() {
-        let distance = grid.direction(i).distance(center) * radius_of_planet;
-        if distance <= radius {
-            f(i, distance);
-        }
-        if distance > radius + 1.5 {
-            continue;
-        }
-        for (j, _) in grid.neighbours(i) {
-            if seen.insert(j) {
-                queue.push_back(j);
-            }
-        }
-    }
+    grid.for_cells_within(center, radius / radius_of_planet, |i, angle| f(i, angle * radius_of_planet));
 }
