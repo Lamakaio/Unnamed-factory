@@ -396,6 +396,14 @@ succession (bare → grass → shrub → forest over years to decades), so clima
 as moving forest edges and spreading deserts, not as instant recolouring. Vegetation feeds
 back into albedo and evaporation (and into erosion: forests protect slopes).
 
+*Status (2026-10-20), static for now (no succession, no ice flow):* biomes from the Köppen
+class at each cell's height — rainforest, cloud forest, savanna, mangroves, deciduous and
+conifer (taiga) forests, steppe, stony and sandy deserts (ergs with dunes), badlands, tundra,
+alpine meadows, marshes and salt flats; landforms from rock and climate — rock types and
+layered erosion, volcanoes (arcs, hotspot chains) with geothermal fields, reefs and atolls,
+barrier islands, fjords, glaciers and ice caps, sea ice, karst. Details in AGENTS.md §3. Not
+yet: tidal flats and salt marshes, loess, permafrost patterning, moving ice.
+
 **Evolution (D3)** sits on top, at the deep-time clock. To be designed in its own document;
 what the planet must provide to it:
 
