@@ -816,6 +816,9 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             heights[i] = terrain::smooth_min(heights[i], ramp, 1.).max(-0.3);
         }
     }
+    // Fjords: glacial troughs flooded by the sea at cold, mountainous coasts.
+    crate::fjords::carve(&grid, radius, settings.seed, &mut heights, &mut sea);
+    lap("  fjords", &mut timings);
     // Volcanoes: island and continental arcs, hotspot chains along the plates' motion.
     let velocity = |d: Vec3| match &history {
         Some((t, _)) => t.plates[t.plate[t.grid.cell_at(d)] as usize].rotation.cross(d),

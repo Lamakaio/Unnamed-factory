@@ -142,6 +142,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   irregular borders from a warped nearest cell); `planet/vegetation.rs::scatter_rocks`
   strews rocks by rock type (`nature::scattered_rocks`) where the ground is steep, dry or
   cold (in fields), `PlanetSurface::rock_at`.
+- **Fjords** (`fjords.rs`, after the coasts are shaped, before the volcanoes): poleward of
+  `FJORD_LATITUDE`, valleys draining at least `MIN_DRAINAGE` to the sea with `MIN_RELIEF`
+  ground within `RELIEF_RADIUS` of the mouth (mouths `SPACING` apart) are traced up the
+  drainage for `LENGTH` cells and carved into U-shaped troughs below sea level (deepest a
+  little inland, a sill at the mouth); the sea floods the carved cells.
 - **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
   spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
