@@ -55,7 +55,9 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
         slope[i] < MAX_SLOPE
             && (around[i] - planet.heights[i] > VALLEY_DEPTH || slope[i] < FLAT_SLOPE || warmest[i] < SHEET_WARMEST)
     };
-    let mut ice: Vec<bool> = (0..cells).map(|i| warmest[i] < ICE_WARMEST && gathers(i)).collect();
+    // (No ice on lakes: they stay lakes.)
+    let lake = |i: usize| planet.lake_depth[i] > 0.02;
+    let mut ice: Vec<bool> = (0..cells).map(|i| warmest[i] < ICE_WARMEST && gathers(i) && !lake(i)).collect();
     // Tongues: down from the ice's edge, the steepest way.
     let edge: Vec<usize> =
         (0..cells).filter(|&i| ice[i] && grid.neighbours(i).any(|(j, _)| !ice[j] && !planet.sea[j])).collect();
@@ -70,7 +72,9 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
             else {
                 break;
             };
-            if planet.sea[next] || warmest[next] > TONGUE_WARMEST || slope[next] > MAX_SLOPE {
+            // (Tongues flow in valleys: not straight down a cone or a ridge.)
+            let valley = around[next] - planet.heights[next] > VALLEY_DEPTH * 0.5;
+            if planet.sea[next] || lake(next) || !valley || warmest[next] > TONGUE_WARMEST || slope[next] > MAX_SLOPE {
                 break;
             }
             ice[next] = true;
@@ -82,6 +86,7 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
         .map(|i| {
             ice[i]
                 || !planet.sea[i]
+                    && !lake(i)
                     && slope[i] < MAX_SLOPE
                     && grid.neighbours(i).filter(|&(j, d)| d < 1.2 && ice[j]).count() >= 2
         })
@@ -90,7 +95,7 @@ pub fn glaciers(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
     let mut ice = widened;
     for _ in 0..2 {
         let closed: Vec<bool> = (0..cells)
-            .map(|i| ice[i] || !planet.sea[i] && grid.neighbours(i).filter(|&(j, _)| ice[j]).count() >= 5)
+            .map(|i| ice[i] || !planet.sea[i] && !lake(i) && grid.neighbours(i).filter(|&(j, _)| ice[j]).count() >= 5)
             .collect();
         ice = closed;
     }

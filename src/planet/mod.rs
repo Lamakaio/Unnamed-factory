@@ -4,7 +4,7 @@
 //! water (see [`water`]), with the flat map's vegetation (see [`vegetation`]). The flat map
 //! is gone (see `git log`).
 
-mod camera;
+pub mod camera;
 mod grass;
 mod inspect;
 mod mesh;
@@ -250,33 +250,18 @@ fn view_planet(
     world: Res<PlanetWorld>,
     camera: Single<Entity, With<Camera3d>>,
 ) {
-    let mut focus = Vec3::new(0., 0.35, 1.);
-    let mut distance = world.surface.radius * START_DISTANCE;
-    let mut pitch = None;
-    let mut heading = None;
+    let start = camera::View {
+        focus: Vec3::new(0., 0.35, 1.),
+        distance: world.surface.radius * START_DISTANCE,
+        pitch: None,
+        heading: None,
+    };
     // `UF_PLANET_CAMERA=longitude,latitude[,distance[,pitch[,heading]]]` (degrees, world
     // units): the starting view, for screenshots (clicks log the current one).
-    if let Ok(view) = std::env::var("UF_PLANET_CAMERA") {
-        let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
-        if let [longitude, latitude, ..] = values[..] {
-            let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
-            focus = Vec3::new(
-                latitude.cos() * longitude.cos(),
-                latitude.sin(),
-                latitude.cos() * longitude.sin(),
-            );
-        }
-        if let [_, _, d, ..] = values[..] {
-            distance = d;
-        }
-        if let [_, _, _, p, ..] = values[..] {
-            pitch = Some(p.to_radians());
-        }
-        if let [_, _, _, _, h] = values[..] {
-            heading = Some(h.to_radians());
-        }
-    }
-    camera::take_over(&mut commands, *camera, focus, distance, pitch, heading);
+    let view = std::env::var("UF_PLANET_CAMERA")
+        .ok()
+        .map_or(start, |view| camera::View::parse(&view, start));
+    camera::take_over(&mut commands, *camera, view.focus, view.distance, view.pitch, view.heading);
 }
 
 /// Start meshing the chunks that need it (no mesh yet, or the camera moved), nearest first.

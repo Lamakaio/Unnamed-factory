@@ -8,10 +8,12 @@
 //!   plume and older ones further along the plate's motion: broad shield volcanoes with a
 //!   caldera, lower and more eroded the older (at sea, the old ones sink: seamounts).
 //!
-//! Volcanoes are basalt; active ones have fresh lava fields around them (lobes downhill),
-//! which the game draws bare and dark.
+//! Each also gets a kind and a random design (see `VolcanoKind`, `Design`): stretch along a
+//! rift axis, flank cones, maars, a breached side (landslides), radial gullies deepening with
+//! age, a summit crater or caldera. Volcanoes are basalt; active ones have lava only in their
+//! craters and calderas (lava lakes).
 
-use bevy_math::Vec3;
+use bevy_math::{Vec2, Vec3};
 
 use crate::{
     grid::Grid,
@@ -22,10 +24,21 @@ use crate::{
 /// The kind of a volcano.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VolcanoKind {
-    /// Steep cone with a crater (arcs).
+    /// Steep cone with a summit crater, flank cones, often a breached (landslide) side, radial
+    /// gullies (arcs: the Andes, Indonesia, Japan).
     Strato,
-    /// Broad dome with a caldera (hotspots).
+    /// Broad, low dome stretched along its rift zones, with a summit caldera and pit craters,
+    /// landslide scarps on old ones (hotspots: Hawaii).
     Shield,
+    /// A big compound volcano of several overlapping cones, the main one with a caldera
+    /// (Kilimanjaro, Etna).
+    Massif,
+    /// A low, wide edifice collapsed into a large caldera (a lake once the lakes form),
+    /// sometimes with a new cone inside (Crater Lake, Toba, Santorini).
+    Caldera,
+    /// A field of small cinder cones, domes and maars on a low plateau (the Chaîne des Puys in
+    /// Auvergne, Michoacán).
+    ConeField,
 }
 
 /// A volcano.
@@ -53,8 +66,6 @@ const ACTIVE_AGE: f32 = 0.15;
 /// `GEOTHERMAL_SLOPE` (world units per cell, fading between the two).
 const GEOTHERMAL_AGE: f32 = 0.3;
 const GEOTHERMAL_SLOPE: (f32, f32) = (0.12, 0.3);
-/// Lava flows reach at most this far down the cone (share of its radius).
-const LAVA_REACH: f32 = 0.55;
 /// Arc volcanoes: spacing along the arc (cells), height (world units) and radius per height.
 const ARC_SPACING: f32 = 80.;
 const STRATO_HEIGHT: (f32, f32) = (9., 18.);
@@ -66,6 +77,13 @@ const CHAIN: (usize, usize) = (4, 8);
 const CHAIN_SPACING: (f32, f32) = (28., 45.);
 const SHIELD_HEIGHT: (f32, f32) = (10., 16.);
 const SHIELD_RADIUS: f32 = 5.;
+/// Cone fields: the plateau's height and the cinder cones' radius (world units).
+const CONE_FIELD_PLATEAU: f32 = 1.2;
+const CINDER_CONE: (f32, f32) = (2.5, 5.);
+/// Lava lakes in active craters: at most this radius (world units).
+const LAVA_LAKE: f32 = 2.5;
+/// Maars: crater depth (world units).
+const MAAR_DEPTH: f32 = 0.8;
 /// How deep old volcanoes sink at sea (world units, at age 1).
 const SUBSIDENCE: f32 = 9.;
 /// Share of the hotspots under the oceans.
@@ -149,6 +167,26 @@ pub fn place(
             here = (here + (motion + side * wander) * spacing / radius).normalize();
         }
     }
+    // Varied kinds: most arc volcanoes are stratovolcanoes, some compound massifs, calderas
+    // and cone fields; hotspots under continents make calderas and cone fields more than
+    // shields.
+    for (k, v) in volcanoes.iter_mut().enumerate() {
+        let roll = random(k as u32, 90);
+        let on_land = !sea(grid.cell_at(v.direction));
+        let (kind, height, radius) = match v.kind {
+            VolcanoKind::Strato if roll < 0.55 => (VolcanoKind::Strato, v.height, v.radius),
+            VolcanoKind::Strato if roll < 0.72 => (VolcanoKind::Massif, v.height * 1.1, v.radius * 1.5),
+            VolcanoKind::Strato if roll < 0.86 => (VolcanoKind::Caldera, v.height * 0.55, v.radius * 1.1),
+            VolcanoKind::Strato if on_land => (VolcanoKind::ConeField, CONE_FIELD_PLATEAU, v.radius * 0.8),
+            VolcanoKind::Strato => (VolcanoKind::Strato, v.height, v.radius),
+            _ if on_land && roll < 0.35 => (VolcanoKind::Caldera, v.height * 0.5, v.radius * 0.6),
+            _ if on_land && roll < 0.8 => (VolcanoKind::ConeField, CONE_FIELD_PLATEAU, v.radius * 0.5),
+            _ => (v.kind, v.height, v.radius),
+        };
+        v.kind = kind;
+        v.height = height;
+        v.radius = radius;
+    }
     volcanoes
 }
 
@@ -163,9 +201,10 @@ pub struct Built {
     pub geothermal: Vec<f32>,
 }
 
-/// Build the volcanoes on the heights (world units; sea level 0). On land a cone sits on the
-/// ground; at sea it rises from the sea floor to its summit above the water (old ones sink:
-/// islands worn low, then seamounts). Cells raised above the sea become land.
+/// Build the volcanoes on the heights (world units; sea level 0). On land a volcano sits on
+/// the ground; at sea it rises from the sea floor to its summit above the water (old ones
+/// sink: islands worn low, then seamounts). Craters, calderas and maars dig into the ground.
+/// Cells raised above the sea become land.
 pub fn build(
     grid: &SphereGrid,
     radius: f32,
@@ -185,17 +224,22 @@ pub fn build(
     let mut seen = vec![0u32; cells];
     for (k, v) in volcanoes.iter().enumerate() {
         let start = grid.cell_at(v.direction);
+        let design = Design::new(v, seed as u32 ^ 0x5EED ^ (k as u32).wrapping_mul(0x9E37_79B9));
         // (Cells seen for this volcano: stamped with its number.)
         let stamp = k as u32 + 1;
         seen[start] = stamp;
         let mut queue = std::collections::VecDeque::from([start]);
-        let reach = v.radius * 1.3;
+        let reach = v.radius * design.reach;
         let at_sea = sea[start];
-        // Old volcanoes are lower and rounder; at sea, the summit's height above the water
-        // (sinking with age) over the floor round it.
+        // Old volcanoes are lower; at sea, the summit's height above the water (sinking with
+        // age) over the floor round it.
         let height = v.height * (1. - 0.4 * v.age);
         let floor = heights[start];
         let summit = height - SUBSIDENCE * v.age;
+        // The local frame at the summit (world units east and north of it).
+        let east = Vec3::Y.cross(v.direction).try_normalize().unwrap_or(Vec3::X);
+        let north = v.direction.cross(east);
+        let layer = noise.layer(k as u32);
         while let Some(i) = queue.pop_front() {
             let d = grid.direction(i);
             let r = d.distance(v.direction) * radius;
@@ -211,49 +255,29 @@ pub fn build(
             if r > reach {
                 continue;
             }
-            // A little irregular: lobes round the cone.
-            let wobble = 1. + 0.18 * noise.layer(k as u32).fbm3(d * radius / (v.radius * 0.6), 2);
-            let x = (r / (v.radius * wobble)).min(1.3);
-            let profile = match v.kind {
-                // Concave cone: steep near the summit, flaring out.
-                VolcanoKind::Strato => (1. - x).max(0.).powf(1.7),
-                // Broad dome.
-                VolcanoKind::Shield => (1. - x * x).max(0.).powf(1.4),
-            };
-            // The summit crater (strato) or caldera (shield), shallower on old ones.
-            let (crater_radius, crater_depth) = match v.kind {
-                VolcanoKind::Strato => (0.1, 0.12),
-                VolcanoKind::Shield => (0.16, 0.08),
-            };
-            let crater = smoothstep(crater_radius, crater_radius * 0.6, x) * crater_depth * (1. - 0.7 * v.age);
-            // (The crater by the volcano's own height: at sea, not by its rise from the floor.)
+            let q = Vec2::new((d - v.direction).dot(east), (d - v.direction).dot(north)) * radius;
+            let shape = design.shape(v, q, height, |p: Vec3, octaves| layer.fbm3(p, octaves), d * radius);
+            // (The digging by the volcano's own height: at sea, not by its rise from the floor.)
             let built_height = if at_sea {
-                floor + (summit - floor) * profile - height * crater
+                floor + (summit - floor) * shape.rise - height * shape.dig
             } else {
-                heights[i] + height * (profile - crater)
+                heights[i] + height * (shape.rise - shape.dig)
             };
-            if built_height > heights[i] {
+            if built_height > heights[i] || shape.dig > 0.01 {
                 heights[i] = built_height;
-                if built_height > 0. {
-                    sea[i] = false;
-                }
+                sea[i] = built_height <= 0.;
             }
-            if x < 1. {
+            if shape.rise > 0.01 || shape.dig > 0.01 {
                 built.volcanic[i] = true;
-                built.ruggedness[i] = built.ruggedness[i].max((0.25 + 0.6 * v.age) * smoothstep(1., 0.6, x));
+                built.ruggedness[i] = built.ruggedness[i].max(shape.rugged);
             }
-            // Fresh lava (rare: most volcanoes are vegetated or bare rock and ash): the summit
-            // crater and a few narrow flows down from it (where a noise of the angle round it
-            // is high), on active volcanoes.
-            if v.active() && x < LAVA_REACH {
-                let side = d.cross(v.direction).normalize_or_zero();
-                let lobes = 0.5 + 0.5 * noise.layer(100 + k as u32).fbm3(side * 4. + v.direction * 7., 2);
-                let flow = smoothstep(0.62, 0.72, lobes) * smoothstep(LAVA_REACH * lobes, LAVA_REACH * lobes - 0.1, x);
-                let summit = smoothstep(0.12, 0.08, x);
-                built.lava[i] = built.lava[i].max(flow.max(summit));
+            // Fresh lava only in the craters and calderas of active volcanoes (lava lakes).
+            if v.active() {
+                built.lava[i] = built.lava[i].max(shape.crater_floor);
             }
             // Geothermal fields: patches on the flanks of young volcanoes, on land (kept to
             // gentle ground below).
+            let x = shape.x;
             if v.age < GEOTHERMAL_AGE && built_height > 0.2 {
                 let ring = smoothstep(0.3, 0.45, x) * smoothstep(1.0, 0.8, x);
                 let patch = smoothstep(0.3, 0.55, noise.layer(200 + k as u32).fbm3(d * radius / 7., 2));
@@ -272,4 +296,222 @@ pub fn build(
         }
     }
     built
+}
+
+/// A volcano's shape at a point: its rise (share of its height, over the ground or the sea
+/// floor), what its craters dig (share of its height, may go below the ground), how much a
+/// crater or caldera floor it is (0..1), the ruggedness of its slopes, and the distance from
+/// the summit (share of the radius, along its stretched shape).
+struct Shape {
+    rise: f32,
+    dig: f32,
+    crater_floor: f32,
+    rugged: f32,
+    x: f32,
+}
+
+/// A vent: a cone (or a maar, a crater without a cone) at an offset from the summit (world
+/// units), its radius (world units), height (share of the volcano's height), crater (share of
+/// its radius, 0 for a dome) and breached side (angle).
+struct Vent {
+    at: Vec2,
+    radius: f32,
+    height: f32,
+    crater: f32,
+    breach: Option<f32>,
+    maar: bool,
+}
+
+/// The random design of one volcano: stretch along its rift axis, a breached (landslide)
+/// side (angle, half-width), its summit crater or caldera, flank vents.
+struct Design {
+    axis: Vec2,
+    stretch: f32,
+    breach: Option<(f32, f32)>,
+    crater_radius: f32,
+    crater_depth: f32,
+    vents: Vec<Vent>,
+    /// How far the shape reaches (share of the radius).
+    reach: f32,
+}
+
+/// The angle between two angles (radians, 0..π).
+fn angle_between(a: f32, b: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    ((a - b + PI).rem_euclid(TAU) - PI).abs()
+}
+
+impl Design {
+    fn new(v: &Volcano, seed: u32) -> Self {
+        use std::f32::consts::TAU;
+        let random = |k: u32| hash(seed, k, 7) as f32 / u32::MAX as f32;
+        let axis = Vec2::from_angle(random(1) * TAU);
+        let old = v.age;
+        let mut vents = Vec::new();
+        // A cone at a random angle, at a distance (share of the radius) and of a radius (world
+        // units) in ranges.
+        let cone = |k: u32, distance: (f32, f32), size: (f32, f32), height: f32| Vent {
+            at: Vec2::from_angle(random(k) * TAU) * v.radius * (distance.0 + (distance.1 - distance.0) * random(k + 1)),
+            radius: size.0 + (size.1 - size.0) * random(k + 2),
+            height,
+            crater: 0.25,
+            breach: (random(k + 3) < 0.3).then(|| random(k + 4) * TAU),
+            maar: false,
+        };
+        let (stretch, breach_chance, crater_radius, crater_depth) = match v.kind {
+            VolcanoKind::Strato => {
+                // Parasitic cones on the flanks.
+                for j in 0..(random(10) * 4.) as u32 {
+                    vents.push(cone(20 + 10 * j, (0.3, 0.7), (0.07 * v.radius, 0.14 * v.radius), 0.12));
+                }
+                // Old ones: the summit crater widened into a caldera.
+                let caldera = old > 0.5 && random(5) < 0.6;
+                let (radius, depth) = if caldera { (0.22, 0.14) } else { (0.08, 0.1) };
+                (1. + 0.2 * random(2), 0.3 + 0.35 * old, radius, depth)
+            }
+            VolcanoKind::Shield => {
+                // Cones and pit craters along the rift zones.
+                for j in 0..(2. + random(10) * 5.) as u32 {
+                    let along = (random(20 + 10 * j) - 0.5) * 1.4 * v.radius;
+                    vents.push(Vent {
+                        at: axis * along * (1.3 + 0.5 * random(2)),
+                        radius: 0.05 * v.radius,
+                        height: 0.06,
+                        crater: 0.4,
+                        breach: None,
+                        maar: random(21 + 10 * j) < 0.3,
+                    });
+                }
+                (1.3 + 0.6 * random(2), 0.25 + 0.4 * old, 0.14, 0.07)
+            }
+            VolcanoKind::Massif => {
+                // Two or three big overlapping cones round the main one.
+                for j in 0..(2. + random(10) * 1.5) as u32 {
+                    let height = 0.55 + 0.25 * random(60 + j);
+                    vents.push(cone(20 + 10 * j, (0.2, 0.4), (0.35 * v.radius, 0.5 * v.radius), height));
+                }
+                (1.15 + 0.3 * random(2), 0.3, 0.2, 0.12)
+            }
+            VolcanoKind::Caldera => {
+                // Sometimes a new cone inside the caldera.
+                if random(11) < 0.5 {
+                    vents.push(Vent {
+                        at: Vec2::from_angle(random(12) * TAU) * v.radius * 0.12 * random(13),
+                        radius: 0.12 * v.radius,
+                        height: 0.55,
+                        crater: 0.3,
+                        breach: None,
+                        maar: false,
+                    });
+                }
+                (1. + 0.25 * random(2), 0.15, 0.4 + 0.12 * random(3), 0.5)
+            }
+            VolcanoKind::ConeField => {
+                // Many small cinder cones, a few domes and maars, scattered over the field.
+                let count = 8 + (random(10) * 14.) as u32;
+                for j in 0..count {
+                    let k = 20 + 10 * j;
+                    let radius = CINDER_CONE.0 + (CINDER_CONE.1 - CINDER_CONE.0) * random(k + 2);
+                    let roll = random(k + 3);
+                    vents.push(Vent {
+                        at: Vec2::from_angle(random(k) * TAU) * v.radius * random(k + 1).sqrt() * 0.85,
+                        radius,
+                        // (Heights relative to the field's plateau.)
+                        height: radius * (0.35 + 0.15 * random(k + 5)) / CONE_FIELD_PLATEAU,
+                        crater: if roll < 0.15 { 0. } else { 0.3 },
+                        breach: (roll > 0.65).then(|| random(k + 4) * TAU),
+                        maar: roll > 0.88,
+                    });
+                }
+                (1.2 + 0.5 * random(2), 0., 0., 0.)
+            }
+        };
+        let breach = (random(3) < breach_chance).then(|| (random(4) * TAU, 0.45 + 0.4 * random(6)));
+        let beyond = vents.iter().map(|w| (w.at.length() + w.radius) / v.radius - 1.).fold(0., f32::max);
+        Design { axis, stretch, breach, crater_radius, crater_depth, vents, reach: 1.3 + beyond.max(0.) }
+    }
+
+    /// The shape at `q` (world units east and north of the summit); `height` is the volcano's
+    /// (world units), `noise` a 3D noise, `world` the point (world units).
+    fn shape(&self, v: &Volcano, q: Vec2, height: f32, noise: impl Fn(Vec3, u32) -> f32, world: Vec3) -> Shape {
+        let young = 1. - v.age;
+        // Stretched along the rift axis, the outline in irregular lobes.
+        let local = Vec2::new(q.dot(self.axis) / self.stretch, q.perp_dot(self.axis));
+        let wobble = 1. + 0.22 * noise(world / (v.radius * 0.5), 2);
+        let x = local.length() / (v.radius * wobble);
+        let angle = local.y.atan2(local.x);
+        let profile = |x: f32| match v.kind {
+            // Concave: steep near the summit, flaring out; blunter with age.
+            VolcanoKind::Strato | VolcanoKind::Massif => (1. - x).max(0.).powf(1.5 + 0.5 * young).min(1. - 0.25 * v.age),
+            VolcanoKind::Shield => (1. - x * x).max(0.).powf(1.3),
+            VolcanoKind::Caldera => (1. - x).max(0.).powf(1.2),
+            VolcanoKind::ConeField => (1. - x * x).max(0.),
+        };
+        let mut rise = profile(x);
+        // Radial gullies and ridges (barrancos), deeper with age; young cones jagged with small
+        // ribs. (Noise in polar coordinates: stretched down the slope.)
+        if v.kind != VolcanoKind::ConeField {
+            let polar = Vec3::new(angle.cos() * 2.6, angle.sin() * 2.6, x * 1.2);
+            let ribs = 1. - noise(polar * (1. + young), 2).abs();
+            let gully_depth = (0.05 + 0.25 * v.age) * smoothstep(0.08, 0.3, x) * smoothstep(1., 0.7, x);
+            rise -= gully_depth * ribs.powi(3) * rise.max(0.15).sqrt();
+            rise += 0.03 * young * noise(world / 2.5, 2) * smoothstep(0.9, 0.2, x);
+        }
+        // Landslides: a horseshoe amphitheatre open down one side from the summit (a scarp on
+        // shields), its floor sloping gently out.
+        if let Some((direction, width)) = self.breach {
+            let side = smoothstep(width, width * 0.3, angle_between(angle, direction));
+            let shield = v.kind == VolcanoKind::Shield;
+            let (from, to) = if shield { (0.35, 1.) } else { (0., 0.6) };
+            let inside = smoothstep(to + 0.1, to - 0.2, x) * smoothstep(from - 0.1, from + 0.1, x);
+            let floor = profile(to) + (to - x).max(0.) * 0.25;
+            let depth = if shield { 0.6 } else { 0.85 };
+            rise -= (rise - floor).max(0.) * side * inside * depth;
+        }
+        // The summit crater or caldera: a flat floor in steep walls, shallower with age.
+        let mut dig = 0.;
+        let mut crater_floor = 0.;
+        if self.crater_radius > 0. {
+            let wall = smoothstep(self.crater_radius, self.crater_radius * 0.75, x);
+            dig += self.crater_depth * (0.5 + 0.5 * young) * wall;
+            // (A lava lake in the middle of the floor, small; none in collapsed calderas,
+            // which hold water.)
+            let lake = (self.crater_radius * 0.55).min(LAVA_LAKE / v.radius);
+            if v.kind != VolcanoKind::Caldera {
+                crater_floor = smoothstep(lake, lake * 0.6, x);
+            }
+        }
+        // Flank cones, domes and maars.
+        for vent in &self.vents {
+            let r = (q - vent.at).length() / vent.radius;
+            if r > 1.2 {
+                continue;
+            }
+            if vent.maar {
+                // A round crater dug into the ground, a low ring round it.
+                dig += MAAR_DEPTH / height.max(1.) * smoothstep(0.75, 0.45, r);
+                rise += MAAR_DEPTH * 0.3 / height.max(1.) * smoothstep(1.1, 0.8, r) * smoothstep(0.5, 0.8, r);
+                continue;
+            }
+            let base = profile((vent.at.length() / (v.radius * wobble)).min(1.));
+            let mut cone = (1. - r).max(0.).powf(1.2) * vent.height;
+            if vent.crater > 0. {
+                let mut crater = smoothstep(vent.crater, vent.crater * 0.6, r) * vent.height * 0.35;
+                // Breached: the crater open down one side.
+                if let Some(b) = vent.breach {
+                    let open = smoothstep(1.0, 0.4, angle_between((q - vent.at).to_angle(), b));
+                    cone *= 1. - 0.6 * open * smoothstep(0.9, 0.3, r);
+                    crater *= 1. - open;
+                }
+                cone -= crater;
+            }
+            rise = rise.max(base + cone);
+        }
+        let rugged = match v.kind {
+            VolcanoKind::Shield => 0.1 + 0.6 * v.age,
+            VolcanoKind::ConeField => 0.1,
+            _ => 0.3 + 0.5 * v.age,
+        } * smoothstep(1.1, 0.7, x);
+        Shape { rise, dig, crater_floor, rugged, x }
+    }
 }

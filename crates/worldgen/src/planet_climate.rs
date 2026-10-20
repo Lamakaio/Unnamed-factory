@@ -705,19 +705,25 @@ impl PlanetClimate {
     /// The twelve months of the climate cell nearest a direction, with temperatures at an
     /// altitude (world units above sea level).
     pub fn months_at(&self, direction: Vec3, height: f32) -> ([f32; 12], [f32; 12]) {
-        // Bilinear between the four nearest cells of the face (clamped at its edges).
+        // Bilinear between the four nearest cells, across the face's edges (corners beyond it
+        // are the neighbouring face's cells there: no seam along the cube's edges).
         let (face, p) = self.grid.face_coords(direction);
-        let last = (self.grid.n() - 1) as f32;
-        let p = p.clamp(Vec2::ZERO, Vec2::splat(last));
+        let n = self.grid.n() as i64;
         let (x0, z0) = (p.x.floor(), p.y.floor());
         let (fx, fz) = (p.x - x0, p.y - z0);
-        let (x0, z0) = (x0 as usize, z0 as usize);
-        let (x1, z1) = ((x0 + 1).min(last as usize), (z0 + 1).min(last as usize));
+        let cell = |x: f32, z: f32| {
+            let (xi, zi) = (x as i64, z as i64);
+            if (0..n).contains(&xi) && (0..n).contains(&zi) {
+                self.grid.index(face, xi as usize, zi as usize)
+            } else {
+                self.grid.cell_at(self.grid.direction_at(face, Vec2::new(x, z)))
+            }
+        };
         let corners = [
-            (self.grid.index(face, x0, z0), (1. - fx) * (1. - fz)),
-            (self.grid.index(face, x1, z0), fx * (1. - fz)),
-            (self.grid.index(face, x0, z1), (1. - fx) * fz),
-            (self.grid.index(face, x1, z1), fx * fz),
+            (cell(x0, z0), (1. - fx) * (1. - fz)),
+            (cell(x0 + 1., z0), fx * (1. - fz)),
+            (cell(x0, z0 + 1.), (1. - fx) * fz),
+            (cell(x0 + 1., z0 + 1.), fx * fz),
         ];
         let drop = LAPSE * height.max(0.) * self.settings.meters_per_unit;
         let blend = |f: &dyn Fn(&Month) -> f32, k: usize| {

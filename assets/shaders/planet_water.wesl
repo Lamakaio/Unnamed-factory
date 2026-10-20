@@ -167,9 +167,10 @@ fn sea_waves(xz: vec2<f32>, time: f32, footprint: f32, wind_dir: vec2<f32>) -> S
     out.exposure = exposure;
     out.travel = travel;
 
-    // Crests: isolines of the travel time, moving shoreward. They arrive a little obliquely
-    // with the wind, and slowly out of step along the coast.
-    let oblique = dot(xz, wind_dir) * 0.08 + value_noise(xz * 0.03) * 1.5;
+    // Crests: isolines of the travel time, moving shoreward, slowly out of step along the coast.
+    // (No term along the wind: the wind is interpolated per vertex, and its direction times
+    // coordinates in the hundreds bends the crests into chevrons at the triangles' edges.)
+    let oblique = value_noise(xz * 0.03) * 1.5;
     // Crests are where the phase is a whole number: their travel time decreases over time.
     let phase = travel / WAVE_LENGTH + time / WAVE_PERIOD + oblique;
     let u = fract(phase);

@@ -51,6 +51,10 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
 
     // Travel time from the shore (land counts as shore).
     let mut travel = vec![MAX_TRAVEL; cells];
+    // (With the shore cell each time comes from and the path's length, to undo the grid's
+    // metric below.)
+    let mut source: Vec<usize> = (0..cells).collect();
+    let mut path = vec![0f32; cells];
     let mut heap = BinaryHeap::new();
     for i in 0..cells {
         if !sea[i] || grid.neighbours(i).any(|(j, d)| d < 1.2 && !sea[j]) {
@@ -69,12 +73,24 @@ pub fn sea_field(planet: &Planet, surface: &PlanetSurface) -> Vec<[f32; 4]> {
             let t = time + length * 2. / (speed[i] + speed[j]);
             if t < travel[j] {
                 travel[j] = t;
+                source[j] = source[i];
+                path[j] = path[i] + length;
                 heap.push(Visit(t, j));
             }
         }
     }
+    // Paths on the grid's 8 directions are up to 8 % longer than straight lines, and
+    // differently so by direction: fronts come out polygonal (chevrons along straight coasts).
+    // Rescale each time by the straight distance to its shore cell over the path's length.
+    let cells_per_radian = 2. * grid.n() as f32 / std::f32::consts::PI;
+    for i in 0..cells {
+        if path[i] > 0. && travel[i] < MAX_TRAVEL {
+            let straight = grid.direction(i).angle_between(grid.direction(source[i])) * cells_per_radian;
+            travel[i] *= (straight / path[i]).clamp(0.85, 1.);
+        }
+    }
     // Smooth the grid's artifacts, keeping the shore at 0.
-    let mut travel = grid.blur(&travel, 2);
+    let mut travel = grid.blur(&travel, 3);
     for (t, &sea) in travel.iter_mut().zip(sea) {
         if !sea {
             *t = 0.;

@@ -118,7 +118,9 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   25, max 600) with a 4096 shadow map; the planet camera keeps it lighting the side in view.
 - **Dev tools**: `RemotePlugin` + `RemoteHttpPlugin` (BRP inspector), `WireframePlugin`.
   `UF_SCREENSHOT=<png>` (and `UF_SCREENSHOT_DELAY`, default 20 s after the world is ready)
-  saves a screenshot and exits; with `UF_PLANET_CAMERA` (view) and `UF_PLANET_REPORT` (logged
+  saves a screenshot and exits; `UF_SCREENSHOTS=<view>=<png>;<view>=<png>;...` takes several
+  from one world generation (the camera moves to each view, waits `UF_SCREENSHOT_DELAY`,
+  default 10 s, saves): use it rather than one run per view; with `UF_PLANET_CAMERA` (view) and `UF_PLANET_REPORT` (logged
   reports of points) agents check spots without a human. See §6.
 
 ### 3.2 World generation (`crates/worldgen`) and the planet (`src/planet`)
@@ -183,14 +185,21 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
   (`HOTSPOTS_PER_MILLION` plumes, `CHAIN` volcanoes, `CHAIN_SPACING` apart along the plate's
   motion: `PlateMotion::rotation` or the plates' without history; age grows downstream).
-  `build` raises cones (strato: concave, summit crater) or shields (broad, caldera) on the
-  heights: on land on the ground, at sea from the floor to a summit above the water that
+  Then each gets a kind (`VolcanoKind`: arcs mostly `Strato`, some `Massif`, `Caldera`,
+  `ConeField` on land; hotspots `Shield`, under continents often `Caldera` or `ConeField`)
+  and a random `Design`: stretch along a rift axis, lobed outline, flank cones (parasitic
+  cones, rift-zone cones and pit craters, a massif's overlapping cones, a cone field's cinder
+  cones, domes and maars, some breached), a landslide amphitheatre (a scarp on shields,
+  likelier with age), radial gullies deepening with age, ribs on young cones, a summit crater
+  (old stratovolcanoes: a caldera) or a big collapsed caldera (it becomes a lake).
+  `Design::shape` gives the rise and what craters dig (below the ground for calderas and
+  maars): on land on the ground, at sea from the floor to a summit above the water that
   sinks with age (`SUBSIDENCE`: worn islands, then seamounts); cells raised above the sea
-  become land. Volcanic cells are basalt; active ones (`ACTIVE_AGE`) get fresh lava (rare on
-  Earth: only the summit crater and a few narrow flows within `LAVA_REACH`)
-  (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
-  are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
-  `PlanetSurface::volcanoes` (the inspector reports them).
+  become land. Volcanic cells are basalt; active ones (`ACTIVE_AGE`) have lava only as a small
+  lava lake in the summit crater (`LAVA_LAKE`; none in collapsed calderas) (`Planet::lava`,
+  the rock field's blue: drawn bare and black; no vegetation); older slopes are more rugged.
+  Black sand on basalt coasts. `Planet::volcanoes`, `PlanetSurface::volcanoes` (the inspector
+  reports them).
 - **River banks** (`PlanetSurface::riparian`, from the river points, wider along big
   rivers): greener ground and grass in dry country (`mesh::RIPARIAN_GREEN`), and
   `Biome::{Riparian, Oasis}` (gallery forests; palms where hot) beyond `RIPARIAN_BIOME`.

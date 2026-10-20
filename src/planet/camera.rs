@@ -49,6 +49,53 @@ pub struct PlanetCamera {
     pub pitch: f32,
 }
 
+/// A view as `UF_PLANET_CAMERA` gives it (see [`View::parse`]).
+#[derive(Clone, Copy)]
+pub struct View {
+    pub focus: Vec3,
+    pub distance: f32,
+    pub pitch: Option<f32>,
+    pub heading: Option<f32>,
+}
+
+impl View {
+    /// Parse `longitude,latitude[,distance[,pitch[,heading]]]` (degrees, world units); what is
+    /// left out comes from `default`.
+    pub fn parse(view: &str, default: View) -> View {
+        let values: Vec<f32> = view.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let mut out = default;
+        if let [longitude, latitude, ..] = values[..] {
+            let (longitude, latitude) = (longitude.to_radians(), latitude.to_radians());
+            out.focus = Vec3::new(
+                latitude.cos() * longitude.cos(),
+                latitude.sin(),
+                latitude.cos() * longitude.sin(),
+            );
+        }
+        if let [_, _, d, ..] = values[..] {
+            out.distance = d;
+        }
+        if let [_, _, _, p, ..] = values[..] {
+            out.pitch = Some(p.to_radians());
+        }
+        if let [_, _, _, _, h] = values[..] {
+            out.heading = Some(h.to_radians());
+        }
+        out
+    }
+
+    /// Point the planet camera this way.
+    pub fn apply(&self, camera: &mut PlanetCamera) {
+        let focus = self.focus.normalize();
+        let (east, north) = east_north(focus);
+        let heading = self.heading.unwrap_or(0.);
+        camera.focus = focus;
+        camera.forward = north * heading.cos() + east * heading.sin();
+        camera.distance = self.distance;
+        camera.pitch = self.pitch.unwrap_or(std::f32::consts::FRAC_PI_2);
+    }
+}
+
 /// Take the camera over with the planet camera, looking at `focus` from
 /// `distance` (straight down unless `pitch` says otherwise), facing `heading` (radians east
 /// of north; north by default).
