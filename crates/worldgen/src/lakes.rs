@@ -79,26 +79,54 @@ pub struct Hydrology {
 }
 
 /// Connected components (side neighbours) of the cells where `mask` is set.
+///
+/// Each component's cells are in index order, the components in the order of their first
+/// cell. (A union-find on all cores: each pair of side neighbours joins their sets, the larger
+/// root under the smaller, so every set's root is its first cell whatever the threads' order.)
 fn components(grid: &SphereGrid, mask: &[bool]) -> Vec<Vec<usize>> {
-    let mut seen = vec![false; mask.len()];
-    let mut out = Vec::new();
-    for start in 0..mask.len() {
-        if !mask[start] || seen[start] {
-            continue;
+    use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    let parent: Vec<AtomicU32> = (0..mask.len() as u32).map(AtomicU32::new).collect();
+    let find = |mut x: u32| loop {
+        let p = parent[x as usize].load(Relaxed);
+        if p == x {
+            return x;
         }
-        let mut cells = Vec::new();
-        let mut queue = VecDeque::from([start]);
-        seen[start] = true;
-        while let Some(i) = queue.pop_front() {
-            cells.push(i);
-            for (j, d) in grid.neighbours(i) {
-                if d < 1.2 && mask[j] && !seen[j] {
-                    seen[j] = true;
-                    queue.push_back(j);
+        // (Path halving: any thread may shortcut, the root stays the same.)
+        let grandparent = parent[p as usize].load(Relaxed);
+        let _ = parent[x as usize].compare_exchange(p, grandparent, Relaxed, Relaxed);
+        x = grandparent;
+    };
+    crate::par::map(mask.len(), |i| {
+        if !mask[i] {
+            return;
+        }
+        for (j, d) in grid.neighbours(i) {
+            if d >= 1.2 || !mask[j] {
+                continue;
+            }
+            loop {
+                let (a, b) = (find(i as u32), find(j as u32));
+                if a == b {
+                    break;
+                }
+                let (low, high) = (a.min(b), a.max(b));
+                if parent[high as usize].compare_exchange(high, low, Relaxed, Relaxed).is_ok() {
+                    break;
                 }
             }
         }
-        out.push(cells);
+    });
+    let root = crate::par::map(mask.len(), |i| if mask[i] { find(i as u32) } else { u32::MAX });
+    // Number the components by their first cell, then fill them in index order.
+    let mut id = vec![u32::MAX; mask.len()];
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for i in (0..mask.len()).filter(|&i| mask[i]) {
+        let r = root[i] as usize;
+        if id[r] == u32::MAX {
+            id[r] = out.len() as u32;
+            out.push(Vec::new());
+        }
+        out[id[r] as usize].push(i);
     }
     out
 }

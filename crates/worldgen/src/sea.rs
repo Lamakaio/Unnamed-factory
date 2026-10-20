@@ -18,8 +18,9 @@ use crate::{grid::Grid, noise::smoothstep, par, planet::Planet, surface::PlanetS
 const DEEP: f32 = 2.;
 /// Slowest wave speed, relative to deep water.
 const MIN_SPEED: f32 = 0.2;
-/// Travel times beyond this are stored as this (the shader fades shore waves out before it).
-pub const MAX_TRAVEL: f32 = 60.;
+/// Travel times beyond this are stored as this (the shader fades shore waves out before it:
+/// `SWELL_REACH` ends at 34; a margin for the blur).
+pub const MAX_TRAVEL: f32 = 40.;
 const MAX_DEPTH: f32 = 30.;
 /// Openness (share of sea around, from a blur of this many passes) from which swell reaches a
 /// cell: a straight coast is about 0.5 open, a narrow channel much less.
