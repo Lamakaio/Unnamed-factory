@@ -40,7 +40,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // x: the sea level radius.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
 // The face's rock field, by cell (`worldgen::geology`): rock id (red), strata offset (green,
-// erosion units). `planet.y` is the cells along a face edge, `planet.z` world units per
+// erosion units), fresh lava (blue, round active volcanoes). `planet.y` is the cells along a face edge, `planet.z` world units per
 // erosion unit (strata height = height / planet.z + offset), `planet.w` 1 with the field.
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var rock_field: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var rock_sampler: sampler;
@@ -307,6 +307,7 @@ fn ground(
     time: f32,
     rock_type: i32,
     level: f32,
+    lava: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -355,7 +356,11 @@ fn ground(
     color = mix(color, marsh, border(a.a, medium));
 
     // Sand: beaches just above the water line (and wherever the climate says so).
-    let sand = mix(srgb(0.94, 0.85, 0.62), srgb(0.89, 0.79, 0.56), patches(blotches, 0.2));
+    var sand = mix(srgb(0.94, 0.85, 0.62), srgb(0.89, 0.79, 0.56), patches(blotches, 0.2));
+    // Black sand on volcanic coasts.
+    if rock_type == 2 {
+        sand = mix(srgb(0.30, 0.29, 0.30), srgb(0.38, 0.36, 0.36), patches(blotches, 0.2));
+    }
     let beach = (1.0 - smoothstep(0.15, 0.45, height + 0.15 * large)) * c.b;
     color = mix(color, sand, border(max(a.r, beach), medium));
 
@@ -381,6 +386,12 @@ fn ground(
     let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
     let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
     color = mix(color, rock_color(xz, height, up, footprint, rock_type, level) * rock_tone, rock);
+
+    // Fresh lava: bare, black, in ropy swirls with a ragged edge (no grass, no forest).
+    let lava_edge = lava + 0.25 * medium;
+    let swirls = fbm(xz * 1.3 + vec2(fbm(xz * 0.4, 2, footprint * 0.4) * 2.0, 0.0), 3, footprint * 1.3);
+    let lava_color = mix(srgb(0.11, 0.10, 0.11), srgb(0.22, 0.20, 0.20), patches(swirls, 0.25));
+    color = mix(color, lava_color, crisp(0.5, lava_edge, fwidth(lava_edge)));
 
     // Snow: settles on flat ground (steep rock stays bare), with a ragged edge and wind-blown
     // drifts.
@@ -478,6 +489,7 @@ fn fragment(
     // borders), and the strata height along its beds.
     var rock_type = 1;
     var level = height;
+    var lava = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
@@ -485,9 +497,10 @@ fn fragment(
         rock_type = clamp(i32(textureLoad(rock_field, cell, 0).r + 0.5), 0, 5);
         let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
         level = height / planet.z + offset;
+        lava = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).b;
     }
     let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
-        rock_type, level)
+        rock_type, level, lava)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

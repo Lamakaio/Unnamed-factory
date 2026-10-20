@@ -114,8 +114,11 @@ pub struct PlanetSurface {
     pub ground: Option<[FaceField; 3]>,
     /// Ground material weights of each cell from its climate (see `Koppen::ground_weights`).
     pub weights: Option<[FaceField; 5]>,
-    /// The rock of each cell (`geology::Rock` id; see [`PlanetSurface::rock_at`]).
+    /// The rock of each cell (`geology::Rock` id; see [`PlanetSurface::rock_at`]), fresh lava
+    /// (0..1, round active volcanoes) and the volcanoes.
     pub rock: FaceField,
+    pub lava: FaceField,
+    pub volcanoes: Vec<crate::volcanoes::Volcano>,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -179,6 +182,8 @@ impl PlanetSurface {
             ground,
             ocean: FaceField::new(planet, &ocean),
             rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
+            lava: FaceField::new(planet, &planet.lava),
+            volcanoes: planet.volcanoes.clone(),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
             channels: Channels::default(),

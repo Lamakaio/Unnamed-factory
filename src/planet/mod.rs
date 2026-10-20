@@ -339,14 +339,14 @@ fn finish_chunk_meshes(
 }
 
 /// The rock field of each face as texture data (`Rgba16Float`, a texel per cell): rock id,
-/// strata offset.
+/// strata offset, fresh lava.
 fn rock_textures(planet: &worldgen::planet::Planet) -> Vec<Vec<u8>> {
     let per_face = planet.grid.n() * planet.grid.n();
     (0..FACES)
         .map(|face| {
             let mut data = Vec::with_capacity(per_face * 8);
             for i in face * per_face..(face + 1) * per_face {
-                for value in [planet.rock[i] as f32, planet.strata[i], 0., 0.] {
+                for value in [planet.rock[i] as f32, planet.strata[i], planet.lava[i], 0.] {
                     data.extend(half::f16::from_f32(value).to_le_bytes());
                 }
             }

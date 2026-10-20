@@ -163,6 +163,9 @@ pub struct Planet {
     pub rock: Vec<u8>,
     pub strata: Vec<f32>,
     pub strata_scale: f32,
+    /// The volcanoes (see `volcanoes`), and fresh lava over each cell (0..1, active ones).
+    pub volcanoes: Vec<crate::volcanoes::Volcano>,
+    pub lava: Vec<f32>,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
     pub ruggedness: Vec<f32>,
     /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
@@ -811,11 +814,34 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             heights[i] = terrain::smooth_min(heights[i], ramp, 1.).max(-0.3);
         }
     }
+    // Volcanoes: island and continental arcs, hotspot chains along the plates' motion.
+    let velocity = |d: Vec3| match &history {
+        Some((t, _)) => t.plates[t.plate[t.grid.cell_at(d)] as usize].rotation.cross(d),
+        None => plates[plate_of[grid.cell_at(d)] as usize].velocity(d),
+    };
+    let volcanoes = crate::volcanoes::place(
+        &grid,
+        radius,
+        settings.seed,
+        |i| boundaries[i].arc,
+        |i| if !sea[i] && boundaries[i].belt > 0.4 && to_sea[i] < COASTAL_ARC { 1. } else { 0. },
+        velocity,
+    );
+    let volcanic = crate::volcanoes::build(&grid, radius, settings.seed, &volcanoes, &mut heights, &mut sea);
+    let mut rock: Vec<u8> = shape.rock.iter().map(|&r| r as u8).collect();
+    let mut strata = shape.strata.clone();
+    for i in 0..cells {
+        if volcanic.volcanic[i] {
+            rock[i] = Rock::Basalt as u8;
+            strata[i] = 0.;
+        }
+    }
+    lap("  volcanoes", &mut timings);
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
     let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
         crate::planet_lakes::shape_lakes(&grid, &mut heights, &mut sea);
     lap("  lakes", &mut timings);
-    let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i)).collect();
+    let ruggedness: Vec<f32> = (0..cells).map(|i| shape.ruggedness(i).max(volcanic.ruggedness[i])).collect();
     let (mut rivers, valley) =
         crate::planet_rivers::extract(&grid, radius, &heights, &filled, &base, &lake_depth);
     // Floodplains: flat valley floors where rivers meander.
@@ -887,8 +913,10 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         lake_depth,
         wetland,
         basins,
-        rock: shape.rock.iter().map(|&r| r as u8).collect(),
-        strata: shape.strata.clone(),
+        rock,
+        strata,
+        lava: volcanic.lava,
+        volcanoes,
         strata_scale,
         rivers,
         ruggedness,
@@ -1005,6 +1033,9 @@ pub fn distance_to(grid: &SphereGrid, sea: &[bool], land_reach: f32, sea_reach: 
     }
     distance
 }
+
+/// Young ranges this close to the sea (cells) are continental arcs (volcanoes).
+const COASTAL_ARC: f32 = 60.;
 
 /// Strata: the scale (cells) over which their dip turns.
 const STRATA_WAVELENGTH: f32 = 120.;

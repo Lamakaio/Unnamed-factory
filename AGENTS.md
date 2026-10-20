@@ -142,6 +142,18 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   irregular borders from a warped nearest cell); `planet/vegetation.rs::scatter_rocks`
   strews rocks by rock type (`nature::scattered_rocks`) where the ground is steep, dry or
   cold (in fields), `PlanetSurface::rock_at`.
+- **Volcanoes** (`volcanoes.rs`, after the coasts are shaped, before the lakes): `place`
+  spaces stratovolcanoes along island arcs (`Boundary::arc`) and continental arcs (young
+  belts within `COASTAL_ARC` of the sea), `ARC_SPACING`, and hotspot chains
+  (`HOTSPOTS_PER_MILLION` plumes, `CHAIN` volcanoes, `CHAIN_SPACING` apart along the plate's
+  motion: `PlateMotion::rotation` or the plates' without history; age grows downstream).
+  `build` raises cones (strato: concave, summit crater) or shields (broad, caldera) on the
+  heights: on land on the ground, at sea from the floor to a summit above the water that
+  sinks with age (`SUBSIDENCE`: worn islands, then seamounts); cells raised above the sea
+  become land. Volcanic cells are basalt; active ones (`ACTIVE_AGE`) get fresh lava lobes
+  (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
+  are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
+  `PlanetSurface::volcanoes` (the inspector reports them).
 - **Erosion engine** (`terrain.rs::erode_timed`, from a `Shape` of per-cell uplift,
   erodibility, diffusion, rain, provinces, ranges, subsidence, glacial noise, rock and strata:
   the rock's bed at each cell's height scales its erodibility and diffusion):

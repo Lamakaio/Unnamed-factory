@@ -125,3 +125,8 @@ someone else's work, add it here (and mention it in the code comment where it is
   Whipple, A. Bookhagen, M. W. Rossi, *Complexities of landscape evolution during incision
   through layered stratigraphy with contrasts in rock strength*, JGR Earth Surface 121, 2016;
   rock types from plate setting as in introductory geology (cratons, orogens, arcs, basins).
+- **Volcanoes** (`volcanoes.rs`): arcs above subduction zones and hotspot chains carried by
+  the plates over fixed mantle plumes, ageing and sinking downstream (J. T. Wilson, *A possible
+  origin of the Hawaiian Islands*, Can. J. Phys. 41, 1963; W. J. Morgan, *Convection plumes in
+  the lower mantle*, Nature 230, 1971); strato cone and shield profiles as in volcanology
+  textbooks.

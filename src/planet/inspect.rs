@@ -329,6 +329,26 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
             point.depth
         );
     }
+    for v in &surface.volcanoes {
+        let distance = v.direction.distance(direction) * surface.radius;
+        if distance < v.radius * 1.5 {
+            let _ = writeln!(
+                out,
+                "  volcano ({:?}, {}, age {:.2}): summit {distance:.1} away, {:.1} high, radius {:.1}",
+                v.kind,
+                if v.active() { "active" } else { "extinct" },
+                v.age,
+                v.height,
+                v.radius
+            );
+        }
+    }
+    let _ = writeln!(
+        out,
+        "  rock {:?}, lava {:.2}",
+        surface.rock_at(face, p),
+        surface.lava.bilinear(face, p)
+    );
     for spring in surface.springs() {
         let distance = spring.direction.distance(direction) * surface.radius;
         if distance < 10. {

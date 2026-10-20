@@ -157,7 +157,12 @@ fn grass_at(surface: &PlanetSurface, face: usize, p: Vec2) -> Option<(Vec3, f32)
         return Some((srgb(0.40, 0.66, 0.24), 1.));
     };
     let [dryness, forest, desert, snow, cold] = weights.each_ref().map(|w| w.bilinear(face, p));
-    if forest > 0.5 || desert > 0.5 || snow > 0.5 || surface.marsh.bilinear(face, p).abs() > 0.5 {
+    if forest > 0.5
+        || desert > 0.5
+        || snow > 0.5
+        || surface.marsh.bilinear(face, p).abs() > 0.5
+        || surface.lava.bilinear(face, p) > 0.4
+    {
         return None;
     }
     let dry = (dryness * 3.).round() / 3.;

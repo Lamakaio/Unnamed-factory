@@ -567,6 +567,10 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     if height < BEACH_HEIGHT && ocean > 0.02 {
         return Biome::Beach;
     }
+    // Fresh lava: bare.
+    if surface.lava.bilinear(face, p) > 0.4 {
+        return Biome::Sea;
+    }
     // Wetlands: marsh, or bare salt flats.
     let marsh = surface.marsh.bilinear(face, p);
     if marsh > 0.5 {

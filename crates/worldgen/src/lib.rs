@@ -14,6 +14,7 @@ pub mod grid;
 pub mod sphere;
 pub mod surface;
 pub mod tectonics;
+pub mod volcanoes;
 mod heightmap;
 mod mouths;
 pub mod noise;
