@@ -154,6 +154,16 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   (`Planet::lava`, the rock field's blue: drawn bare and black; no vegetation); older slopes
   are more rugged (gullies). Black sand on basalt coasts. `Planet::volcanoes`,
   `PlanetSurface::volcanoes` (the inspector reports them).
+- **Reefs** (`reefs.rs`, right after the volcanoes): in the tropics (`TROPICS`), fringing reefs
+  a little offshore (`FRINGE` cells: rim just under the water, shallow lagoon behind), further
+  out round volcanic islands from `BARRIER_AGE` (barrier reefs), atolls on sunk shield
+  volcanoes from `ATOLL_AGE` (a ring at `ATOLL_RING` of the old radius, flat lagoon inside,
+  islets where it breaks the surface). Hotspots are mostly oceanic (`OCEANIC_HOTSPOTS`) and
+  every chain ages from new to sunk along its length, so tropical chains end in atolls.
+  `Planet::reef` (the rock field's alpha): coral under the water, coral sand on the islets
+  (`planet_terrain.wesl`); `Biome::TropicalBeach` (tropical beaches, reef islets) has palms.
+  Beaches use a narrow coast measure (`mesh::COAST` on the blurred ocean): small islands are
+  land, not all sand; the sea floor colour only along the ocean.
 - **Erosion engine** (`terrain.rs::erode_timed`, from a `Shape` of per-cell uplift,
   erodibility, diffusion, rain, provinces, ranges, subsidence, glacial noise, rock and strata:
   the rock's bed at each cell's height scales its erodibility and diffusion):

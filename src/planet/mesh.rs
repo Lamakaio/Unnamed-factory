@@ -179,13 +179,17 @@ impl Builder<'_> {
     }
 }
 
+/// The coast (beaches) where the blurred ocean (`PlanetSurface::ocean`) is between these.
+pub const COAST: (f32, f32) = (0.1, 0.3);
+
 /// Ground materials at a point (see `PlanetTerrainShader`): (dryness, forest, marsh / -salt,
 /// wet bed) and (cold + snow, coast).
 fn ground_materials(surface: &PlanetSurface, face: usize, p: Vec2) -> ([f32; 4], [f32; 2]) {
     let wet = surface.wetness(face, p);
     let marsh = surface.marsh.bilinear(face, p);
     // Beaches only along the ocean (not round dry basins below sea level).
-    let coast = smoothstep(0.02, 0.15, surface.ocean.bilinear(face, p));
+    // (Narrow: on small islands, the blurred ocean reaches all of the land.)
+    let coast = smoothstep(COAST.0, COAST.1, surface.ocean.bilinear(face, p));
     let Some(weights) = &surface.weights else {
         return ([0.3, 0., marsh, wet], [0., coast]);
     };

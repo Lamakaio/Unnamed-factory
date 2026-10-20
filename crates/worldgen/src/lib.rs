@@ -25,6 +25,7 @@ mod planet_lakes;
 mod planet_mouths;
 pub mod planet_sea;
 pub mod planet_springs;
+mod reefs;
 pub mod planet_rivers;
 mod terrain;
 
@@ -148,6 +149,8 @@ pub enum Biome {
     Sea,
     Lake,
     Beach,
+    /// Tropical coasts and reef islets: palms.
+    TropicalBeach,
     Marsh,
     Meadow,
     Steppe,
@@ -167,6 +170,7 @@ impl Biome {
             Biome::Sea => [0.45, 0.42, 0.33],
             Biome::Lake => [0.35, 0.33, 0.25],
             Biome::Beach => [0.86, 0.80, 0.60],
+            Biome::TropicalBeach => [0.95, 0.92, 0.84],
             Biome::Marsh => [0.36, 0.42, 0.22],
             Biome::Meadow => [0.50, 0.68, 0.30],
             Biome::Steppe => [0.72, 0.68, 0.40],

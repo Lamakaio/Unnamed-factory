@@ -130,3 +130,8 @@ someone else's work, add it here (and mention it in the code comment where it is
   origin of the Hawaiian Islands*, Can. J. Phys. 41, 1963; W. J. Morgan, *Convection plumes in
   the lower mantle*, Nature 230, 1971); strato cone and shield profiles as in volcanology
   textbooks.
+- **Reefs and atolls** (`reefs.rs`): fringing reefs, barrier reefs round sinking volcanic
+  islands and atolls on sunk ones, after C. Darwin, *The Structure and Distribution of Coral
+  Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.
+- **New nature models** (`tools/nature/build.sh`: palms, acacia, jungle trees, mangroves,
+  bamboo, tundra shrub): Kenney Nature Kit (CC0), recoloured and rescaled.

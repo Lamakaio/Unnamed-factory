@@ -40,7 +40,7 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // x: the sea level radius.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> planet: vec4<f32>;
 // The face's rock field, by cell (`worldgen::geology`): rock id (red), strata offset (green,
-// erosion units), fresh lava (blue, round active volcanoes). `planet.y` is the cells along a face edge, `planet.z` world units per
+// erosion units), fresh lava (blue, round active volcanoes), coral reef (alpha). `planet.y` is the cells along a face edge, `planet.z` world units per
 // erosion unit (strata height = height / planet.z + offset), `planet.w` 1 with the field.
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var rock_field: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var rock_sampler: sampler;
@@ -308,6 +308,7 @@ fn ground(
     rock_type: i32,
     level: f32,
     lava: f32,
+    reef: f32,
 ) -> vec3<f32> {
     let steep = 1.0 - up;
     let medium = fbm(xz * 0.5, 3, footprint * 0.5);
@@ -406,12 +407,26 @@ fn ground(
     // River and lake beds.
     color = mix(color, srgb(0.52, 0.46, 0.36), crisp(0.5, wet, fwidth(wet)));
 
-    // Sea floor: sand near the shore, teal further out, darker with depth.
-    if height < 0.0 {
+    // Sea floor (along the ocean: dry land below sea level is land): sand near the shore,
+    // teal further out, darker with depth.
+    if height < 0.0 && c.b > 0.5 {
         let depth = -height;
         let floor_color = mix(sand, srgb(0.30, 0.46, 0.48), smoothstep(0.3, 3.0, depth));
         color = mix(color, floor_color, smoothstep(0.0, 0.2, depth));
         color *= max(1.0 - depth / 20.0, 0.4);
+    }
+
+    // Coral reefs: pastel coral heads under the water, white coral sand on the islets.
+    if reef > 0.05 {
+        let heads = fbm(xz * 0.9 + vec2(4.0, 1.0), 3, footprint * 0.9);
+        let kinds = fbm(xz * 0.3 + vec2(9.0, 2.0), 2, footprint * 0.3);
+        var coral = mix(srgb(0.86, 0.60, 0.56), srgb(0.90, 0.76, 0.52), patches(kinds, 0.0));
+        coral = mix(coral, srgb(0.52, 0.70, 0.62), patches(kinds, 0.45));
+        coral = mix(srgb(0.86, 0.82, 0.70), coral, patches(heads, -0.1));
+        let coral_sand = mix(srgb(0.97, 0.94, 0.87), srgb(0.92, 0.88, 0.80), patches(blotches, 0.2));
+        let surface = select(coral * max(1.0 + height / 6.0, 0.6), coral_sand, height > 0.02);
+        let edge = reef + 0.2 * medium;
+        color = mix(color, surface, crisp(0.45, edge, fwidth(edge)));
     }
     return color;
 }
@@ -490,6 +505,7 @@ fn fragment(
     var rock_type = 1;
     var level = height;
     var lava = 0.0;
+    var reef = 0.0;
     if planet.w > 0.0 {
         let n = i32(planet.y);
         let warp = vec2(value_noise(xz * 0.21), value_noise(xz * 0.21 + vec2(31.0, 7.0))) * 1.2;
@@ -497,10 +513,12 @@ fn fragment(
         rock_type = clamp(i32(textureLoad(rock_field, cell, 0).r + 0.5), 0, 5);
         let offset = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).g;
         level = height / planet.z + offset;
-        lava = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0).b;
+        let field = textureSampleLevel(rock_field, rock_sampler, (xz + 0.5) / planet.y, 0.0);
+        lava = field.b;
+        reef = field.a;
     }
     let albedo = ground(xz, height, up, a, b, c, wet, wet, dir2, descent, footprint, globals.time,
-        rock_type, level, lava)
+        rock_type, level, lava, reef)
         * tint.rgb;
 
     // Cel lighting from the sun (the first directional light).

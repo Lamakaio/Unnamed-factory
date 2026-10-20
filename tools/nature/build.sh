@@ -71,4 +71,17 @@ Q=$QUATERNIUS
     "clover=ground=$Q/Clover_1.gltf" \
     "mushrooms=ground=$Q/Mushroom_Common.gltf" \
     "plant=ground=$Q/Plant_1.gltf" \
-    "wispy_grass=ground=$Q/Grass_Wispy_Tall.gltf"
+    "wispy_grass=ground=$Q/Grass_Wispy_Tall.gltf" \
+    "palm_tall=lowtree=$K/tree_palmTall.glb=4f7a2a=8" \
+    "palm_bend=lowtree=$K/tree_palmBend.glb=4f7a2a=8" \
+    "palm_short=lowtree=$K/tree_palmShort.glb=557d2c=6" \
+    "palm_detailed=lowtree=$K/tree_palmDetailedTall.glb=4a7228=8" \
+    "acacia=lowtree=$K/tree_plateau.glb=6b7a2e=8" \
+    "jungle_a=lowtree=$K/tree_detailed_dark.glb=2f5a1e=10" \
+    "jungle_b=lowtree=$K/tree_fat_darkh.glb=2a521c=10" \
+    "jungle_c=lowtree=$K/tree_tall_dark.glb=2f5a1e=11" \
+    "jungle_d=lowtree=$K/tree_blocks_dark.glb=335e20=9" \
+    "mangrove=lowtree=$K/plant_bushLarge.glb=3b5a26=20" \
+    "mangrove_b=lowtree=$K/plant_bushLargeTriangle.glb=36552a=24" \
+    "bamboo=lowtree=$K/crops_bambooStageB.glb=6a8a30=7" \
+    "tundra_shrub=lowwood=$K/plant_bushSmall.glb=7a6a3a=3"

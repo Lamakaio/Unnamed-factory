@@ -166,6 +166,8 @@ pub struct Planet {
     /// The volcanoes (see `volcanoes`), and fresh lava over each cell (0..1, active ones).
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
     pub lava: Vec<f32>,
+    /// Coral reef over each cell (0..1, see `reefs`).
+    pub reef: Vec<f32>,
     /// How rugged the ground is (0..1, from the provinces and ranges): fine detail strength.
     pub ruggedness: Vec<f32>,
     /// 1 where fine detail must vanish (rivers and lakes), 0 elsewhere, softened.
@@ -826,6 +828,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         |i| boundaries[i].arc,
         |i| if !sea[i] && boundaries[i].belt > 0.4 && to_sea[i] < COASTAL_ARC { 1. } else { 0. },
         velocity,
+        |i| sea[i],
     );
     let volcanic = crate::volcanoes::build(&grid, radius, settings.seed, &volcanoes, &mut heights, &mut sea);
     let mut rock: Vec<u8> = shape.rock.iter().map(|&r| r as u8).collect();
@@ -836,6 +839,8 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
             strata[i] = 0.;
         }
     }
+    // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes.
+    let reef = crate::reefs::build(&grid, radius, settings.seed, &volcanoes, &mut heights, &mut sea);
     lap("  volcanoes", &mut timings);
     // Lakes (real ones, with basins of their own), filled flats and dry basins below sea level.
     let crate::planet_lakes::Hydrology { filled, drainage, lake_depth, base, mut wetland, basins } =
@@ -916,6 +921,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         rock,
         strata,
         lava: volcanic.lava,
+        reef,
         volcanoes,
         strata_scale,
         rivers,

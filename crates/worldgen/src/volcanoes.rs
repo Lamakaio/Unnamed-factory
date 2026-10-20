@@ -55,13 +55,15 @@ const STRATO_HEIGHT: (f32, f32) = (9., 18.);
 const STRATO_RADIUS: f32 = 2.6;
 /// Hotspots: plumes per million cells, volcanoes per chain, spacing along it (cells), height
 /// and radius per height.
-const HOTSPOTS_PER_MILLION: f32 = 1.4;
-const CHAIN: (usize, usize) = (3, 8);
+const HOTSPOTS_PER_MILLION: f32 = 2.5;
+const CHAIN: (usize, usize) = (4, 8);
 const CHAIN_SPACING: (f32, f32) = (28., 45.);
 const SHIELD_HEIGHT: (f32, f32) = (10., 16.);
 const SHIELD_RADIUS: f32 = 5.;
 /// How deep old volcanoes sink at sea (world units, at age 1).
 const SUBSIDENCE: f32 = 9.;
+/// Share of the hotspots under the oceans.
+const OCEANIC_HOTSPOTS: f32 = 0.8;
 
 /// Where volcanoes are. `arc(i)` is how much a cell is on an island arc (0..1), `coastal_belt`
 /// a young range near the coast; `velocity(direction)` the surface velocity of the plate there
@@ -73,6 +75,7 @@ pub fn place(
     arc: impl Fn(usize) -> f32,
     coastal_belt: impl Fn(usize) -> f32,
     velocity: impl Fn(Vec3) -> Vec3,
+    sea: impl Fn(usize) -> bool,
 ) -> Vec<Volcano> {
     let seed = seed as u32 ^ 0x701C;
     let random = |a: u32, b: u32| hash(seed, a, b) as f32 / u32::MAX as f32;
@@ -106,7 +109,12 @@ pub fn place(
     // Hotspots: chains along the plate's motion, oldest furthest downstream.
     let count = (HOTSPOTS_PER_MILLION * grid.len() as f32 / 1e6).round() as u32;
     for k in 0..count {
-        let i = (hash(seed, k, 10) as usize) % grid.len();
+        // Mostly under the oceans (as on Earth), now and then under a continent.
+        let oceanic = random(k, 13) < OCEANIC_HOTSPOTS;
+        let i = (0..32)
+            .map(|t| (hash(seed, k, 10 + 1000 * t) as usize) % grid.len())
+            .find(|&i| sea(i) == oceanic)
+            .unwrap_or((hash(seed, k, 10) as usize) % grid.len());
         let plume = grid.direction(i);
         let motion = velocity(plume).reject_from(plume).normalize_or_zero();
         if motion == Vec3::ZERO {
@@ -116,7 +124,8 @@ pub fn place(
         let spacing = CHAIN_SPACING.0 + (CHAIN_SPACING.1 - CHAIN_SPACING.0) * random(k, 12);
         let mut here = plume;
         for step in 0..length {
-            let age = step as f32 / (CHAIN.1 - 1) as f32;
+            // (From new over the plume to old and sunk at the far end.)
+            let age = step as f32 / (length - 1) as f32;
             let height = (SHIELD_HEIGHT.0 + (SHIELD_HEIGHT.1 - SHIELD_HEIGHT.0) * random(k, 20 + step as u32))
                 * (1. - 0.35 * age);
             if far_from_all(&volcanoes, here, spacing * 0.6) {

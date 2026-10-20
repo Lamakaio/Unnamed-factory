@@ -218,7 +218,7 @@ fn tile_mesh(surface: &PlanetSurface, face: usize, tile: IVec2) -> Option<(Mesh,
         let dy = surface.position(face, p + Vec2::Y * e) - surface.position(face, p - Vec2::Y * e);
         let steepness = 1. - dx.cross(dy).normalize_or_zero().dot(up).abs();
         // (The terrain shader puts sand below 0.15–0.45 above the water.)
-        let beach = height < 0.3 && surface.ocean.bilinear(face, p) > 0.02;
+        let beach = height < 0.3 && surface.ocean.bilinear(face, p) > super::mesh::COAST.0;
         if surface.wetness(face, p) > 0.02 || steepness > 0.3 || beach {
             continue;
         }

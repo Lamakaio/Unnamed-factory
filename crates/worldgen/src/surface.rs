@@ -119,6 +119,8 @@ pub struct PlanetSurface {
     pub rock: FaceField,
     pub lava: FaceField,
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
+    /// Coral reef (0..1, see `reefs`).
+    pub reef: FaceField,
     /// The ocean (1) and land (0), blurred a little: near 0.5 at the coast, small but not 0
     /// on land near it. Land below sea level (dry basins) is land.
     pub ocean: FaceField,
@@ -183,6 +185,7 @@ impl PlanetSurface {
             ocean: FaceField::new(planet, &ocean),
             rock: FaceField::new(planet, &planet.rock.iter().map(|&r| r as f32).collect::<Vec<_>>()),
             lava: FaceField::new(planet, &planet.lava),
+            reef: FaceField::new(planet, &planet.reef),
             volcanoes: planet.volcanoes.clone(),
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),

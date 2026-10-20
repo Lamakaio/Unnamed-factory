@@ -28,7 +28,7 @@ use worldgen::{
 
 use super::{
     CHUNK_CELLS, PlanetChunk, PlanetWorld,
-    mesh::distance_to_chunk,
+    mesh::{COAST, distance_to_chunk},
     nature::{
         GROUND_CELL, GROUND_FADE, Instance, Kind, LARGE_CELL, LEVEL_MARGIN, LOD_FADE,
         LOD0_DISTANCE, MAX_TASKS, METERS_TO_WORLD, NEAR_DISTANCE, PATCH_CELL, PATCH_COVER,
@@ -43,8 +43,10 @@ use crate::AppState;
 /// beyond [`DROP_DISTANCE`] they drop it.
 const PLACE_DISTANCE: f32 = 260.;
 const DROP_DISTANCE: f32 = 320.;
-/// Ground this close above sea level is beach.
-const BEACH_HEIGHT: f32 = 0.2;
+/// Ground this close above sea level is beach (along the ocean, see `mesh::COAST`).
+const BEACH_HEIGHT: f32 = 0.3;
+/// Beaches within this latitude (its sine) are tropical (palms).
+const TROPICAL_SIN: f32 = 0.45;
 /// Scale of the rock a hillside spring comes out of (on top of [`METERS_TO_WORLD`]), as on the
 /// flat map.
 const SPRING_ROCK_SCALE: f32 = 5.;
@@ -454,8 +456,8 @@ fn scatter_rocks(surface: &PlanetSurface, chunk: &PlanetChunk) -> Vec<Instance> 
             let (x, z) = (first.x + gx, first.y + gz);
             let p = Vec2::new(x as f32 + random(x, z, 1), z as f32 + random(x, z, 2)) * step - 0.5;
             let height = surface.heights.bilinear(chunk.face, p);
-            if height <= BEACH_HEIGHT
-                || surface.ocean.bilinear(chunk.face, p) > 0.02
+            if height <= 0.
+                || surface.ocean.bilinear(chunk.face, p) > COAST.0
                 || surface.lake_depth.bilinear(chunk.face, p) > 0.02
                 || surface.marsh.bilinear(chunk.face, p).abs() > 0.4
             {
@@ -563,9 +565,14 @@ fn biome(surface: &PlanetSurface, face: usize, p: Vec2, cell_length: f32, groves
     if ocean > 0.5 || height <= 0. && ocean > 0.02 || surface.lake_depth.bilinear(face, p) > 0.02 {
         return Biome::Sea;
     }
-    // (Beaches only along the ocean: dry basins below sea level are land.)
-    if height < BEACH_HEIGHT && ocean > 0.02 {
-        return Biome::Beach;
+    // (Beaches only along the ocean: dry basins below sea level are land.) Tropical ones, and
+    // reef islets, have palms.
+    let tropical = surface.direction(face, p).y.abs() < TROPICAL_SIN;
+    if height > 0. && surface.reef.bilinear(face, p) > 0.3 {
+        return Biome::TropicalBeach;
+    }
+    if height < BEACH_HEIGHT && ocean > COAST.0 {
+        return if tropical { Biome::TropicalBeach } else { Biome::Beach };
     }
     // Fresh lava: bare.
     if surface.lava.bilinear(face, p) > 0.4 {
