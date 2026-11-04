@@ -84,6 +84,41 @@ What carries over to any planet:
 
 ## 2. The world state
 
+### 2.1 Planet parameters (chosen 2026-11-04)
+
+Picked from a longer list (moons as tides, star as light colour, …). Life and events
+parameters are left for later. "Exists" means a setting already covers it.
+
+| # | Parameter | Changes | Where it plugs in |
+|---|---|---|---|
+| 1 | **Star type** (temperature) | sunlight colour, sky tint; later foliage colour (§5) | game lighting and sky; colour palette |
+| 2 | **Star brightness** now and its brightening with age | overall temperature; the long-term pressure on the climate | climate `solar` (exists) from star + age |
+| 4 | **Year length** (orbital distance and period) | seasons' length: a long year gives land time to heat and freeze (stronger seasons, more continental); a short one evens them out | climate's month length (`dt`) |
+| 5 | **Eccentricity** (and where perihelion falls) | one hemisphere's summer hotter than the other's; seasons of unequal length | climate insolation × 1/r², orbit timing |
+| 6 | **Axial tilt** (exists) | seasons, ice caps, tropics; extremes (0°, > 54°) | climate `tilt` |
+| 7 | **Tilt and orbit cycles** (wobble) | ice ages coming and going | deep time (E3); a snapshot uses the current phase |
+| 8 | **Day length** (rotation) | climate belts: a slow spin widens the tropical cells (fewer, wider bands, dry belts further out), a fast one narrows them (more bands, stronger jets); day–night temperature range | climate pressure belts and Coriolis turning |
+| 9 | **Moons** (count, size, distance) | tides: tidal flats, wide estuaries, tidal range on coasts; a big moon keeps the tilt steady (without one, #7 swings much wider); the night sky | new: tidal range per coast → shore features; game sky, tide animation |
+| 13 | **Age** | star brightness (#2); interior heat → volcano count, outgassing; how worn old ranges are; crater count (#20) | volcanoes, tectonic history, erosion settings |
+| 17 | **Supercontinent phase** | assembled (one big land, dry interior, monsoons) ↔ dispersed (many coasts, wetter) | land/continent placement in the shape stage |
+| 20 | **Impact rate** | craters, more and fresher on young planets and dry, slow-eroding ones | new feature stage (like volcanoes) |
+| 21 | **Water amount** | land share (an ocean world ↔ a desert world with small seas) | `land_fraction` (exists) derived from water volume and the relief |
+| 23 | **Salinity** | sea-ice freezing point, salt flats and evaporites, brackish lakes | sea ice, deserts' salt flats, lake colours |
+| 24 | **Ocean chemistry** (iron, sulphur) | sea colour (green, brown, purple-tinted), banded rock on shores | water shader colour; rock colour |
+| 25 | **Ocean current strength** | how much coasts are warmed or chilled (mild west coasts, fog deserts) | climate `current_anomaly` scale |
+| 27 | **CO₂** | greenhouse, sea acidity (later: reefs), weathering (later) | climate `greenhouse` (exists) from the gases |
+| 28 | **CH₄** | strong greenhouse; an orange haze above a level (sky colour, cooling) | climate; sky |
+| 29 | **O₂** | red (oxidised) ground; blue sky; later land life and fires | ground colour; sky |
+| 32 | **Dust and aerosols** | hazy sky, red sunsets, cooling | climate albedo; sky and fog |
+| 34 | **Albedo of ground types** | bright deserts and ice cool, dark rock and forests warm; ice–albedo runaway (snowball) | climate albedo per cell (today: ice only) |
+| 35 | **Soil depth and type** | ground colour (rock showing through thin soil), how easily it erodes | ground colours; erosion's erodibility |
+| 36 | **Erosion rates** (exist) | sharp young ↔ soft old landscapes | `ErosionSettings` |
+
+Until the life parameters are designed, life is a single switch (none ↔ today's
+vegetation), so a virgin planet can already be shown.
+
+### 2.2 Everything together
+
 The world at a given moment is:
 
 | Parameter | Range (indicative) | Drives |
@@ -242,9 +277,17 @@ Not a priority now (V3). The direction:
 
 Each leaves the game runnable.
 
-1. **E1 – State-driven planet.** `PlanetSettings` gets the world state (§2) with presets;
-   the gates of §3 on vegetation, reefs, limestone, mangroves, marsh, river width and style,
-   dunes; ground, sea and sky colours; greenhouse and star brightness in the climate.
+1. **E1 – State-driven planet.** The parameters of §2.1, in steps:
+   - **E1a – Star, orbit, atmosphere in the climate**: a `World` settings struct with
+     presets; brightness from star and age, year length, eccentricity, day length (belts),
+     CO₂ and CH₄ → greenhouse, dust, albedo per ground type, current strength.
+   - **E1b – Colours**: sunlight from the star; sky from gases and dust; sea from its
+     chemistry; ground from O₂ and soil; salinity in sea ice and salt flats; the life switch
+     (§2.1) gating vegetation, reefs, limestone, mangroves, marsh, rivers, dunes (§3).
+   - **E1c – Geology from age**: volcanism, worn ranges, craters (#20), supercontinent
+     phase, water amount → land share, soil and erosion.
+   - **E1d – Moons and tides**: tidal range per coast, tidal flats and estuaries; moons in
+     the game's sky.
    Previews and screenshots for each preset.
 2. **E2 – Setting and cover.** Split `Biome` into setting and cover; cover as fractions of
    the land forms from the state and the cell's climate; foliage palette from the star.
