@@ -70,6 +70,9 @@ pub struct PlanetSettings {
     pub area_exponent: f32,
     pub diffusion: f32,
     pub routing_jitter: f32,
+    /// The world: age, star, orbit, atmosphere… (`docs/evolution.md`). The climate takes
+    /// its parameters from it (`World::climate`).
+    pub world: crate::world::World,
 }
 
 impl Default for PlanetSettings {
@@ -99,6 +102,7 @@ impl Default for PlanetSettings {
             area_exponent: 0.45,
             diffusion: 0.05,
             routing_jitter: 1.,
+            world: crate::world::World::default(),
         }
     }
 }

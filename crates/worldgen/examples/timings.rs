@@ -84,7 +84,7 @@ fn main() {
         .map(|t| (t.0.trim().to_string(), t.1.as_secs_f64()))
         .collect();
     let t = Instant::now();
-    let climate = simulate(&planet, &ClimateSettings::default());
+    let climate = simulate(&planet, &planet.settings.world.climate());
     stages.push(("climate".into(), t.elapsed().as_secs_f64()));
     let t = Instant::now();
     let surface = PlanetSurface::new(&planet, Some(&climate));

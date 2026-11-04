@@ -21,6 +21,7 @@ pub mod springs;
 pub mod surface;
 pub mod tectonics;
 pub mod volcanoes;
+pub mod world;
 
 mod barriers;
 mod channels;

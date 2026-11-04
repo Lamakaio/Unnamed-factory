@@ -136,11 +136,11 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Glaciers** (`glaciers.rs`): ice where summers stay below freezing (the equilibrium line
   idea of glaciology, e.g. Benn and Evans, *Glaciers and Glaciation*), tongues down the
   valleys, moraines at the margins.
-- **Desert types** (`surface.rs::deserts`): ergs, regs and badlands as classified in desert
+- **Desert types** (`surface/features.rs::deserts`): ergs, regs and badlands as classified in desert
   geomorphology (e.g. A. Goudie, *Arid and Semi-Arid Geomorphology*, 2013); transverse dunes
   with a gentle stoss side and a steep slip face (R. A. Bagnold, *The Physics of Blown Sand
   and Desert Dunes*, 1941).
-- **Karst** (`surface.rs::karst`): tower karst in humid tropics, dolines elsewhere (D. Ford and
+- **Karst** (`surface/features.rs::karst`): tower karst in humid tropics, dolines elsewhere (D. Ford and
   P. Williams, *Karst Hydrogeology and Geomorphology*, 2007); towers placed with cellular
   (Worley) noise (S. Worley, *A Cellular Texture Basis Function*, SIGGRAPH 1996).
 - **Barrier islands** (`barriers.rs`): sand bars on low, gently sloping coasts with lagoons
@@ -151,3 +151,13 @@ someone else's work, add it here (and mention it in the code comment where it is
   Reefs*, 1842 (the subsidence theory); corals in warm tropical seas.
 - **New nature models** (`tools/nature/build.sh`: palms, acacia, jungle trees, mangroves,
   bamboo, tundra shrub): Kenney Nature Kit (CC0), recoloured and rescaled.
+- **World parameters in the climate** (`world.rs`, `climate.rs`): the star's brightening with
+  age (D. O. Gough, *Solar interior structure and luminosity variations*, Solar Physics 74,
+  1981); CO₂ and CH₄ forcing (G. Myhre et al., *New estimates of radiative forcing due to well
+  mixed greenhouse gases*, GRL 25, 1998), with CO₂'s growth at high levels fitted to
+  B. Byrne and C. Goldblatt, *Radiative forcing at high concentrations of well-mixed
+  greenhouse gases*, GRL 41, 2014; organic haze above CH₄/CO₂ ≈ 0.1 (as in studies of the
+  Archean Earth, e.g. Catling and Zahnle, *The Archean atmosphere*, Science Advances 2020);
+  Kepler's equation for the orbit; fewer, wider circulation cells and more poleward heat
+  transport on slowly spinning planets (Hadley width ∝ rotation^-1/3: S. Hill et al. 2019;
+  Y. Kaspi and A. Showman, ApJ 804, 2015).

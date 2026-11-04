@@ -23,10 +23,11 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, futures::check_ready},
 };
 use worldgen::{
-    climate::{ClimateSettings, PlanetClimate, simulate},
+    climate::{PlanetClimate, simulate},
     planet::{PlanetSettings, generate_planet},
     sphere::FACES,
     surface::PlanetSurface,
+    world::World,
 };
 
 use crate::{
@@ -100,13 +101,23 @@ struct Generation(Task<PlanetWorld>);
 fn start_generation(mut commands: Commands, seed: u64, n: usize) {
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let start = Instant::now();
+        // (`UF_WORLD=<preset>[,name=value...]` picks the world: `earth`, `virgin`, with
+        // parameters changed; see `World::parse`.)
+        let world = match std::env::var("UF_WORLD") {
+            Ok(description) => World::parse(&description).unwrap_or_else(|e| {
+                warn!("UF_WORLD: {e}");
+                World::default()
+            }),
+            Err(_) => World::default(),
+        };
         let planet = generate_planet(&PlanetSettings {
             seed,
             n,
+            world,
             ..default()
         });
         let stage = Instant::now();
-        let climate = simulate(&planet, &ClimateSettings::default());
+        let climate = simulate(&planet, &planet.settings.world.climate());
         let climate_time = stage.elapsed();
         let stage = Instant::now();
         let surface = PlanetSurface::new(&planet, Some(&climate));

@@ -2,15 +2,16 @@
 //! (equirectangular), and zonal means to check the patterns everyone knows (temperatures and
 //! rain; the prevailing wind's east / north components, mean speed and steadiness).
 //!
-//! `cargo run -p worldgen --release --example climate_preview -- <out_dir> [--n <cells>] [seeds...]`
+//! `cargo run -p worldgen --release --example climate_preview -- <out_dir> [--n <cells>] [--world <preset>[,name=value...]] [seeds...]`
 
 use std::{fs::File, io::BufWriter, path::Path, time::Instant};
 
 use bevy_math::Vec3;
 use worldgen::{
-    climate::{ClimateSettings, Koppen, simulate},
+    climate::{Koppen, simulate},
     grid::Grid,
     planet::{PlanetSettings, generate_planet},
+    world::World,
 };
 
 fn main() {
@@ -21,9 +22,12 @@ fn main() {
     std::fs::create_dir_all(&out).unwrap();
     let mut n = 256;
     let mut seeds = Vec::new();
+    let mut world = World::default();
     while let Some(arg) = args.next() {
         if arg == "--n" {
             n = args.next().unwrap().parse().unwrap();
+        } else if arg == "--world" {
+            world = World::parse(&args.next().unwrap()).unwrap_or_else(|e| panic!("{e}"));
         } else {
             seeds.push(arg.parse::<u64>().unwrap());
         }
@@ -35,10 +39,11 @@ fn main() {
         let planet = generate_planet(&PlanetSettings {
             seed,
             n,
+            world: world.clone(),
             ..Default::default()
         });
         let start = Instant::now();
-        let climate = simulate(&planet, &ClimateSettings::default());
+        let climate = simulate(&planet, &planet.settings.world.climate());
         println!(
             "seed {seed}: climate in {:.2} s",
             start.elapsed().as_secs_f32()

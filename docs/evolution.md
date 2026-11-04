@@ -281,6 +281,8 @@ Each leaves the game runnable.
    - **E1a – Star, orbit, atmosphere in the climate**: a `World` settings struct with
      presets; brightness from star and age, year length, eccentricity, day length (belts),
      CO₂ and CH₄ → greenhouse, dust, albedo per ground type, current strength.
+     *Done 2026-11-04* (`world.rs`): a CO₂-rich virgin planet (0.3 bar under a star at 74 %)
+     comes out ~8 °C cooler than Earth, not frozen.
    - **E1b – Colours**: sunlight from the star; sky from gases and dust; sea from its
      chemistry; ground from O₂ and soil; salinity in sea ice and salt flats; the life switch
      (§2.1) gating vegetation, reefs, limestone, mangroves, marsh, rivers, dunes (§3).

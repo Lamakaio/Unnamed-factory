@@ -89,7 +89,8 @@ crates/worldgen/        world generation (no Bevy ECS), in pipeline order:
                         field.rs: `FaceField`; features.rs: riparian, karst, deserts, sea ice; relief.rs: gullies,
                         dunes, karst towers; channels.rs: carved rivers; glaciers.rs, springs.rs) → sea.rs;
                         shared: sphere.rs + grid.rs (cube-sphere grid), flow.rs (routing, filling), par.rs
-                        (all parallelism), noise.rs, geology.rs (rock types), detail.rs (gullies)
+                        (all parallelism), noise.rs, geology.rs (rock types), detail.rs (gullies), world.rs
+                        (`World`: age, star, orbit, atmosphere, ocean, albedos, life; presets; `docs/evolution.md`)
 crates/worldgen/examples planet_preview, planet_probe, climate_preview, tectonics_preview, tectonics_stats, timings
 tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
@@ -292,8 +293,16 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     the crust (noise details the coasts), young uplift → belts / foothills / island arcs, old
     uplift → worn ranges, young ocean floor → ridges; ridges run along belts (`across` from the
     belt strength's contours).
+  - `world.rs` (`docs/evolution.md` E1a): `World` (in `PlanetSettings::world`) holds the
+    world's parameters; `World::climate()` gives the `ClimateSettings` (sunlight from the star
+    and its age with Gough's brightening, greenhouse from CO₂ and CH₄, haze and dust albedo,
+    orbit, day length, ground albedos). Presets `earth` (default), `virgin`; `World::parse`
+    takes `virgin,day=240,...` (`climate_preview --world`, the game's `UF_WORLD`).
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
-    PlanetClimate`, twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
+    PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
+    sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo
+    from sea, rock or plants, deserts (a second energy-balance pass once the rain is known),
+    ice, air) twelve months per cell of a coarse cube-sphere (n = 48), as if the planet
     were Earth-sized: energy balance per cell (insolation by latitude and tilt, `A + B T`,
     ice albedo, ocean/land heat capacity, implicit diffusive transport weaker over land,
     rule-based ocean current anomalies), winds from pressure belts around the ITCZ (plus warm

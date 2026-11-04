@@ -25,33 +25,53 @@ use std::f32::consts::{PI, TAU};
 
 use bevy_math::{Vec2, Vec3};
 
-use crate::{grid::Grid, noise::smoothstep, par, planet::Planet, sphere::SphereGrid};
+use crate::{
+    grid::Grid,
+    noise::smoothstep,
+    par,
+    planet::Planet,
+    sphere::SphereGrid,
+    world::{Albedo, World},
+};
 
-/// Climate parameters (Earth's by default).
+/// Climate parameters (Earth's by default; `World::climate` sets them from the world's).
 #[derive(Clone, Debug)]
 pub struct ClimateSettings {
     /// Cells along a face edge of the climate grid.
     pub n: usize,
-    /// Axial tilt (degrees) and solar constant (W/m²).
+    /// Axial tilt (degrees) and solar constant (W/m², at the mean distance).
     pub tilt: f32,
     pub solar: f32,
     /// Greenhouse strength: lowers the outgoing longwave (W/m²; 0 for Earth).
     pub greenhouse: f32,
+    /// Year length (Earth years), eccentricity, the star's longitude at perihelion (degrees
+    /// from the northern spring equinox) and day length (hours): see `world::Orbit`.
+    pub year: f32,
+    pub eccentricity: f32,
+    pub perihelion: f32,
+    pub day: f32,
+    /// Albedo added by haze and dust in the air.
+    pub haze: f32,
+    /// Surface albedos, and whether plants cover the land.
+    pub albedo: Albedo,
+    pub life: bool,
+    /// Strength of the ocean current anomalies (1: Earth's).
+    pub currents: f32,
     /// Meters of altitude per world unit of height (the planet's relief is exaggerated).
     pub meters_per_unit: f32,
 }
 
 impl Default for ClimateSettings {
+    /// Earth's.
     fn default() -> Self {
-        Self {
-            n: 48,
-            tilt: 23.44,
-            solar: 1361.,
-            greenhouse: 0.,
-            meters_per_unit: 100.,
-        }
+        World::default().climate()
     }
 }
+
+/// Cells along a face edge of the climate grid, and meters of altitude per world unit, by
+/// default.
+pub(crate) const GRID_CELLS: usize = 48;
+pub(crate) const METERS_PER_UNIT: f32 = 100.;
 
 /// Earth's radius (m), for the transport scales.
 const EARTH_RADIUS: f32 = 6.371e6;
@@ -93,9 +113,17 @@ const ALTITUDE_GAIN: (f32, f32) = (0.3, 3000.);
 const LAPSE: f32 = 0.0065;
 /// Strength of the ocean current anomalies (W/m²).
 const CURRENTS: f32 = 35.;
-/// Energy balance steps per month, and years run before the recorded one.
+/// Energy balance steps per month, and Earth years run before the recorded one.
 const STEPS_PER_MONTH: usize = 4;
-const SPIN_UP_YEARS: usize = 6;
+const SPIN_UP_YEARS: usize = 7;
+/// The northern spring equinox (share of the year from 1 January: around 21 March).
+const SPRING: f32 = 0.25 - 10. / 365.25;
+/// Planetary albedo: what the air and clouds reflect, and the share of the surface's albedo
+/// seen through them (Earth: about 0.3 in all).
+const ATMOSPHERE_ALBEDO: f32 = 0.24;
+const SURFACE_SEEN: f32 = 0.6;
+/// Land is desert (bright ground) below this annual precipitation (mm), not above this.
+const DESERT_RAIN: (f32, f32) = (200., 500.);
 
 /// A month's climate of a cell.
 #[derive(Clone, Copy, Debug, Default)]
@@ -195,69 +223,39 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
         .collect();
     let currents = current_anomaly(&grid, &land, &latitudes, &longitudes);
 
-    // Energy balance: sea-level temperatures, stepped through the years.
-    let capacity: Vec<f32> = land
-        .iter()
-        .map(|&l| l * LAND_CAPACITY + (1. - l) * OCEAN_CAPACITY)
-        .collect();
-    let dt = 365.25 * 86400. / (12 * STEPS_PER_MONTH) as f32;
-    let spacing = std::f32::consts::FRAC_PI_2 / settings.n as f32;
-    let coupling = DIFFUSION / (spacing * spacing);
-    let tilt = settings.tilt.to_radians();
+    // Energy balance: sea-level temperatures, stepped through the years. (Run again once the
+    // rain is known: deserts are brighter.)
+    let energy = EnergyBalance {
+        settings,
+        latitudes: &latitudes,
+        land: &land,
+        altitude: &altitude,
+        side: &side,
+        currents: &currents,
+    };
     let mut temperature: Vec<f32> = latitudes
         .iter()
         .map(|&l| 15. - 30. * l.sin().powi(2))
         .collect();
-    let mut monthly_t = vec![[0f32; 12]; cells];
-    for year in 0..=SPIN_UP_YEARS {
-        for month in 0..12 {
-            for step in 0..STEPS_PER_MONTH {
-                let t = (month as f32 + (step as f32 + 0.5) / STEPS_PER_MONTH as f32) / 12.;
-                // Solstices around 21 December / 21 June.
-                let declination = -tilt * (TAU * (t + 10. / 365.25)).cos();
-                // Local energy balance (explicit), then the heat transport (implicit: it is far
-                // stiffer than the local terms).
-                let previous = temperature.clone();
-                let local = par::map(cells, |i| {
-                    let surface = previous[i] - LAPSE * altitude[i];
-                    let ice = smoothstep(-5., -15., surface);
-                    let albedo = 0.3 + 0.25 * ice * (0.6 + 0.4 * land[i]);
-                    let absorbed =
-                        insolation(settings.solar, latitudes[i], declination) * (1. - albedo);
-                    let emitted = OLR_A - settings.greenhouse + OLR_B * previous[i];
-                    let current = currents[i] * (1. - land[i]);
-                    previous[i] + dt * (absorbed - emitted + current) / capacity[i]
-                });
-                // (C/dt + Σ K) T_i = C/dt T_local + Σ K T_j, by Gauss–Seidel sweeps.
-                // (Weaker over land: the air over continents heats and cools with them, so
-                // their interiors get hot summers and cold winters.)
-                for _ in 0..TRANSPORT_SWEEPS {
-                    for i in 0..cells {
-                        let c = capacity[i] / dt;
-                        let (mut sum, mut weight) = (0., 0.);
-                        for &j in &side[i] {
-                            let k = coupling * (1. - LAND_DECOUPLING * (land[i] + land[j]) / 2.);
-                            sum += k * temperature[j];
-                            weight += k;
-                        }
-                        temperature[i] = (c * local[i] + sum) / (c + weight);
-                    }
-                }
-                if year == SPIN_UP_YEARS {
-                    for (months, t) in monthly_t.iter_mut().zip(&temperature) {
-                        months[month] += t / STEPS_PER_MONTH as f32;
-                    }
-                }
-            }
-        }
-    }
+    // (Spun up for as many Earth years whatever the year's length: the ocean's heat takes
+    // years to settle.)
+    let spin_up = (SPIN_UP_YEARS as f32 / settings.year).ceil().clamp(2., 60.) as usize;
+    let mut monthly_t = energy.run(&mut temperature, &vec![0.; cells], spin_up);
 
     // Winds and rain, month by month.
     let mut months = vec![[Month::default(); 12]; cells];
     let mut wind_out = [vec![Vec3::ZERO; cells], vec![Vec3::ZERO; cells]];
     let (mut prevailing, mut strength) = (vec![Vec3::ZERO; cells], vec![0f32; cells]);
     let mut land_wetness = vec![0.5f32; cells];
+    let mut annual = vec![0f32; cells];
     for pass in 0..2 {
+        if pass == 1 {
+            let dryness: Vec<f32> = annual
+                .iter()
+                .map(|&p| smoothstep(DESERT_RAIN.1, DESERT_RAIN.0, p))
+                .collect();
+            monthly_t = energy.run(&mut temperature, &dryness, spin_up.div_ceil(2));
+        }
         for month in 0..12 {
             let t: Vec<f32> = (0..cells).map(|i| monthly_t[i][month]).collect();
             let wind = winds(
@@ -268,6 +266,7 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
                 &t,
                 &land,
                 &altitude,
+                settings.day,
             );
             let aloft: Vec<Vec3> = wind.iter().map(|w| w.1 * ALOFT).collect();
             let wind: Vec<Vec3> = wind.iter().map(|w| w.0).collect();
@@ -280,6 +279,11 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
                 &land_wetness,
                 &altitude,
             );
+            if pass == 0 {
+                for (a, p) in annual.iter_mut().zip(&precipitation) {
+                    *a += p;
+                }
+            }
             if pass == 1 {
                 for i in 0..cells {
                     months[i][month] = Month {
@@ -316,6 +320,117 @@ pub fn simulate(planet: &Planet, settings: &ClimateSettings) -> PlanetClimate {
         wind: wind_out,
         prevailing,
         strength,
+    }
+}
+
+/// Where the star is in the sky over the year: its declination (radians) and the planet's
+/// distance (share of the mean) at a time of year (0..1 from 1 January), on a Kepler orbit.
+fn orbit(settings: &ClimateSettings, t: f32) -> (f32, f32) {
+    let e = settings.eccentricity.clamp(0., 0.9);
+    let perihelion = settings.perihelion.to_radians();
+    // Mean anomaly (zero at perihelion): on a circular orbit, the star's longitude goes
+    // round evenly from the northern spring equinox.
+    let mean = TAU * (t - SPRING) - perihelion;
+    // Kepler's equation by Newton's method.
+    let mut eccentric = mean;
+    for _ in 0..6 {
+        eccentric -= (eccentric - e * eccentric.sin() - mean) / (1. - e * eccentric.cos());
+    }
+    let anomaly = 2.
+        * ((1. + e).sqrt() * (eccentric / 2.).sin())
+            .atan2((1. - e).sqrt() * (eccentric / 2.).cos());
+    let longitude = perihelion + anomaly;
+    (
+        settings.tilt.to_radians() * longitude.sin(),
+        1. - e * eccentric.cos(),
+    )
+}
+
+/// The energy balance of the climate grid.
+struct EnergyBalance<'a> {
+    settings: &'a ClimateSettings,
+    latitudes: &'a [f32],
+    land: &'a [f32],
+    /// Mean land altitude (m).
+    altitude: &'a [f32],
+    /// Side neighbours.
+    side: &'a [Vec<usize>],
+    /// Ocean current heating (W/m²).
+    currents: &'a [f32],
+}
+
+impl EnergyBalance<'_> {
+    /// Steps the sea-level temperatures through `years` years from `temperature` (left at the
+    /// end of the last), with the land `dryness` (0..1: deserts are brighter); returns the
+    /// last year's monthly means.
+    fn run(&self, temperature: &mut [f32], dryness: &[f32], years: usize) -> Vec<[f32; 12]> {
+        let settings = self.settings;
+        let (land, side) = (self.land, self.side);
+        let cells = land.len();
+        let capacity: Vec<f32> = land
+            .iter()
+            .map(|&l| l * LAND_CAPACITY + (1. - l) * OCEAN_CAPACITY)
+            .collect();
+        let dt = settings.year * 365.25 * 86400. / (12 * STEPS_PER_MONTH) as f32;
+        let spacing = std::f32::consts::FRAC_PI_2 / settings.n as f32;
+        // (Heat spreads less far on fast-spinning planets: their eddies are smaller.)
+        let spin = 24. / settings.day.max(1.);
+        let coupling = DIFFUSION / spin.cbrt() / (spacing * spacing);
+        let albedo = &settings.albedo;
+        let ground = if settings.life {
+            albedo.plants
+        } else {
+            albedo.rock
+        };
+        let mut monthly_t = vec![[0f32; 12]; cells];
+        for year in 0..years {
+            for month in 0..12 {
+                for step in 0..STEPS_PER_MONTH {
+                    let t = (month as f32 + (step as f32 + 0.5) / STEPS_PER_MONTH as f32) / 12.;
+                    let (declination, distance) = orbit(settings, t);
+                    let solar = settings.solar / (distance * distance);
+                    // Local energy balance (explicit), then the heat transport (implicit: it
+                    // is far stiffer than the local terms).
+                    let previous = temperature.to_vec();
+                    let local = par::map(cells, |i| {
+                        let surface_t = previous[i] - LAPSE * self.altitude[i];
+                        let on_land = ground + (albedo.desert - ground) * dryness[i];
+                        let mut surface = land[i] * on_land + (1. - land[i]) * albedo.sea;
+                        // (Sea ice covers less of a cold sea than snow does land.)
+                        let ice = smoothstep(-5., -15., surface_t) * (0.6 + 0.4 * land[i]);
+                        surface += (albedo.ice - surface) * ice;
+                        let reflected = ATMOSPHERE_ALBEDO + settings.haze + SURFACE_SEEN * surface;
+                        let absorbed =
+                            insolation(solar, self.latitudes[i], declination) * (1. - reflected);
+                        let emitted = OLR_A - settings.greenhouse + OLR_B * previous[i];
+                        let current = self.currents[i] * settings.currents * (1. - land[i]);
+                        previous[i] + dt * (absorbed - emitted + current) / capacity[i]
+                    });
+                    // (C/dt + Σ K) T_i = C/dt T_local + Σ K T_j, by Gauss–Seidel sweeps.
+                    // (Weaker over land: the air over continents heats and cools with them,
+                    // so their interiors get hot summers and cold winters.)
+                    for _ in 0..TRANSPORT_SWEEPS {
+                        for i in 0..cells {
+                            let c = capacity[i] / dt;
+                            let (mut sum, mut weight) = (0., 0.);
+                            for &j in &side[i] {
+                                let k =
+                                    coupling * (1. - LAND_DECOUPLING * (land[i] + land[j]) / 2.);
+                                sum += k * temperature[j];
+                                weight += k;
+                            }
+                            temperature[i] = (c * local[i] + sum) / (c + weight);
+                        }
+                    }
+                    if year + 1 == years {
+                        for (months, t) in monthly_t.iter_mut().zip(temperature.iter()) {
+                            months[month] += t / STEPS_PER_MONTH as f32;
+                        }
+                    }
+                }
+            }
+        }
+        monthly_t
     }
 }
 
@@ -391,8 +506,18 @@ fn winds(
     t: &[f32],
     land: &[f32],
     altitude: &[f32],
+    day: f32,
 ) -> Vec<(Vec3, Vec3)> {
     let cells = grid.len();
+    // Circulation cells per hemisphere (Earth's three: Hadley, Ferrel, polar): fewer and
+    // wider on slowly spinning planets, more and narrower on fast ones (the Hadley cell's
+    // width goes roughly as rotation^-1/3 in idealised models: Hill et al. 2019, Kaspi &
+    // Showman 2015).
+    let spin = 24. / day.max(1.);
+    let circulation_cells = (3. * spin.cbrt()).clamp(1., 8.);
+    // Coriolis turning of the surface wind off the pressure gradient (70° on Earth): less on
+    // slow planets.
+    let turning = (70f32.to_radians().tan() * spin).atan();
     // The thermal equator per longitude band: the warmest latitude within 35° of the equator
     // (zonal means per 2° band), smoothed along the longitudes.
     const BANDS: usize = 72;
@@ -455,7 +580,7 @@ fn winds(
             } else {
                 (lat - shift) / (90. + shift) * 90.
             };
-            let belts = -(6. * s.to_radians()).cos();
+            let belts = -(2. * circulation_cells * s.to_radians()).cos();
             let thermal = (t[i] - zonal_mean(latitudes[i])) * land[i];
             belts - 0.06 * thermal
         })
@@ -466,8 +591,7 @@ fn winds(
         // Coriolis turns the flow to the right in the north, left in the south (along the
         // isobars, friction keeping some flow toward low pressure).
         let lat = latitudes[i];
-        let turn =
-            -lat.signum() * 70f32.to_radians() * smoothstep(0., 12f32.to_radians(), lat.abs());
+        let turn = -lat.signum() * turning * smoothstep(0., 12f32.to_radians(), lat.abs());
         let polar =
             1. - (1. - POLAR_WIND) * smoothstep(60f32.to_radians(), 75f32.to_radians(), lat.abs());
         let mut flow = Vec2::from_angle(turn).rotate(down) * WIND_SCALE * polar;
@@ -860,5 +984,43 @@ impl WindField {
             strength += self.strength[c] * w;
         }
         (wind.reject_from(direction), strength)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orbit_seasons() {
+        let earth = ClimateSettings {
+            eccentricity: 0.,
+            ..ClimateSettings::default()
+        };
+        // A circular orbit: the declination of the former formula (solstices around 21 June
+        // and 21 December), at the mean distance.
+        for k in 0..48 {
+            let t = k as f32 / 48.;
+            let (declination, distance) = orbit(&earth, t);
+            let former = -earth.tilt.to_radians() * (TAU * (t + 10. / 365.25)).cos();
+            assert!(
+                (declination - former).abs() < 1e-4,
+                "{t}: {declination} {former}"
+            );
+            assert!((distance - 1.).abs() < 1e-5);
+        }
+        // An eccentric one: closest (1 - e) at perihelion, the north's summer solstice here.
+        let eccentric = ClimateSettings {
+            eccentricity: 0.3,
+            perihelion: 90.,
+            ..earth
+        };
+        let (closest, at) = (0..365)
+            .map(|d| d as f32 / 365.)
+            .map(|t| (orbit(&eccentric, t).1, t))
+            .fold((f32::MAX, 0.), |a, b| if b.0 < a.0 { b } else { a });
+        assert!((closest - 0.7).abs() < 1e-3, "{closest}");
+        let declination = orbit(&eccentric, at).0;
+        assert!((declination - eccentric.tilt.to_radians()).abs() < 0.01);
     }
 }
