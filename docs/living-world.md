@@ -404,7 +404,7 @@ layered erosion, volcanoes (arcs, hotspot chains) with geothermal fields, reefs 
 barrier islands, fjords, glaciers and ice caps, sea ice, karst. Details in AGENTS.md §3. Not
 yet: tidal flats and salt marshes, loess, permafrost patterning, moving ice.
 
-**Evolution (D3)** sits on top, at the deep-time clock. To be designed in its own document;
+**Evolution (D3)** sits on top, at the deep-time clock. Designed in `docs/evolution.md`;
 what the planet must provide to it:
 
 - per cell and per epoch: climate means (temperature, rain, seasonality), biome, elevation,
