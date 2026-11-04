@@ -247,9 +247,8 @@ pub fn build(
         let reach = v.radius * design.reach;
         let at_sea = sea[start];
         // Old volcanoes are lower; at sea, the summit's height above the water (sinking with
-        // age) over the floor round it.
+        // age).
         let height = v.height * (1. - 0.4 * v.age);
-        let floor = heights[start];
         let summit = height - SUBSIDENCE * v.age;
         // The local frame at the summit (world units east and north of it).
         let east = Vec3::Y
@@ -281,9 +280,13 @@ pub fn build(
                 |p: Vec3, octaves| layer.fbm3(p, octaves),
                 d * radius,
             );
-            // (The digging by the volcano's own height: at sea, not by its rise from the floor.)
+            // (The digging by the volcano's own height: at sea, not by its rise from the floor.
+            // At sea it rises from the floor under each cell, never below it: rising from the
+            // summit cell's floor made a flat disc out to its reach, poking out of the water in
+            // a perfect circle when that floor was shallow.)
             let built_height = if at_sea {
-                floor + (summit - floor) * shape.rise - height * shape.dig
+                let floor = heights[i];
+                floor.max(floor + (summit - floor) * shape.rise) - height * shape.dig
             } else {
                 heights[i] + height * (shape.rise - shape.dig)
             };
