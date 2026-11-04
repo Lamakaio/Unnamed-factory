@@ -138,6 +138,8 @@ pub struct Planet {
     /// The volcanoes (see `volcanoes`), and fresh lava over each cell (0..1, active ones).
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
     pub lava: Vec<f32>,
+    /// The impact craters (see `craters`).
+    pub craters: Vec<crate::craters::Crater>,
     /// Geothermal fields (hot springs: 0..1, round young volcanoes).
     pub geothermal: Vec<f32>,
     /// Coral reef over each cell (0..1, see `reefs`).
@@ -157,6 +159,30 @@ impl Planet {
     /// The planet's radius, in cells.
     pub fn radius(&self) -> f32 {
         2. * self.settings.n as f32 / std::f32::consts::PI
+    }
+}
+
+/// Worn old ranges need time: their share grows over the planet's first this many Gyr.
+const OLD_RANGES_AGE: f32 = 2.;
+
+impl PlanetSettings {
+    /// What the world's parameters make of these settings, as generation runs them: land
+    /// share from the water and the continental crust grown so far, worn ranges from the
+    /// age, the erosion rate, soil creep from the soil's depth.
+    fn for_world(&self) -> Self {
+        let world = &self.world;
+        let growth = world.continental_growth();
+        let mut settings = self.clone();
+        settings.land_fraction = world.land_fraction(self.land_fraction);
+        settings.continental_plates = (self.continental_plates * growth).clamp(0.05, 1.);
+        if let Some(history) = &mut settings.history {
+            history.continental_share = (history.continental_share * growth).clamp(0.03, 0.9);
+            history.assembly = world.geology.assembly;
+        }
+        settings.old_range_share = self.old_range_share * (world.age / OLD_RANGES_AGE).min(1.);
+        settings.erodibility = self.erodibility * world.ground.erosion;
+        settings.diffusion = self.diffusion * world.ground.soil.max(0.).sqrt();
+        settings
     }
 }
 
@@ -183,7 +209,8 @@ impl Laps {
 
 /// Generate the planet: shape and erosion (`shape`), the coasts and sea floor (`coast`), the
 /// features on them (fjords, volcanoes, reefs, barrier islands), then its water (`water`).
-pub fn generate_planet(settings: &PlanetSettings) -> Planet {
+pub fn generate_planet(requested: &PlanetSettings) -> Planet {
+    let settings = &requested.for_world();
     let mut laps = Laps::new();
     let grid = SphereGrid::new(settings.n);
     let radius = 2. * settings.n as f32 / std::f32::consts::PI;
@@ -199,6 +226,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     let mut sea = shaped.sea.clone();
     let Features {
         volcanoes,
+        craters,
         volcanic,
         rock,
         strata,
@@ -235,7 +263,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
     );
 
     Planet {
-        settings: settings.clone(),
+        settings: requested.clone(),
         grid,
         heights,
         sea,
@@ -251,6 +279,7 @@ pub fn generate_planet(settings: &PlanetSettings) -> Planet {
         geothermal: volcanic.geothermal,
         reef,
         volcanoes,
+        craters,
         strata_scale,
         rivers,
         ruggedness,
@@ -268,6 +297,7 @@ const COASTAL_ARC: f32 = 60.;
 /// strata offset (basalt and flat on volcanoes), the coral reefs.
 struct Features {
     volcanoes: Vec<crate::volcanoes::Volcano>,
+    craters: Vec<crate::craters::Crater>,
     volcanic: crate::volcanoes::Built,
     rock: Vec<u8>,
     strata: Vec<f32>,
@@ -302,6 +332,7 @@ fn add_features(
         grid,
         radius,
         settings.seed,
+        settings.world.interior_heat(),
         |i| boundaries[i].arc,
         |i| {
             if !sea[i] && boundaries[i].belt > 0.4 && to_sea[i] < COASTAL_ARC {
@@ -322,6 +353,11 @@ fn add_features(
             strata[i] = 0.;
         }
     }
+    // Impact craters (before the reefs: atolls ring volcanoes, not craters).
+    let craters = crate::craters::place(grid, settings.seed, &settings.world);
+    laps.lap("  volcanoes");
+    crate::craters::build(grid, radius, settings.seed, &craters, heights, sea);
+    laps.lap("  craters");
     // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes
     // (reefs are built by life).
     let reef = if settings.world.life {
@@ -329,12 +365,13 @@ fn add_features(
     } else {
         vec![0.; cells]
     };
-    laps.lap("  volcanoes");
+    laps.lap("  reefs");
     // Barrier islands and lagoons on low coasts with a shallow shelf.
     crate::barriers::build(grid, radius, settings.seed, &reef, heights, sea, &mut rock);
     laps.lap("  barrier islands");
     Features {
         volcanoes,
+        craters,
         volcanic,
         rock,
         strata,

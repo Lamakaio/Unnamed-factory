@@ -9,6 +9,7 @@
 //! grid ([`sphere`], through the [`grid::Grid`] trait).
 
 pub mod climate;
+pub mod craters;
 pub mod geology;
 pub mod glaciers;
 pub mod grid;

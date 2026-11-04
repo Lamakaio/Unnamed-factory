@@ -84,7 +84,7 @@ src/ui.rs               loading text (BSN), `label()` text scene, PointerOverUi 
 crates/worldgen/        world generation (no Bevy ECS), in pipeline order:
                         tectonics.rs → planet/ (`generate_planet` in mod.rs runs the stages: shape.rs: plates,
                         provinces, `Shaper`, `terrain.rs` erosion; coast.rs: world units, sea floor, shores; the
-                        features: fjords.rs, volcanoes.rs, reefs.rs, barriers.rs; water.rs: lakes.rs, rivers.rs,
+                        features: fjords.rs, volcanoes.rs, craters.rs, reefs.rs, barriers.rs; water.rs: lakes.rs, rivers.rs,
                         floodplains, mouths.rs (+ channels.rs)) → climate.rs → surface/ (mod.rs: `PlanetSurface`;
                         field.rs: `FaceField`; features.rs: riparian, karst, deserts, sea ice; relief.rs: gullies,
                         dunes, karst towers; channels.rs: carved rivers; glaciers.rs, springs.rs) → sea.rs;
@@ -303,6 +303,12 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     `world` uniform (life, `World::oxidation()`) draws bare regolith, mudflats, no hot-spring
     mats, and greys the ochres without oxygen; the water's `planet.w` is the sea's iron
     (green seas); sunlight takes `Star::color()`; salinity moves the sea ice's freezing point.
+    E1c: `generate_planet` runs `PlanetSettings::for_world()` (land share from `ocean.water`
+    and `continental_growth()`, old ranges from the age, erodibility × `ground.erosion`,
+    diffusion × √`ground.soil`; the tectonic history's `assembly` gathers the continents and
+    slows the plates); `volcanoes::place` takes `interior_heat()`; `craters.rs` (after the
+    volcanoes, before the reefs: `Planet::craters`, in click reports); the terrain's
+    `world.z` (soil) shows rock on gentler slopes and in outcrops.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo

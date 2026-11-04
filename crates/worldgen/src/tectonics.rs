@@ -31,6 +31,8 @@ pub struct TectonicSettings {
     /// Mean plate speed (radians per step), and a rift every this many steps on average.
     pub speed: f32,
     pub rift_interval: f32,
+    /// How gathered the continents start (0 as the noise lays them, 1 one supercontinent).
+    pub assembly: f32,
 }
 
 impl Default for TectonicSettings {
@@ -45,6 +47,7 @@ impl Default for TectonicSettings {
             // ~1.5° per step: 4 cm/yr over 4 Myr on Earth.
             speed: 0.026,
             rift_interval: 12.,
+            assembly: 0.,
         }
     }
 }
@@ -107,6 +110,11 @@ struct Raster {
     uplifted: Vec<f32>,
 }
 
+/// How strongly a supercontinent gathers the continents (noise units at `assembly` 1).
+const ASSEMBLY: f32 = 0.9;
+/// How much slower plates move under a whole supercontinent (share at `assembly` 1).
+const ASSEMBLED_SLOWDOWN: f32 = 0.8;
+
 pub fn run(settings: &TectonicSettings) -> Tectonics {
     let grid = SphereGrid::new(settings.n);
     let cells = grid.len();
@@ -128,16 +136,21 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
             .max_by(|a, b| a.1.dot(w).total_cmp(&b.1.dot(w)))
             .map_or(0, |(k, _)| k as u16)
     });
+    // (A supercontinent is assembled, not still colliding: its plates move slowly.)
+    let speed = settings.speed * (1. - ASSEMBLED_SLOWDOWN * settings.assembly);
     let mut plates: Vec<PlateMotion> = (0..settings.plates)
         .map(|_| PlateMotion {
-            rotation: random_direction(&mut rng) * settings.speed * rng.random_range(0.5..1.5),
+            rotation: random_direction(&mut rng) * speed * rng.random_range(0.5..1.5),
         })
         .collect();
-    // Initial continents: noise, cut at the continental share.
+    // Initial continents: noise, cut at the continental share; gathered toward one side (the
+    // first plate's centre) for a supercontinent.
     let continents = noise.layer(2);
+    let gather = centers[0];
     let value: Vec<f32> = par::map(cells, |i| {
         let d = directions[i];
         continents.fbm3((d + continents.warp3(d * 2.2, 3, 0.15)) * 2.0, 5)
+            + settings.assembly * ASSEMBLY * d.dot(gather)
     });
     let mut sorted = value.clone();
     let k = ((1. - settings.continental_share) * (cells - 1) as f32) as usize;
@@ -194,7 +207,7 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
                 }
                 rasters.push(split);
                 let away = center.cross(normal).normalize();
-                let speed = settings.speed * rng.random_range(0.8..1.4);
+                let speed = speed * rng.random_range(0.8..1.4);
                 let base = plates[p].rotation * 0.5;
                 plates[p].rotation = away * speed * 0.5 + base;
                 plates.push(PlateMotion {
@@ -209,7 +222,7 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
         }
         // Motions wander slowly (welded plates follow their partner); plates turn.
         for motion in plates.iter_mut() {
-            let nudge = random_direction(&mut rng) * settings.speed * 0.15;
+            let nudge = random_direction(&mut rng) * speed * 0.15;
             let speed = motion.rotation.length().max(1e-6);
             motion.rotation = (motion.rotation + nudge).normalize() * speed;
         }
@@ -277,7 +290,7 @@ pub fn run(settings: &TectonicSettings) -> Tectonics {
                     .sum();
                 let relative = plates[loser as usize].rotation.cross(d)
                     - plates[winner as usize].rotation.cross(d);
-                if relative.dot(across.normalize_or_zero()) < settings.speed * 0.2 {
+                if relative.dot(across.normalize_or_zero()) < speed * 0.2 {
                     continue;
                 }
                 let there = rasters[loser as usize].crust[lr] > 0.5;

@@ -166,3 +166,11 @@ someone else's work, add it here (and mention it in the code comment where it is
   beds and grey pre-oxygen ground, iron-rich seas before oxygen (the Great Oxidation Event's
   record: banded iron formations, red beds); most limestone laid down by life; sea water's
   freezing point about −0.054 °C per ‰ of salt.
+- **Geology from the world's age** (`world.rs`, `craters.rs`, `tectonics.rs`): impact flux
+  from the lunar chronology (G. Neukum, B. Ivanov and W. Hartmann, *Cratering records in the
+  inner Solar System*, Space Science Reviews 96, 2001); crater shapes (bowls, rims, ejecta,
+  complex craters' flat floors and central peaks) after H. J. Melosh, *Impact Cratering: A
+  Geologic Process*, 1989; continental growth fast early (B. Dhuime et al., *A change in the
+  geodynamics of continental growth 3 billion years ago*, Science 335, 2012); a supercontinent
+  as continents gathered on slow plates (the supercontinent cycle: J. B. Murphy and R. D.
+  Nance, e.g. *Do supercontinents introvert or extrovert?*, Geology 31, 2003).

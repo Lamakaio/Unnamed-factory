@@ -47,7 +47,8 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 // Prevailing wind direction (in face coordinates).
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> wind: vec4<f32>;
-// The world: life on land (x, 0..1), how oxidised the ground is (y, 0..1).
+// The world: life on land (x, 0..1), how oxidised the ground is (y, 0..1), soil depth (z, 1
+// Earth's: thin soil leaves rock showing on gentler slopes, and in outcrops).
 @group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> world: vec4<f32>;
 // Gust speed (world units per second).
 const GUST_SPEED: f32 = 3.0;
@@ -115,16 +116,16 @@ fn srgb(r: f32, g: f32, b: f32) -> vec3<f32> {
 }
 
 // A crisp step, antialiased over about a pixel (`width` = the value's change per pixel).
+fn crisp(edge: f32, value: f32, width: f32) -> f32 {
+    let w = max(width, 1e-4);
+    return smoothstep(edge - w, edge + w, value);
+}
+
 // Ground colours tinted by the air: without oxygen iron stays unrusted, so ochres and reds
 // turn to greys and beiges (the red of deserts and red beds is rust).
 fn weathered(c: vec3<f32>) -> vec3<f32> {
     let grey = dot(c, vec3(0.2126, 0.7152, 0.0722)) * vec3(1.02, 1.0, 0.95);
     return mix(mix(grey, c, 0.25), c, world.y);
-}
-
-fn crisp(edge: f32, value: f32, width: f32) -> f32 {
-    let w = max(width, 1e-4);
-    return smoothstep(edge - w, edge + w, value);
 }
 
 // A cell weight (bilinear, smooth over a cell) made into an irregular, crisp border.
@@ -421,7 +422,10 @@ fn ground(
 
     // Rock: rocky ground, and every steep slope (redder in deserts).
     let steep_value = steep + 0.06 * medium;
-    let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
+    let thin = 1.0 - saturate(world.z);
+    let outcrops = patches(large + 0.5 * medium, 0.55 - 0.5 * thin) * thin;
+    let rock = max(max(border(a.g, medium), outcrops),
+        crisp(0.34 - 0.2 * thin, steep_value, fwidth(steep_value)));
     let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness * world.y);
     // (Badlands: bare wherever the ground slopes a little.)
     let bare = badlands * smoothstep(0.02, 0.1, steep) + 0.2 * medium;

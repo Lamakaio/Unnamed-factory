@@ -73,7 +73,8 @@ pub struct PlanetTerrainShader {
     pub wind: Vec4,
 
     /// The world (`worldgen::world::World`): life on land (0..1: without, bare regolith,
-    /// mudflats, no flowers), how oxidised the ground is (0..1: grey and beige → rusty).
+    /// mudflats, no flowers), how oxidised the ground is (0..1: grey and beige → rusty), soil
+    /// depth (1: Earth's; thin soil shows more rock).
     #[uniform(109)]
     pub world: Vec4,
 }

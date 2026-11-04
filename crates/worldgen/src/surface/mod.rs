@@ -56,6 +56,9 @@ pub struct PlanetSurface {
     /// Geothermal fields (hot springs: 0..1, see `volcanoes::Built::geothermal`).
     pub geothermal: FaceField,
     pub volcanoes: Vec<crate::volcanoes::Volcano>,
+    pub craters: Vec<crate::craters::Crater>,
+    /// Soil depth (`World::ground`: 1 Earth's).
+    pub soil: f32,
     /// Coral reef (0..1, see `reefs`).
     pub reef: FaceField,
     /// Glacier ice (0..1, see `glaciers`; its thickness is in the heights).
@@ -198,6 +201,8 @@ impl PlanetSurface {
             badlands: FaceField::new(planet, &badlands),
             karst: FaceField::new(planet, &karst_cells),
             volcanoes: planet.volcanoes.clone(),
+            craters: planet.craters.clone(),
+            soil: planet.settings.world.ground.soil,
             marsh: FaceField::new(planet, &marsh),
             rivers: Vec::new(),
             channels: Channels::default(),

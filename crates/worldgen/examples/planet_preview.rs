@@ -1,6 +1,6 @@
 //! Planet previews: a shaded relief map (equirectangular), two globe views and the plates.
 //!
-//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [--coarse <steps>] [--no-history] [seeds...]`
+//! `cargo run -p worldgen --release --example planet_preview -- <out_dir> [--n <cells>] [--coarse <steps>] [--no-history] [--world <preset>[,name=value...]] [seeds...]`
 //!
 //! Writes `<seed>_map.png`, `<seed>_globes.png` and `<seed>_plates.png` (continental plates
 //! bright, oceanic dark, land brightest, ranges darkened), and prints the
@@ -27,9 +27,13 @@ fn main() {
     let mut coarse_steps = PlanetSettings::default().coarse_steps;
     let mut history = PlanetSettings::default().history;
     let mut seeds = Vec::new();
+    let mut world = worldgen::world::World::default();
     while let Some(arg) = args.next() {
         if arg == "--n" {
             n = args.next().unwrap().parse().unwrap();
+        } else if arg == "--world" {
+            world = worldgen::world::World::parse(&args.next().unwrap())
+                .unwrap_or_else(|e| panic!("{e}"));
         } else if arg == "--no-history" {
             history = None;
         } else if arg == "--coarse" {
@@ -47,6 +51,7 @@ fn main() {
             n,
             coarse_steps,
             history: history.clone(),
+            world: world.clone(),
             ..Default::default()
         });
         report(seed, &planet);
@@ -114,6 +119,31 @@ fn report(seed: u64, planet: &Planet) {
             (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3)
         });
     println!("  heights hash {hash:016x}");
+    let fresh = planet.craters.iter().filter(|c| c.freshness > 0.5).count();
+    println!(
+        "  {} volcanoes, {} craters ({fresh} fresh, the largest {:.1} units)",
+        planet.volcanoes.len(),
+        planet.craters.len(),
+        planet.craters.iter().map(|c| c.radius).fold(0., f32::max),
+    );
+    // The best kept big craters on land, where (longitude, latitude: as `UF_PLANET_CAMERA` takes them).
+    let mut craters: Vec<_> = planet
+        .craters
+        .iter()
+        .filter(|c| !planet.sea[planet.grid.cell_at(c.direction)])
+        .copied()
+        .collect();
+    craters.sort_by(|a, b| (b.radius * b.freshness).total_cmp(&(a.radius * a.freshness)));
+    for c in craters.iter().take(4) {
+        let d = c.direction;
+        println!(
+            "    crater at {:.2},{:.2}: radius {:.1}, freshness {:.2}",
+            d.z.atan2(d.x).to_degrees(),
+            d.y.asin().to_degrees(),
+            c.radius,
+            c.freshness
+        );
+    }
     for (name, duration) in &planet.timings {
         println!("  {name}: {:.2} s", duration.as_secs_f32());
     }

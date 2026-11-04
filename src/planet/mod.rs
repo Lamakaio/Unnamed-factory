@@ -247,7 +247,7 @@ fn spawn_planet(
                     world: Vec4::new(
                         world.world.life as u32 as f32,
                         world.world.oxidation(),
-                        0.,
+                        world.world.ground.soil,
                         0.,
                     ),
                 },

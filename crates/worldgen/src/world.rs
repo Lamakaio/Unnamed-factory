@@ -14,6 +14,8 @@ pub struct World {
     pub orbit: Orbit,
     pub atmosphere: Atmosphere,
     pub ocean: Ocean,
+    pub geology: Geology,
+    pub ground: Ground,
     pub albedo: Albedo,
     /// Life on land (vegetation). Until the life parameters are designed: none or today's.
     pub life: bool,
@@ -68,6 +70,29 @@ pub struct Ocean {
     pub salinity: f32,
     /// Dissolved iron (0..1): seas without oxygen keep their iron, and look green to brown.
     pub iron: f32,
+    /// Amount of water (share of Earth's): sets how much of the planet is land, from a
+    /// desert world with small seas to an ocean world.
+    pub water: f32,
+}
+
+/// What shapes the planet's rock (the age does too: `World::interior_heat`,
+/// `World::continental_growth`).
+#[derive(Clone, Copy, Debug)]
+pub struct Geology {
+    /// How gathered the continents are: 0 scattered (as the noise lays them), 1 one
+    /// supercontinent.
+    pub assembly: f32,
+    /// Impact rate (share of the Solar System's at the same age): craters.
+    pub impacts: f32,
+}
+
+/// The ground.
+#[derive(Clone, Copy, Debug)]
+pub struct Ground {
+    /// Soil depth (1: Earth's): thin soil leaves rock showing and creeps less down slopes.
+    pub soil: f32,
+    /// Erosion rate (1: Earth's): rivers cut faster, craters wear away sooner.
+    pub erosion: f32,
 }
 
 /// Surface albedos (share of the light reflected) of the ground types.
@@ -109,6 +134,15 @@ impl Default for World {
                 currents: 1.,
                 salinity: 35.,
                 iron: 0.,
+                water: 1.,
+            },
+            geology: Geology {
+                assembly: 0.,
+                impacts: 1.,
+            },
+            ground: Ground {
+                soil: 1.,
+                erosion: 1.,
             },
             albedo: Albedo {
                 sea: 0.06,
@@ -129,6 +163,12 @@ const SUN_LIFETIME: f32 = 10.;
 /// How much fainter a star is at its birth than at the Sun's present point in its life
 /// (Gough 1981: L(t) = L☉ / (1 + 2/5 (1 − t/t☉))).
 const YOUNG_FAINTNESS: f32 = 0.4;
+/// Interior heat: its e-folding time (Gyr).
+const HEAT_DECAY: f32 = 3.;
+/// Continental growth: its e-folding time (Gyr).
+const CONTINENT_GROWTH: f32 = 1.2;
+/// How land share answers the amount of water (see `World::land_fraction`).
+const WATER_LAND: f32 = 0.6;
 /// Earth's sunlight (W/m²).
 const SOLAR_CONSTANT: f32 = 1361.;
 /// CO₂'s forcing beyond its logarithm (W/m² per ln² of the ratio to today's).
@@ -160,6 +200,8 @@ impl World {
             dust: 0.2,
         };
         world.ocean.iron = 0.8;
+        // (Regolith only: no soil without life.)
+        world.ground.soil = 0.25;
         world.life = false;
         world
     }
@@ -220,6 +262,11 @@ impl World {
             "currents" => &mut self.ocean.currents,
             "salinity" => &mut self.ocean.salinity,
             "iron" => &mut self.ocean.iron,
+            "water" => &mut self.ocean.water,
+            "assembly" => &mut self.geology.assembly,
+            "impacts" => &mut self.geology.impacts,
+            "soil" => &mut self.ground.soil,
+            "erosion" => &mut self.ground.erosion,
             "albedo_sea" => &mut self.albedo.sea,
             "albedo_rock" => &mut self.albedo.rock,
             "albedo_desert" => &mut self.albedo.desert,
@@ -272,6 +319,39 @@ impl World {
     /// before.
     pub fn oxidation(&self) -> f32 {
         crate::noise::smoothstep(0.0005, 0.01, self.atmosphere.o2)
+    }
+
+    /// How active the interior is against Earth's today (volcanoes): radiogenic heat and the
+    /// heat left from formation decay over billions of years (a young planet's mantle is
+    /// several times hotter in heat flow; softened here: volcanoes don't scale with it).
+    pub fn interior_heat(&self) -> f32 {
+        ((SUN_AGE - self.age) / HEAT_DECAY)
+            .exp()
+            .sqrt()
+            .clamp(0.3, 2.5)
+    }
+
+    /// Continental crust grown so far against Earth's today: continents grow fast early
+    /// and slowly later (about two thirds of today's by 3 Gyr ago: Dhuime et al. 2012).
+    pub fn continental_growth(&self) -> f32 {
+        let grown = |age: f32| 1. - (-age / CONTINENT_GROWTH).exp();
+        (grown(self.age) / grown(SUN_AGE)).clamp(0.15, 1.15)
+    }
+
+    /// Share of the planet that is land, for a planet that would have `earth_land` with
+    /// Earth's water and continents: less with smaller continents, more with less water
+    /// (the sea draining off the shelves and into the basins), less with more.
+    pub fn land_fraction(&self, earth_land: f32) -> f32 {
+        let land = earth_land * self.continental_growth();
+        (1. - (1. - land) * self.ocean.water.max(0.).powf(WATER_LAND)).clamp(0.02, 0.95)
+    }
+
+    /// The impact rate at an age (craters per unit time against the Solar System's today):
+    /// the lunar chronology's decaying early bombardment over a constant rate (Neukum et al.
+    /// 2001: N(1 km) = 5.44e-14 (e^6.93T − 1) + 8.38e-4 T, T in Gyr before today).
+    pub fn impact_flux(&self, age: f32) -> f32 {
+        let before = (SUN_AGE - age).max(0.);
+        self.geology.impacts * (1. + 6.93 * 5.44e-14 / 8.38e-4 * (6.93 * before).exp())
     }
 
     /// Freezing point of the sea (°C): about −0.054 °C per ‰ of salt.
@@ -347,5 +427,13 @@ mod tests {
         // The young Sun: about 70 % of today's light.
         let young = world.star.irradiance(0.);
         assert!((0.69..0.73).contains(&young), "{young}");
+        // Earth's own geology unchanged.
+        assert!((world.interior_heat() - 1.).abs() < 1e-5);
+        assert!((world.continental_growth() - 1.).abs() < 1e-5);
+        assert!((world.land_fraction(0.3) - 0.3).abs() < 1e-5);
+        assert!((world.impact_flux(world.age) - 1.).abs() < 1e-3);
+        // The late heavy bombardment: hundreds of times today's rate 4 Gyr ago.
+        let early = world.impact_flux(0.57);
+        assert!((100.0..2000.0).contains(&early), "{early}");
     }
 }

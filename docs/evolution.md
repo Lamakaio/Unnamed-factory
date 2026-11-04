@@ -292,6 +292,10 @@ Each leaves the game runnable.
      (rusty ground).
    - **E1c – Geology from age**: volcanism, worn ranges, craters (#20), supercontinent
      phase, water amount → land share, soil and erosion.
+     *Done 2026-11-04*: `World::interior_heat` (volcano count), `continental_growth`
+     (continental share), `land_fraction` (water), `impact_flux` (craters, worn with the
+     erosion rate), `geology.assembly` (continents gathered, plates slowed), `ground.soil`
+     (creep, rock outcrops), `ground.erosion`; applied by `PlanetSettings::for_world`.
    - **E1d – Moons and tides**: tidal range per coast, tidal flats and estuaries; moons in
      the game's sky.
    Previews and screenshots for each preset.

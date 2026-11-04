@@ -398,6 +398,16 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
             );
         }
     }
+    for c in &surface.craters {
+        let distance = c.direction.distance(direction) * surface.radius;
+        if distance < c.radius * 2. {
+            let _ = writeln!(
+                out,
+                "  crater: centre {distance:.1} away, radius {:.1}, freshness {:.2}",
+                c.radius, c.freshness
+            );
+        }
+    }
     let _ = writeln!(
         out,
         "  rock {:?}, lava {:.2}",

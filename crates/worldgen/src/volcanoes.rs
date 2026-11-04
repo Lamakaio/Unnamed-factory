@@ -91,11 +91,13 @@ const OCEANIC_HOTSPOTS: f32 = 0.8;
 
 /// Where volcanoes are. `arc(i)` is how much a cell is on an island arc (0..1), `coastal_belt`
 /// a young range near the coast; `velocity(direction)` the surface velocity of the plate there
-/// (its direction only matters).
+/// (its direction only matters). `activity` scales how many (1: Earth's; a young planet's
+/// hot interior makes more: `World::interior_heat`).
 pub fn place(
     grid: &SphereGrid,
     radius: f32,
     seed: u64,
+    activity: f32,
     arc: impl Fn(usize) -> f32,
     coastal_belt: impl Fn(usize) -> f32,
     velocity: impl Fn(Vec3) -> Vec3,
@@ -113,14 +115,14 @@ pub fn place(
     let mut candidates: Vec<(u32, usize)> = (0..grid.len())
         .filter_map(|i| {
             let weight = arc(i).max(coastal_belt(i));
-            (weight > 0.5 && random(i as u32, 1) < 0.003 * weight)
+            (weight > 0.5 && random(i as u32, 1) < 0.003 * weight * activity)
                 .then(|| (hash(seed, i as u32, 2), i))
         })
         .collect();
     candidates.sort_unstable();
     for (_, i) in candidates {
         let d = grid.direction(i);
-        let spacing = ARC_SPACING * (0.7 + 0.6 * random(i as u32, 3));
+        let spacing = ARC_SPACING / activity.sqrt() * (0.7 + 0.6 * random(i as u32, 3));
         if !far_from_all(&volcanoes, d, spacing) {
             continue;
         }
@@ -134,7 +136,7 @@ pub fn place(
         });
     }
     // Hotspots: chains along the plate's motion, oldest furthest downstream.
-    let count = (HOTSPOTS_PER_MILLION * grid.len() as f32 / 1e6).round() as u32;
+    let count = (HOTSPOTS_PER_MILLION * activity * grid.len() as f32 / 1e6).round() as u32;
     for k in 0..count {
         // Mostly under the oceans (as on Earth), now and then under a continent.
         let oceanic = random(k, 13) < OCEANIC_HOTSPOTS;
