@@ -1,39 +1,46 @@
-# Evolution: world age, life and the player
+# Evolution: world age, atmosphere and life
 
-> Status: **draft for discussion** (2026-11-04). The "own design document" that
+> Status: **draft, first decisions taken** (2026-11-04, §9). The "own design document" that
 > `docs/living-world.md` §8 announces for D3 (life = evolution over deep time). It answers:
-> what does a planet look like at each stage of its life, which of today's features need
-> life, how are species simulated, how does life change the world back, and what does the
-> player do. Open choices are collected in §9; my recommendation is given for each. Dates are
-> Earth's, rounded, and serve as a template, not a script.
+> what a planet looks like as it ages and as life changes it, which of today's features need
+> life, how the world state evolves, and (later) how species and the player fit in.
+>
+> **Direction (V1–V4):** the world evolves from a few global parameters (age, star, CO₂,
+> O₂, CH₄, how much life there is and what forms it takes), not from a detailed species
+> simulation. Not Earth-focused: Earth is one example of the processes, not a script. Every
+> game starts from a virgin planet. Species and the player come later: when a species
+> splits, the player designs the new one.
 
 ---
 
 ## 0. Summary
 
 - **Life is a geological agent, and that is the game.** On Earth, life made the oxygen, the
-  red soils, most limestone and reefs, the stable rivers, the soils, the coal, the grass and
-  the forests, and twice nearly froze the planet. A player who steers evolution should see
-  the planet change because of it: the colour of the land and sky, the rivers, the climate.
-- **World age and life stage become generation inputs.** A virgin planet is bare rock, sand
-  and sea: no trees, no grass, no reefs, no peat, wide braided rivers, more dunes, another
-  sky. Each feature we render today gets a life requirement (§3), so the same generator
-  gives a planet at any stage.
-- **Species are population fields over a coarse grid** with niches and traits (the
-  `gen3sis` style, §5), not individual creatures. Speciation comes from isolation (plates,
-  sea level, mountains, deserts), extinction from shrinking ranges. Individuals only appear
-  when the player zooms in.
-- **The player steers, they don't design**: they unlock key innovations (photosynthesis,
-  multicellularity, life on land, wood, seeds…) and push selection, with consequences they
-  have to manage (oxygen crisis, snowball, CO₂ drawdown, a brightening sun) (§7).
+  red soils, most limestone and reefs, the stable rivers, the soils, the coal and the
+  forests, and twice nearly froze the planet. Steering life should visibly change the
+  planet: the colour of the land, sea and sky, the rivers, the ice, the climate.
+- **The world state is a handful of global numbers** (§2): age, star brightness, CO₂, O₂,
+  CH₄, and the biosphere as levels of *forms* of life (sea mats, plankton, reef builders,
+  land crusts, low plants, tall plants…). They evolve through a small box model of the
+  carbon and oxygen cycles (§4), the kind geochemists use for deep time (Walker–Hays–
+  Kasting's weathering thermostat, COPSE).
+- **The generator renders any state** (§3): every feature we have gets a condition on the
+  state, so the same seed gives a virgin planet, a microbial one, a red oxygenated one, a
+  green one. A virgin planet: bare rock and sand, wide braided rivers, more dunes, a hazy
+  sky, no trees, grass, reefs, limestone or peat.
+- **Not Earth's history.** Forms of life are defined by what they do (photosynthesis, where
+  they live, how tall, whether they build shells or roots), not by Earth's lineages, and
+  their colours follow the star (§5). Timing and outcomes differ every game.
+- **Later:** species as a light layer on top of the forms, and the player designing a new
+  species each time one splits off (§7).
 
 ---
 
-## 1. Earth as the template
+## 1. Earth as one example
 
-The planet's history follows Earth's broad sequence; each step needs the previous ones and
-changes the world in a visible way. Dates are approximate (sources differ, especially for
-life on land: fossils vs molecular clocks).
+Earth's history shows the processes and their order of magnitude; our planets follow the
+same physics and chemistry with their own timing and outcomes. Dates are approximate
+(sources differ, especially for life on land: fossils vs molecular clocks).
 
 | Ga (billion years ago) | Stage | What it changes on the planet |
 |---|---|---|
@@ -51,240 +58,222 @@ life on land: fossils vs molecular clocks).
 | 0.066 | **Impact extinction** | — |
 | 0.06–0 | Mammals, **grasses** (grasslands spread from ~0.02; savannas ~0.008), ice ages | Grasslands, savanna, steppe as we know them |
 
-Consequences for this project:
+What carries over to any planet:
 
-- **Grass is recent.** Meadows, steppe and savanna (most of today's ground cover) only exist in
-  the last ~2 % of the planet's life. Before that, open ground is bare, mossy, or covered by
-  ferns and shrubs.
-- **Before plants, rivers and land behave differently.** Rock records before plants show wide,
-  sheet-like, shifting sandy rivers, little mud and many wind-blown sands. Recent work (2019,
-  2025) shows unvegetated rivers can meander too, but plants made stable meanders and muddy
-  floodplains common. For us: wide braided rivers and more dunes on bare land, narrower
-  stable channels and floodplains under vegetation.
+- **Ground cover is late and contingent.** Earth's grasslands are only ~2 % of its history;
+  before them open ground was bare, crusted, mossy or ferny. Our open ground is whatever low
+  form the planet evolved, or nothing.
+- **Before land plants, rivers and land behave differently.** Rock records before plants
+  show wide, sheet-like, shifting sandy rivers, little mud and many wind-blown sands. Recent
+  work (2019, 2025) shows unvegetated rivers can meander too, but plants made stable meanders
+  and muddy floodplains common. For us: wide braided rivers and more dunes on bare land,
+  narrower stable channels and floodplains under vegetation.
 - **Most limestone is biological** (shells, reefs, microbial mats). Before life, carbonate
   rock is rare. Karst, limestone cliffs and reefs are life features.
-- **The sun brightens with age** (~1 % per 100 Myr). Life's CO₂ drawdown is what keeps a
-  planet temperate as it brightens; a planet that loses its life overheats in the end. This
-  is the long-term tension SimEarth was built on (Lovelock's Gaia and Daisyworld).
+- **The star brightens with age** (a Sun-like star by ~1 % per 100 Myr). Weathering draws
+  CO₂ down faster when it is warm, which keeps a planet temperate as its star brightens; life
+  speeds weathering up. Push it too far and the planet freezes; lose it and the planet
+  overheats in the end. This is the long-term tension SimEarth was built on (Lovelock's Gaia
+  and Daisyworld).
+- **Oxygen is a threshold, not a slope.** Photosynthesis makes O₂ for a long time before it
+  shows: iron in the sea and volcanic gases eat it. When the sinks are full, O₂ rises fast,
+  methane collapses (cooling, maybe a snowball), the land rusts red, an ozone layer forms
+  and land life becomes possible.
 
 ---
 
-## 2. World parameters: age and life
+## 2. The world state
 
-Generation takes two new inputs besides the seed:
+The world at a given moment is:
 
-- **Planet age** (Gyr): the sun's brightness, how hot the interior is (more volcanism,
-  smaller and more numerous continents, thinner crust when young), how worn old ranges are.
-- **Biosphere state**: which innovations exist (§5.2) and the atmosphere they made (O₂, CO₂,
-  CH₄ as 0..1 levels, not chemistry).
+| Parameter | Range (indicative) | Drives |
+|---|---|---|
+| **Age** (Gyr) | 0 → ~10 | star brightness; interior heat → volcanism, outgassing, continent growth; how worn old ranges are |
+| **Star** (type, brightness now) | per planet | light colour and amount → temperature, the colour of photosynthetic life (§5) |
+| **CO₂** (bar) | 10⁻⁴ → 10 | greenhouse; ocean acidity (reefs); weathering |
+| **CH₄** | 0 → a few % | greenhouse; above a level, an orange haze (sky colour, cooling) |
+| **O₂** | 0 → ~35 % | ozone (land life possible), rust (red ground), fires (above ~15 %), large animals |
+| **Water** (sea level, ice) | per planet | follows climate (exists) |
+| **Biosphere** | a level 0..1 per *form* (§5) | everything in §3; feeds back on the gases (§4) |
 
-Presets for previews and new games: *virgin* (abiotic, ~0.5 Gyr), *microbial* (~3 Gyr, low
-O₂), *oxygenated* (~2 Gyr after the oxidation, no land life), *green* (land plants, no
-grass), *modern* (today's generator). In a game, the deep-time clock moves the planet
-through these by itself; the presets are just snapshots.
+Everything else (temperature, rain, biomes, ice, cover) is derived from these and the
+terrain by the existing climate and surface code, with a few new inputs (greenhouse from
+CO₂ and CH₄, sky colour, light colour).
 
-What changes on screen per stage (all already-existing machinery, gated):
-
-| | Virgin / microbial | Oxygenated | Plants | Modern |
-|---|---|---|---|---|
-| Land colour | grey, beige, black basalt, pale sand; greenish mats on wet shores | **red beds** (hematite), ochre | soils: browns, greens | as today |
-| Sky | hazy, orange-tinted with methane | blue | blue | blue |
-| Sea | darker, greener (iron, no plankton bloom colours) | blue-green; plankton | as today | as today |
-| Vegetation | none (mats: a ground tint) | none on land | mosses, ferns, then forests; no grass | as today |
-| Rivers | wide, braided, shifting | same | narrower, meandering, floodplains | as today |
-| Dunes | far more (no plants pin sand) | same | fewer | as today |
-| Reefs | stromatolite mounds only | same | ancient reefs (sponge, coral) | coral reefs |
-| Limestone, karst | rare | more (microbial) | common | as today |
-| Marsh, peat | salt flats and mudflats only | same | swamp forests, peat | as today |
+**Presets** for previews, debugging and the opening of a game: *virgin* (young, CO₂-rich, no
+life), *microbial* (sea mats, CH₄), *oxidised* (O₂ up, red land, no land life), *crusted*
+(low land forms), *green* (tall land forms), plus anything in between from sliders. A game
+always starts at *virgin* (V4); the presets are snapshots of states the deep-time run can
+reach, not a fixed sequence.
 
 ---
 
-## 3. Today's features and what life they need
+## 3. What the planet shows for a given state
 
-Every feature in `worldgen` and the game gets a life requirement. Most are a single gate.
+Each feature we render today gets a condition on the state. Most are a single gate or a
+blend, so this is the first thing to build (milestone E1).
 
 | Feature (today) | Needs | Without it |
 |---|---|---|
-| Forests (deciduous, conifer, rainforest, cloud forest), riparian forests, oases | trees (wood, ~0.385 Ga); flowering trees for broadleaf | ferns and early trees, then nothing |
-| Meadow, steppe, savanna, alpine meadow | grasses | bare ground, mosses, ferns, shrubs depending on stage |
-| Tundra | mosses and shrubs | bare rock and frost-shattered stones |
-| Marsh | wetland plants | mudflats, salt flats |
-| Mangrove | mangroves (late) | mudflats |
-| Coral reefs, atolls | reef builders (corals; earlier: sponges, stromatolites) | volcanic islands sink without leaving atolls |
-| Limestone (rock), karst | shell-building life (and microbial carbonate) | sandstone/shale take its share |
-| Tropical beaches (coral sand) | reefs | basalt or quartz sand |
-| Badlands, ergs, deserts | — (abiotic, more extensive without plants) | — |
-| Glaciers, ice sheets, sea ice | — (but climate depends on life's gases) | — |
-| Hot springs, volcanoes | — (the colourful mats in hot springs are life) | plain mineral colours |
-| River style (narrow, meandering; floodplains) | rooted plants on the banks | wide, braided, sandy |
-| Soil (ground colour, grass texture) | plants + microbes | regolith: rock colour |
+| Forests (all kinds), riparian forests, oases | tall land forms | low forms, or nothing |
+| Meadow, steppe, savanna, alpine meadow | low land forms (grass-like) | crusts, or bare ground |
+| Tundra | low cold-tolerant forms | frost-shattered stones |
+| Marsh | wetland forms | mudflats, salt flats |
+| Mangrove | tall forms tolerating salt | mudflats |
+| Reefs, atolls, coral sand | reef builders (low CO₂ helps: acid seas dissolve shells) | volcanic islands sink without leaving atolls; basalt or quartz sand |
+| Limestone (rock), karst | shell builders or sea mats (history: how much carbonate was laid down) | sandstone and shale take its share |
+| Badlands, ergs, deserts | — (abiotic; far more extensive without land life) | — |
+| Glaciers, ice sheets, sea ice | — (climate from the gases) | — |
+| Hot springs, volcanoes | — (bright mats round hot springs are life) | plain mineral colours |
+| River style | rooted land forms on the banks | wide, braided, sandy |
+| Soil (ground colour) | land forms + O₂ | regolith: rock colour; red where O₂ is up |
+| Sky | CH₄ haze; O₂ | orange haze / blue |
+| Sea colour | plankton; dissolved iron (no O₂) | green-brown, dark |
 
-Two things follow for the code:
+Two changes to the code follow:
 
-1. `Biome` is today *both* the physical setting and the vegetation on it. Split it: a
-   **setting** (sea, shore, wetland, dry plain, mountain, ice, …, from climate and terrain,
-   abiotic) and a **cover** (what lives there: none, mats, mosses, ferns, forest, grass…,
-   from the biosphere). The ground colour comes from rock, soil and cover.
-2. Life-built landforms (reefs, atolls, limestone) need the biosphere's history, not only
-   its present: an atoll exists if reefs grew while the volcano sank.
-
----
-
-## 4. What life does to the world (feedbacks)
-
-These are what make evolution matter to the planet, and they are mostly cheap to model as
-fields and global levels:
-
-| Life does | Effect on the world | Modelled as |
-|---|---|---|
-| Photosynthesis (microbes, then plants) | O₂ rises (after sinks are full: iron, volcanic gases), CH₄ falls → cooling, possible snowball | global O₂, CH₄, CO₂ levels; climate's greenhouse term |
-| Roots, soils, weathering | CO₂ drawdown → cooling; soils form | weathering rate × vegetation; soil depth field |
-| Vegetation cover | slower erosion on slopes, stable banks, fewer dunes, darker ground (albedo), more evaporation inland (rain further from the coast) | erosion's erodibility and diffusion; channel width; dune mask; albedo and moisture recycling in the climate |
-| Shells and reefs | limestone, reefs, atolls; carbon buried | reef growth field; rock type of new sediment |
-| Swamp forests | peat, coal: carbon buried, O₂ up | burial rate in wetlands |
-| High O₂ | wildfires (above ~15 %), giant insects; below, no fires | fire frequency → savanna/forest balance |
-| Grazers, burrowers | grassland kept open; sea floor stirred | modifiers on cover and sediment |
-| Mass extinction | cover collapses → erosion spikes, carbon released | transient fields |
-
-And from the world to life (selection): climate means and seasonality, land/sea, connectivity
-(continents splitting and joining, land bridges at low sea level, mountain ranges and deserts
-as barriers), ice, and how fast all this changes.
+1. `Biome` today is *both* the physical setting and the life on it. Split it into a
+   **setting** (sea, shore, wetland, dry plain, mountain, ice, …, abiotic, from climate and
+   terrain) and a **cover** (fractions of each land form, from the biosphere and the cell's
+   climate). Ground colour comes from rock, soil and cover; vegetation from cover.
+2. Life-built landforms (reefs, atolls, limestone) depend on the biosphere's *history*, not
+   only its present: a running total of carbonate laid down, and reef growth while
+   volcanoes sank.
 
 ---
 
-## 5. Simulation model
+## 4. How the state evolves
 
-### 5.1 Grid and clock
+A box model stepped on the deep-time clock. Global numbers, with a few per-cell fields where
+geography matters (weathering, cover). Deliberately simple: fluxes with plausible shapes and
+time constants, tuned to look right, in the spirit of geochemical models of deep time
+(Walker–Hays–Kasting 1981 for the weathering thermostat; COPSE, Bergman–Lenton–Watson 2004,
+for carbon, oxygen and biota together).
 
-- Runs on the **deep-time clock** (living-world §1): one step = 10⁴–10⁶ years depending on
-  the epoch (earlier eras pass faster, as in SimEarth, so the player spends their time where
-  life is interesting).
-- On a **coarse grid** (6 × 64² ≈ 25 k cells, or 6 × 128²), like the climate. Fields are
-  upsampled for display.
+**Carbon (CO₂):**
+- *Source*: volcanic outgassing, high when young, decreasing with age (interior cooling);
+  bursts from large volcanic provinces (events).
+- *Sink*: silicate weathering, faster when warm, wet, with more exposed fresh rock (young
+  mountains, basalt) and with land life (roots, soils: ×several). The carbon ends as
+  carbonate on the sea floor (limestone).
+- *Sink*: burial of organic carbon (plankton, swamps), proportional to productivity.
+- The result is the thermostat: a brighter star → warmer → faster weathering → less CO₂.
 
-### 5.2 Innovations (the "tech tree" of life)
+**Methane (CH₄):** made by anaerobic microbes (sea mats, swamps); destroyed fast once O₂ is
+up. Strong greenhouse; a haze above a level.
 
-A small set of gates that change what life can do, each with prerequisites and conditions
-(e.g. life on land needs an ozone layer, so O₂ above a level):
+**Oxygen (O₂):**
+- *Source*: photosynthesis × organic burial (O₂ is left over only when organic carbon is
+  buried instead of rotting).
+- *Sinks*: reduced volcanic gases and dissolved iron (large at first, shrinking with age and
+  as they are used up), weathering of old organic carbon, fires.
+- So O₂ stays near zero while the sinks win, then rises fast: the oxidation event emerges.
 
-> self-replication → microbial mats / stromatolites → oxygenic photosynthesis → eukaryotes
-> → multicellularity → shells and skeletons → (sea) reef builders · (land) mosses → roots
-> and vascular plants → wood (trees) → seeds → flowers → grasses
-> animals: → bilaterians → burrowers → fish → land animals → flight → warm blood → …
+**Biosphere:** each form's level grows toward a capacity set by the state and the planet
+(light, temperature, water, land area, nutrients, O₂ for land and large forms, CO₂ for
+photosynthesis), and declines when conditions leave its range. New forms appear when their
+prerequisites hold for long enough (§5), with randomness: not every planet gets every form,
+and not in the same order.
 
-Innovations are what the player mostly acts on (§7). They are global (once photosynthesis
-exists, it exists), the species that carry them are not.
+**Climate** reads the gases as a greenhouse term and the star's brightness, and the cover as
+albedo and moisture recycling (inland rain). Erosion reads cover (slopes protected, banks
+stable, dunes pinned).
 
-### 5.3 Species
+**Time step:** 1–10 Myr per step at first, finer when things change fast (an oxidation,
+a snowball, a mass extinction). Cheap: the global part is a few numbers; the per-cell parts
+(weathering, cover) run on the coarse climate grid.
 
-Following eco-evolution engines (gen3sis: populations with niche traits, dispersal,
-speciation after isolation; carrying capacity from temperature and aridity):
-
-- A **species** (or clade, at our scale) is: a functional type (mat, plankton, reef builder,
-  moss, fern, tree, grass; grazer, predator, burrower, …), traits (temperature optimum and
-  tolerance, moisture need, salt tolerance, size, dispersal distance, growth rate), and a
-  **range**: abundance per coarse cell.
-- Each step: **growth** toward the cell's capacity for that niche (climate × substrate ×
-  competition with species of the same type), **dispersal** to neighbouring cells through the
-  connectivity graph (land species over land, sea species over sea, rivers as corridors,
-  barriers costly), **trait drift** toward local conditions (selection), and the cell's
-  population fading where it doesn't fit.
-- **Speciation**: when a species' range splits into parts that stay apart for N steps, each
-  part becomes a species (the parts' traits then drift apart). **Extinction**: range gone.
-  This gives a **phylogeny** (clade tree) for free, which is a great thing to show the player.
-- **Cover** (§3) per cell is the sum of the plant types' abundance, which is what the
-  renderer uses (trees, grass density, ground colour).
-
-Budget *(est.)*: 25 k cells × a few hundred species × a sparse range is a few million
-updates per step: milliseconds to tens of milliseconds with `par.rs`.
-
-### 5.4 Coupling with the planet
-
-- **World → life** each step: climate means (temperature, rain, seasonality), land/sea,
-  ice, slope, rock/soil, and their rate of change.
-- **Life → world** each step: global gas levels (to the climate), cover (to erosion,
-  albedo, moisture recycling, river style, dunes), reef growth and carbonate (to geology),
-  burial (to O₂).
-- **History**: events with dates (oxidation, first forests, extinctions, a range split by a
-  rift) for the player's timeline.
+**Events:** snowball (ice past a latitude: albedo runaway, ended by CO₂ building up under
+the ice), oxidation, large volcanic provinces, impacts, mass extinctions (a form's level
+crashing). Each is dated for the player's history.
 
 ---
 
-## 6. What the generator does in the meantime
+## 5. Forms of life (not Earth's lineages)
 
-Before the full simulation exists, the generator can already produce a planet at a given
-stage (milestone E1, §8): biosphere preset → gates on vegetation, reefs, limestone, river
-style, dunes, ground and sky colours. This alone answers "a virgin planet shouldn't have
-trees and grass", and every later step reuses the gates.
+A form is a way of living, defined by capabilities, not by ancestry. Indicative list:
+
+| Form | Where | Needs (appears when) | Does to the world |
+|---|---|---|---|
+| Sea mats | shallow sea, shores | life started (warm, wet, early) | CH₄; microbial carbonate; mat-coloured shallows |
+| Plankton (photosynthetic) | open sea | photosynthesis | O₂ (via burial); sea colour; organic burial |
+| Shell and reef builders | warm shallow sea | O₂ above a level, moderate CO₂ | limestone, reefs, atolls |
+| Land crusts | any land | ozone (O₂), mats nearby | thin soil; slight weathering boost; ground tint |
+| Low land forms | land with water | crusts, soil | soil; weathering ×; dunes pinned; ground cover |
+| Tall land forms | wet land | low forms, structure (wood-like) | weathering ××; albedo; inland rain; stable rivers; swamp burial; fires with high O₂ |
+| Animals (later) | sea, then land | O₂ above a level | grazing keeps land open; burrowing; mostly what the player cares about |
+
+Forms come with colours from the star's light and the atmosphere: photosynthesis absorbs the
+most useful light, so foliage is green under a Sun-like star, orange or red under hotter or
+bluer-filtered light, near black under a dim red dwarf; blue is unlikely (Kiang et al.
+2007). For our toon style: a palette per planet derived from the star, so each planet looks
+its own.
 
 ---
 
-## 7. The player
+## 6. What to build first
 
-Prior art:
+E1 doesn't need the box model: the generator takes a state (preset or sliders) and renders
+it (§3). This alone answers "a virgin planet shouldn't have trees and grass", and every
+later step reuses the gates. The box model (E3) then makes the state move.
 
-- **SimEarth** (Maxis, 1990, with James Lovelock): geological epochs that pass faster early
-  on, Gaia feedbacks, Daisyworld; players tune greenhouse, mutation rates, drift. Admired more
-  than played: hard to read, no goals in sandbox.
-- **Species: Artificial Life, Real Evolution**: genes, mutation, natural selection, all
-  emergent; player tinkers in an isolated area, triggers catastrophes; clade diagram. Strong
-  simulation, weak player agency.
-- **Spore** (cell stage onward): direct creature design; fun, but no real evolution.
-- **Thrive** (open source): scientifically minded Spore-like; microbe stage done.
-- **Plague Inc.**: the "spend points on traits, watch the world respond" loop works well.
+---
 
-Proposal: **the player is the planet's evolution, not a god.** They act on *pressure and
-opportunity*, and the simulation decides outcomes:
+## 7. Species and the player (later)
 
-1. **Innovations**: spend evolution points (earned from biodiversity and time) to make an
-   innovation appear in a chosen lineage once its conditions are met. They don't pick
-   where it succeeds.
-2. **Selection nudges**: favour a trait in a region (cold tolerance in the north, larger
-   size on an island) — a bias on drift, not a change.
-3. **Planet levers** (late or as scenarios): a few SimEarth-like knobs (volcanism, an
-   impact, a cometary delivery of water) at a cost.
-4. **Goals**: scenarios and milestones (reach land; survive the oxidation without a
-   snowball; keep the planet habitable as the sun brightens; a given biodiversity; recover
-   from an extinction; evolve intelligence as a far goal), plus sandbox.
+Not a priority now (V3). The direction:
 
-The player's main view is the planet in fast-forward with overlays (ranges, oxygen,
-temperature, the clade tree), and the game-clock zoom to look at a landscape and its species.
+- **Species** are a light layer on top of the forms: each form is populated by a few species
+  with ranges over the coarse grid and climate tolerances. When a range splits and stays
+  apart (a rift, a sea, a mountain range, a desert), the species splits (as in eco-evolution
+  engines like gen3sis).
+- **The player designs species**, not choices from a list: when a species splits, the
+  player gets a design screen for the new one (body, size, tolerances, diet, colours…). The
+  design decides how it fares and what it does to the world. The world's evolution (§4)
+  keeps running regardless.
+- Prior art for contrast: SimEarth (knobs, Gaia, hard to read), Species: ALRE (emergent
+  evolution, little player agency), Spore (design, no real evolution), Thrive (scientific
+  Spore-like). Our angle: the player designs, the world selects, and the world changes.
+- Animals on screen: to be decided (V5).
 
 ---
 
 ## 8. Milestones
 
-Each leaves the game runnable. E1 and E2 fit before the deep-time mode (living-world
-milestone 5); E3 onwards needs it.
+Each leaves the game runnable.
 
-1. **E1 – Life stage at generation.** `PlanetSettings` gets age and a biosphere preset;
-   gates from §2/§3 on vegetation, grass, reefs, limestone, mangroves, marsh, river width and
-   style, dunes; ground, sky and sea colours per stage. Previews for each preset.
-2. **E2 – Setting and cover.** Split `Biome` into setting (abiotic) and cover (life);
-   cover as fractions per plant type from climate and the available innovations; the
-   renderer reads cover. Sun brightness from age in the climate.
-3. **E3 – Biosphere fields at deep time.** Innovations, gas levels, cover evolving on the
-   coarse grid with feedbacks to climate and erosion; no species yet (functional types only).
-4. **E4 – Species.** Ranges, dispersal, speciation, extinction, clade tree, history events.
-5. **E5 – Player.** Points, innovations, nudges, scenarios, overlays.
-6. **E6 – Animals at game time.** Individuals of the present species when zoomed in.
+1. **E1 – State-driven planet.** `PlanetSettings` gets the world state (§2) with presets;
+   the gates of §3 on vegetation, reefs, limestone, mangroves, marsh, river width and style,
+   dunes; ground, sea and sky colours; greenhouse and star brightness in the climate.
+   Previews and screenshots for each preset.
+2. **E2 – Setting and cover.** Split `Biome` into setting and cover; cover as fractions of
+   the land forms from the state and the cell's climate; foliage palette from the star.
+3. **E3 – Evolving state.** The box model (§4) on the deep-time clock; forms appearing and
+   fading; events; the planet re-rendered as the state moves (with living-world
+   milestone 5, deep-time mode).
+4. **E4 – Feedbacks into the terrain.** Cover in erosion (slopes, banks, dunes), carbonate
+   history into the rock types, reef growth into atolls.
+5. **E5 – Species and design screen.** (§7)
 
 ---
 
-## 9. Decisions to take
+## 9. Decisions
 
-- **V1. Unit of simulation**: (a) functional types only, (b) **species with traits and
-  ranges (recommended)**, (c) individuals. (b) gives speciation and a clade tree at a cost we
-  can afford; (c) can't reach deep time.
-- **V2. How Earth-like the history is**: (a) Earth's sequence scripted, (b) **the same
-  innovations and their conditions, outcomes and timing emergent (recommended)**, (c) free,
-  alien biochemistries. (b) keeps the planet plausible (the bar of D5) while each game differs.
-- **V3. Player role**: (a) watcher with catastrophes (Species), (b) **steering through
-  innovations and selection nudges (recommended)**, (c) direct designer (Spore).
-- **V4. Start**: (a) **always a virgin planet; earlier eras pass fast (recommended)**, (b)
-  choose a starting stage (presets) as well. Presets are needed anyway for previews.
-- **V5. Animals on screen**: when, and how many kinds (they are art-heavy: toon style
-  helps).
+Taken on 2026-11-04:
+
+- **V1. What to simulate**: the world state from global parameters (age, star, CO₂, O₂,
+  CH₄, forms of life); species kept light, later.
+- **V2. Earth likeness**: not Earth-focused. Same physics and chemistry, forms defined by
+  capabilities, own timing, outcomes and colours.
+- **V3. Player role**: not a priority. Later: designing each new species when one splits
+  off, not picking from simple choices.
+- **V4. Start**: always a virgin planet.
+
+Open:
+
+- **V5. Animals on screen**: when, and how many kinds.
+- **V6. Star types**: Sun-like only at first, or a choice (red dwarf, hotter stars) from the
+  start of E2.
 
 ---
 
@@ -297,23 +286,36 @@ Earth history
   https://www.nhm.ac.uk/discover/the-heavy-metal-rock-bands-charting-life-on-early-earth.html
 - Snowball Earth and oxygen: https://www.lunduniversity.lu.se/article/oxygen-content-increased-when-earth-was-covered-ice
 
+Deep-time geochemistry
+- Walker, Hays & Kasting 1981, *A negative feedback mechanism for the long-term
+  stabilization of Earth's surface temperature*, JGR 86:
+  https://sseh.uchicago.edu/doc/Walker_et_al-1981-Journal_of_Geophysical_Research-_Solid_Earth_(1978-2012).pdf
+- Bergman, Lenton & Watson 2004, *COPSE: a new model of biogeochemical cycling over
+  Phanerozoic time*, AJS 304: https://ajsonline.org/article/61725.pdf · code:
+  https://github.com/sjdaines/COPSE
+- Lenton, Daines & Mills 2018, *COPSE reloaded*:
+  https://eprints.whiterose.ac.uk/125894/1/Lenton_etal_2018_ESR.pdf
+- Catling & Zahnle, *Atmospheric evolution* (review): https://arxiv.org/pdf/1710.10557
+
 Life shaping landscapes
 - Gibling & Davies 2012, *Palaeozoic landscapes shaped by plant evolution*, Nature Geoscience:
   https://sseh.uchicago.edu/doc/Gibling_and_Davies_2012.pdf
 - Pre-vegetation alluvium (Cambridge): https://www.repository.cam.ac.uk/handle/1810/276277
-- Ganti et al. 2019, *Ain't no river wide enough* (single-channel rivers before plants):
+- Ganti et al. 2019 (single-channel rivers before plants):
   https://news.ucsb.edu/2019/019475/aint-no-river-wide-enough
 - Stanford 2025, unvegetated rivers can meander:
   https://news.stanford.edu/stories/2025/08/rise-plant-life-changed-how-rivers-move-study-shows
 - Nature Reviews Earth & Environment 2021 review on rivers and vegetation:
   https://www.nature.com/articles/s43017-021-00249-6
 
-Simulation
+Life elsewhere
+- Kiang et al. 2007, foliage colours under other stars (*Astrobiology*); summary:
+  https://www.space.com/3680-colorful-worlds-plants-planets-green.html
+
+Simulation and games
 - Hagen et al. 2021, *gen3sis: a general engine for eco-evolutionary simulations*:
   https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8384074/
 - Watson & Lovelock 1983, Daisyworld (in SimEarth's manual).
-
-Games
 - SimEarth: https://en.wikipedia.org/wiki/SimEarth
 - Species: Artificial Life, Real Evolution: https://store.steampowered.com/app/774541
 - Thrive: https://revolutionarygamesstudio.com/
