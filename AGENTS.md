@@ -309,6 +309,10 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     slows the plates); `volcanoes::place` takes `interior_heat()`; `craters.rs` (after the
     volcanoes, before the reefs: `Planet::craters`, in click reports); the terrain's
     `world.z` (soil) shows rock on gentler slopes and in outcrops.
+    E1d: `World::moons` (`moons=3`, `moon_mass`, `moon_distance`), `tidal_forcing()`;
+    `PlanetSurface::tide` (range in m on the coasts: shelf width and bays, `surface/features.rs`
+    `tides`), tidal flats added to `marsh`; the game's `planet/moons.rs` (toon spheres at
+    5–30 radii; the camera's far plane reaches them); tide in click reports.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo

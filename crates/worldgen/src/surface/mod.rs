@@ -13,7 +13,7 @@ pub use field::FaceField;
 use bevy_math::{Vec2, Vec3};
 
 use channels::Channels;
-use features::{deserts, karst, riparian, sea_ice};
+use features::{deserts, karst, riparian, sea_ice, tidal_flats, tides};
 
 use crate::{
     climate::{PlanetClimate, WindField},
@@ -79,6 +79,8 @@ pub struct PlanetSurface {
     /// Wetlands: marsh (positive, where the climate is wet enough) or salt flats (negative:
     /// closed flats and basins in dry climates), from `Planet::wetland` / `basins`.
     pub marsh: FaceField,
+    /// Tidal range on the coasts (m; 0 inland and out at sea).
+    pub tide: FaceField,
     /// The climate's prevailing winds (see [`PlanetSurface::wind_at`]).
     wind: Option<std::sync::Arc<WindField>>,
     /// The rivers, their water levels kept under the surface across their channel.
@@ -177,7 +179,15 @@ impl PlanetSurface {
             Some(koppen) => karst(planet, koppen),
             None => vec![0.; planet.grid.len()],
         };
-        let marsh: Vec<f32> = marsh.iter().zip(&ice).map(|(m, i)| m * (1. - i)).collect();
+        // Tidal flats join the marshes (salt marsh, or mud without life).
+        let tide = tides(planet);
+        let flats = tidal_flats(planet, &tide);
+        let marsh: Vec<f32> = marsh
+            .iter()
+            .zip(&flats)
+            .zip(&ice)
+            .map(|((&m, &f), i)| if f > m.abs() { f } else { m } * (1. - i))
+            .collect();
         let weights = weights.map(|weights: Vec<[f32; 5]>| {
             [0, 1, 2, 3, 4]
                 .map(|k| FaceField::new(planet, &weights.iter().map(|w| w[k]).collect::<Vec<_>>()))
@@ -204,6 +214,7 @@ impl PlanetSurface {
             craters: planet.craters.clone(),
             soil: planet.settings.world.ground.soil,
             marsh: FaceField::new(planet, &marsh),
+            tide: FaceField::new(planet, &tide),
             rivers: Vec::new(),
             channels: Channels::default(),
             springs: Springs::default(),

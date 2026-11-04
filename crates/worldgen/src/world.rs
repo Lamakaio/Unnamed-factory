@@ -16,6 +16,8 @@ pub struct World {
     pub ocean: Ocean,
     pub geology: Geology,
     pub ground: Ground,
+    /// The moons: tides, the night sky (and, later, a steady tilt).
+    pub moons: Vec<Moon>,
     pub albedo: Albedo,
     /// Life on land (vegetation). Until the life parameters are designed: none or today's.
     pub life: bool,
@@ -86,6 +88,14 @@ pub struct Geology {
     pub impacts: f32,
 }
 
+/// A moon.
+#[derive(Clone, Copy, Debug)]
+pub struct Moon {
+    /// Mass and distance (Earth's Moon's: 1).
+    pub mass: f32,
+    pub distance: f32,
+}
+
 /// The ground.
 #[derive(Clone, Copy, Debug)]
 pub struct Ground {
@@ -144,6 +154,10 @@ impl Default for World {
                 soil: 1.,
                 erosion: 1.,
             },
+            moons: vec![Moon {
+                mass: 1.,
+                distance: 1.,
+            }],
             albedo: Albedo {
                 sea: 0.06,
                 rock: 0.2,
@@ -169,6 +183,8 @@ const HEAT_DECAY: f32 = 3.;
 const CONTINENT_GROWTH: f32 = 1.2;
 /// How land share answers the amount of water (see `World::land_fraction`).
 const WATER_LAND: f32 = 0.6;
+/// The Sun's tide against the Moon's, on Earth.
+const SOLAR_TIDE: f32 = 0.46;
 /// Earth's sunlight (W/m²).
 const SOLAR_CONSTANT: f32 = 1361.;
 /// CO₂'s forcing beyond its logarithm (W/m² per ln² of the ratio to today's).
@@ -267,6 +283,33 @@ impl World {
             "impacts" => &mut self.geology.impacts,
             "soil" => &mut self.ground.soil,
             "erosion" => &mut self.ground.erosion,
+            // (The moons: how many (copies of the first, each further out), and the first's
+            // mass and distance.)
+            "moons" => {
+                let first = self.moons.first().copied().unwrap_or(Moon {
+                    mass: 1.,
+                    distance: 1.,
+                });
+                self.moons = (0..value.max(0.).round() as usize)
+                    .map(|k| Moon {
+                        distance: first.distance * 1.6f32.powi(k as i32),
+                        ..first
+                    })
+                    .collect();
+                return Ok(());
+            }
+            "moon_mass" | "moon_distance" => {
+                if self.moons.is_empty() {
+                    return Err("no moon: set moons first".into());
+                }
+                let moon = &mut self.moons[0];
+                if key == "moon_mass" {
+                    moon.mass = value;
+                } else {
+                    moon.distance = value;
+                }
+                return Ok(());
+            }
             "albedo_sea" => &mut self.albedo.sea,
             "albedo_rock" => &mut self.albedo.rock,
             "albedo_desert" => &mut self.albedo.desert,
@@ -354,6 +397,18 @@ impl World {
         self.geology.impacts * (1. + 6.93 * 5.44e-14 / 8.38e-4 * (6.93 * before).exp())
     }
 
+    /// Tide-raising force against Earth's (1): each moon's mass / distance³, and the star's
+    /// (on Earth about 0.46 of the Moon's; its mass / distance³ goes as 1 / year² by Kepler's
+    /// third law).
+    pub fn tidal_forcing(&self) -> f32 {
+        let moons: f32 = self
+            .moons
+            .iter()
+            .map(|m| m.mass / m.distance.max(0.05).powi(3))
+            .sum();
+        (moons + SOLAR_TIDE / self.orbit.year.max(0.01).powi(2)) / (1. + SOLAR_TIDE)
+    }
+
     /// Freezing point of the sea (°C): about −0.054 °C per ‰ of salt.
     pub fn sea_freezing(&self) -> f32 {
         -0.054 * self.ocean.salinity
@@ -432,6 +487,7 @@ mod tests {
         assert!((world.continental_growth() - 1.).abs() < 1e-5);
         assert!((world.land_fraction(0.3) - 0.3).abs() < 1e-5);
         assert!((world.impact_flux(world.age) - 1.).abs() < 1e-3);
+        assert!((world.tidal_forcing() - 1.).abs() < 1e-5);
         // The late heavy bombardment: hundreds of times today's rate 4 Gyr ago.
         let early = world.impact_flux(0.57);
         assert!((100.0..2000.0).contains(&early), "{early}");

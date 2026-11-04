@@ -238,7 +238,8 @@ pub fn apply(
     if let Projection::Perspective(perspective) = projection.as_mut() {
         let altitude = position.length() - surface.radius;
         perspective.near = (altitude * 0.02).clamp(0.05, 50.);
-        perspective.far = position.length() + surface.radius * 1.2;
+        // (Out to the moons.)
+        perspective.far = position.length() + surface.radius * (super::moons::MAX_DISTANCE + 2.);
     }
 }
 

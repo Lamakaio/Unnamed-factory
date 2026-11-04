@@ -8,6 +8,7 @@ pub mod camera;
 mod grass;
 mod inspect;
 mod mesh;
+pub mod moons;
 mod nature;
 mod river_profile;
 mod vegetation;
@@ -75,11 +76,17 @@ impl Plugin for PlanetPlugin {
                 (camera::control, camera::apply, camera::follow_sun)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
+                moons::orbit_moons.run_if(in_state(AppState::InGame)),
             ),
         )
         .add_systems(
             OnEnter(AppState::InGame),
-            (spawn_planet, view_planet, color_sunlight),
+            (
+                spawn_planet,
+                view_planet,
+                color_sunlight,
+                moons::spawn_moons,
+            ),
         );
     }
 }

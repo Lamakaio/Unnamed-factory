@@ -58,6 +58,96 @@ pub(super) fn riparian(planet: &Planet) -> Vec<f32> {
     near
 }
 
+/// Tidal range (m) on open coasts at Earth's tidal forcing, and how much a wide shelf (cells
+/// to deep water: `TIDE_SHELF`) raises it (the tide wave slows and piles up over shallow
+/// shelves: northwest Europe, Patagonia).
+const OPEN_TIDE: f32 = 0.8;
+const SHELF_GAIN: f32 = 5.;
+const TIDE_SHELF: (f32, f32) = (2., 14.);
+/// Bays raise it more (the tide funnelled into a narrowing inlet: the Bay of Fundy, the
+/// Severn): by up to `BAY_GAIN` where little of the surroundings (`BAY_REACH` cells) is sea.
+const BAY_GAIN: f32 = 1.5;
+const BAY_REACH: usize = 4;
+/// Deep water starts below this (world units: the shelf's edge).
+const DEEP_WATER: f32 = -2.;
+
+/// Tidal range of each coastal cell (m; 0 away from the sea's shores): from the tidal forcing
+/// of the moons and the star, raised along wide shelves.
+pub(super) fn tides(planet: &Planet) -> Vec<f32> {
+    let grid = &planet.grid;
+    let cells = grid.len();
+    let forcing = planet.settings.world.tidal_forcing();
+    // Distance (cells) from deep water through the sea.
+    let mut shelf = vec![u32::MAX; cells];
+    let mut queue: std::collections::VecDeque<usize> = (0..cells)
+        .filter(|&i| planet.sea[i] && planet.heights[i] < DEEP_WATER)
+        .collect();
+    for &i in &queue {
+        shelf[i] = 0;
+    }
+    while let Some(i) = queue.pop_front() {
+        for (j, _) in grid.neighbours(i) {
+            if planet.sea[j] && shelf[j] == u32::MAX {
+                shelf[j] = shelf[i] + 1;
+                queue.push_back(j);
+            }
+        }
+    }
+    let open = grid.blur(
+        &planet
+            .sea
+            .iter()
+            .map(|&s| if s { 1. } else { 0. })
+            .collect::<Vec<f32>>(),
+        BAY_REACH,
+    );
+    let at_sea = |i: usize| {
+        let width = shelf[i].min(1000) as f32;
+        OPEN_TIDE
+            * forcing
+            * (1. + SHELF_GAIN * smoothstep(TIDE_SHELF.0, TIDE_SHELF.1, width))
+            * (1. + BAY_GAIN * smoothstep(0.5, 0.25, open[i]))
+    };
+    let raw = crate::par::map(cells, |i| {
+        if planet.sea[i] {
+            // (Sea cells along the shore.)
+            if grid.neighbours(i).any(|(j, _)| !planet.sea[j]) {
+                at_sea(i)
+            } else {
+                0.
+            }
+        } else {
+            // (Land cells along the shore: the sea's beside them.)
+            grid.neighbours(i)
+                .filter(|&(j, _)| planet.sea[j])
+                .map(|(j, _)| at_sea(j))
+                .fold(0., f32::max)
+        }
+    });
+    grid.blur(&raw, 2)
+}
+
+/// Tidal flats: on gentle shores where the tide covers and uncovers the ground (heights below
+/// the high tide, exaggerated as the relief is: `TIDAL_FLATS` × the half range in world
+/// units), 0..1. Salt marsh with life, bare mud without.
+const TIDAL_FLATS: f32 = 6.;
+
+pub(super) fn tidal_flats(planet: &Planet, tide: &[f32]) -> Vec<f32> {
+    let grid = &planet.grid;
+    let raw = crate::par::map(grid.len(), |i| {
+        if planet.sea[i] || tide[i] <= 0. {
+            return 0.;
+        }
+        let high = tide[i] / 2. / crate::climate::METERS_PER_UNIT * TIDAL_FLATS;
+        let slope = grid
+            .neighbours(i)
+            .map(|(j, d)| (planet.heights[j] - planet.heights[i]).abs() / d)
+            .fold(0., f32::max);
+        smoothstep(high, high * 0.5, planet.heights[i]) * smoothstep(0.15, 0.05, slope)
+    });
+    grid.blur(&raw, 1)
+}
+
 /// Sea ice: none where the warmest month at sea level reaches the first (°C), pack ice where
 /// it stays below the second (for Earth's salinity: shifted with the freezing point).
 const SEA_ICE_WARMEST: (f32, f32) = (4., 0.);

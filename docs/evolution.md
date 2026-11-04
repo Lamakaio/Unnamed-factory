@@ -298,6 +298,9 @@ Each leaves the game runnable.
      (creep, rock outcrops), `ground.erosion`; applied by `PlanetSettings::for_world`.
    - **E1d – Moons and tides**: tidal range per coast, tidal flats and estuaries; moons in
      the game's sky.
+     *Done 2026-11-04*, except wider estuaries: `World::moons`, `tidal_forcing()` (moons and
+     star), tidal range from it raised on wide shelves and in bays (Earth: median 1.8 m, up
+     to 12 m), tidal flats as salt marsh or mud, moons orbiting in the game's sky.
    Previews and screenshots for each preset.
 2. **E2 – Setting and cover.** Split `Biome` into setting and cover; cover as fractions of
    the land forms from the state and the cell's climate; foliage palette from the star.

@@ -174,3 +174,6 @@ someone else's work, add it here (and mention it in the code comment where it is
   geodynamics of continental growth 3 billion years ago*, Science 335, 2012); a supercontinent
   as continents gathered on slow plates (the supercontinent cycle: J. B. Murphy and R. D.
   Nance, e.g. *Do supercontinents introvert or extrovert?*, Geology 31, 2003).
+- **Moons and tides** (`world.rs`, `surface/features.rs`): tide-raising force as mass /
+  distance³, the star's through Kepler's third law; tides amplified on wide shelves and in
+  funnelling bays, as described in D. Pugh and P. Woodworth, *Sea-Level Science*, 2014.

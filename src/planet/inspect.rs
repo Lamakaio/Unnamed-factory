@@ -322,6 +322,10 @@ fn report(world: &PlanetWorld, position: Vec3, camera: &PlanetCamera) -> String 
         surface.wetness(face, p),
         surface.marsh.bilinear(face, p),
     );
+    let tide = surface.tide.bilinear(face, p);
+    if tide > 0.01 {
+        let _ = writeln!(out, "  tidal range {tide:.1} m");
+    }
     let (t, rain) = world.climate.months_at(direction, height);
     let koppen = world.climate.koppen_at(direction, height);
     let _ = writeln!(
