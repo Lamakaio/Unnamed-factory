@@ -71,6 +71,11 @@ pub struct PlanetTerrainShader {
     /// Prevailing wind direction (in face coordinates).
     #[uniform(108)]
     pub wind: Vec4,
+
+    /// The world (`worldgen::world::World`): life on land (0..1: without, bare regolith,
+    /// mudflats, no flowers), how oxidised the ground is (0..1: grey and beige → rusty).
+    #[uniform(109)]
+    pub world: Vec4,
 }
 
 impl MaterialExtension for PlanetTerrainShader {

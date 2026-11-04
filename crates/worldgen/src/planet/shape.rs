@@ -647,12 +647,17 @@ impl<'a> Shaper<'a> {
                 * land.powf(1.5)
                 + swells * land.sqrt();
             let range = (b.belt + foothills * 0.4).max(old * 0.6).min(1.);
-            let (rock, dip) = rock_of(
-                b,
-                old,
-                [plains, hilly, plateau],
-                hills.layer(12).fbm3(p / 90., 3),
-            );
+            let noise = hills.layer(12).fbm3(p / 90., 3);
+            let (mut rock, dip) = rock_of(b, old, [plains, hilly, plateau], noise);
+            // Limestone is laid down by life (shells, reefs, microbial mats): without it,
+            // sandstone and shale.
+            if rock == Rock::Limestone && !self.settings.world.life {
+                rock = if noise > 0.3 {
+                    Rock::Sandstone
+                } else {
+                    Rock::Shale
+                };
+            }
             // Strata surfaces `height + offset = const`: the offset is a smooth field whose slope
             // is the dip (gentle on plateaus, steep in the foothills of ranges).
             let strata = dip * STRATA_WAVELENGTH * hills.layer(13).fbm3(p / STRATA_WAVELENGTH, 2);

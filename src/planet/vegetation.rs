@@ -420,6 +420,10 @@ fn place(
             };
             let species = species_index(name);
             let kind = SPECIES[species as usize].kind;
+            // (Without life: only the rocks.)
+            if !surface.life && kind != Kind::Rock {
+                continue;
+            }
             let height = surface.height(chunk.face, p);
             // (Land below sea level is fine away from the ocean; mangroves stand in the water.)
             let lowest = if surface.ocean.bilinear(chunk.face, p) < 0.02 {

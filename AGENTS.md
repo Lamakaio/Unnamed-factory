@@ -296,8 +296,13 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
   - `world.rs` (`docs/evolution.md` E1a): `World` (in `PlanetSettings::world`) holds the
     world's parameters; `World::climate()` gives the `ClimateSettings` (sunlight from the star
     and its age with Gough's brightening, greenhouse from CO₂ and CH₄, haze and dust albedo,
-    orbit, day length, ground albedos). Presets `earth` (default), `virgin`; `World::parse`
-    takes `virgin,day=240,...` (`climate_preview --world`, the game's `UF_WORLD`).
+    orbit, day length, ground albedos). Presets `earth` (default), `virgin`, `oxidised`;
+    `World::parse` takes `virgin,day=240,...` (`climate_preview --world`, the game's
+    `UF_WORLD`). `life: false` (E1b): no reefs, limestone (→ sandstone, shale), riparian
+    green, vegetation or grass blades (`PlanetSurface::life`), more ergs; the terrain shader's
+    `world` uniform (life, `World::oxidation()`) draws bare regolith, mudflats, no hot-spring
+    mats, and greys the ochres without oxygen; the water's `planet.w` is the sea's iron
+    (green seas); sunlight takes `Star::color()`; salinity moves the sea ice's freezing point.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo

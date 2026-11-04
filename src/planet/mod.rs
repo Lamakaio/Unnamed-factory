@@ -32,6 +32,7 @@ use worldgen::{
 
 use crate::{
     AppState,
+    environment::Sun,
     shaders::{PlanetTerrainMaterial, PlanetTerrainShader, PlanetWaterMaterial},
 };
 
@@ -76,7 +77,10 @@ impl Plugin for PlanetPlugin {
                     .run_if(in_state(AppState::InGame)),
             ),
         )
-        .add_systems(OnEnter(AppState::InGame), (spawn_planet, view_planet));
+        .add_systems(
+            OnEnter(AppState::InGame),
+            (spawn_planet, view_planet, color_sunlight),
+        );
     }
 }
 
@@ -92,6 +96,8 @@ pub struct PlanetWorld {
     /// units per erosion unit (see `Planet::strata_scale`).
     rock: Vec<Vec<u8>>,
     strata_scale: f32,
+    /// The world's parameters.
+    pub world: World,
 }
 
 /// The world being generated (in the background).
@@ -142,6 +148,7 @@ fn start_generation(mut commands: Commands, seed: u64, n: usize) {
             sea,
             rock,
             strata_scale: planet.strata_scale,
+            world: planet.settings.world.clone(),
         }
     });
     commands.insert_resource(Generation(task));
@@ -237,6 +244,12 @@ fn spawn_planet(
                     planet: Vec4::new(surface.radius, n as f32, world.strata_scale, 1.),
                     rock: Some(images.add(image)),
                     wind: Vec4::new(1., 0., 0., 0.),
+                    world: Vec4::new(
+                        world.world.life as u32 as f32,
+                        world.world.oxidation(),
+                        0.,
+                        0.,
+                    ),
                 },
             })
         })
@@ -264,11 +277,18 @@ fn spawn_planet(
     water::spawn(
         &mut commands,
         surface,
+        world.world.ocean.iron,
         sea,
         &mut meshes,
         &mut images,
         &mut water_materials,
     );
+}
+
+/// Sunlight in the star's colour.
+fn color_sunlight(world: Res<PlanetWorld>, mut sun: Single<&mut DirectionalLight, With<Sun>>) {
+    let [r, g, b] = world.world.star.color();
+    sun.color = Color::linear_rgb(r, g, b);
 }
 
 /// Look at the planet from orbit, with the planet camera; space has no atmosphere nor fog

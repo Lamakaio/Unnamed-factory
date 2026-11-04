@@ -322,8 +322,13 @@ fn add_features(
             strata[i] = 0.;
         }
     }
-    // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes.
-    let reef = crate::reefs::build(grid, radius, settings.seed, &volcanoes, heights, sea);
+    // Coral reefs in the tropics: fringing and barrier reefs, atolls on sunk volcanoes
+    // (reefs are built by life).
+    let reef = if settings.world.life {
+        crate::reefs::build(grid, radius, settings.seed, &volcanoes, heights, sea)
+    } else {
+        vec![0.; cells]
+    };
     laps.lap("  volcanoes");
     // Barrier islands and lagoons on low coasts with a shallow shelf.
     crate::barriers::build(grid, radius, settings.seed, &reef, heights, sea, &mut rock);

@@ -1,7 +1,7 @@
 //! The world's parameters (`docs/evolution.md` §2): its age, star, orbit, atmosphere, ocean,
 //! surface and whether there is life. They set what the climate computes (`climate()`), and
 //! later what the generator builds and the game draws. Earth's by default; presets for other
-//! states (`World::virgin`).
+//! states (`World::virgin`, `World::oxidised`).
 
 use crate::climate::ClimateSettings;
 
@@ -64,6 +64,10 @@ pub struct Atmosphere {
 pub struct Ocean {
     /// Strength of the ocean currents' warming and cooling of the coasts (1: Earth's).
     pub currents: f32,
+    /// Salinity (‰; Earth 35): saltier seas freeze colder.
+    pub salinity: f32,
+    /// Dissolved iron (0..1): seas without oxygen keep their iron, and look green to brown.
+    pub iron: f32,
 }
 
 /// Surface albedos (share of the light reflected) of the ground types.
@@ -101,7 +105,11 @@ impl Default for World {
                 o2: 0.21,
                 dust: 0.1,
             },
-            ocean: Ocean { currents: 1. },
+            ocean: Ocean {
+                currents: 1.,
+                salinity: 35.,
+                iron: 0.,
+            },
             albedo: Albedo {
                 sea: 0.06,
                 rock: 0.2,
@@ -151,15 +159,29 @@ impl World {
             o2: 0.,
             dust: 0.2,
         };
+        world.ocean.iron = 0.8;
         world.life = false;
         world
     }
 
-    /// A preset by name (`earth`, `virgin`).
+    /// After the first oxygen: a little in the air (rusting the ground red), the sea's iron
+    /// gone, CO₂ lower, the star brighter; still no life on land.
+    pub fn oxidised() -> Self {
+        let mut world = Self::virgin();
+        world.age = 2.5;
+        world.atmosphere.co2 = 10_000.;
+        world.atmosphere.o2 = 0.02;
+        world.atmosphere.dust = 0.15;
+        world.ocean.iron = 0.1;
+        world
+    }
+
+    /// A preset by name (`earth`, `virgin`, `oxidised`).
     pub fn preset(name: &str) -> Option<Self> {
         match name {
             "earth" => Some(Self::default()),
             "virgin" => Some(Self::virgin()),
+            "oxidised" => Some(Self::oxidised()),
             _ => None,
         }
     }
@@ -196,6 +218,8 @@ impl World {
             "o2" => &mut self.atmosphere.o2,
             "dust" => &mut self.atmosphere.dust,
             "currents" => &mut self.ocean.currents,
+            "salinity" => &mut self.ocean.salinity,
+            "iron" => &mut self.ocean.iron,
             "albedo_sea" => &mut self.albedo.sea,
             "albedo_rock" => &mut self.albedo.rock,
             "albedo_desert" => &mut self.albedo.desert,
@@ -243,6 +267,18 @@ impl World {
         co2 + ch4
     }
 
+    /// How oxidised the ground is (0..1): rusty red once there is oxygen in the air (red
+    /// beds appeared on Earth with its first oxygen, around 1 % of today's), grey to beige
+    /// before.
+    pub fn oxidation(&self) -> f32 {
+        crate::noise::smoothstep(0.0005, 0.01, self.atmosphere.o2)
+    }
+
+    /// Freezing point of the sea (°C): about −0.054 °C per ‰ of salt.
+    pub fn sea_freezing(&self) -> f32 {
+        -0.054 * self.ocean.salinity
+    }
+
     /// How thick the organic haze is (0..1).
     pub fn haze(&self) -> f32 {
         let ratio = self.atmosphere.ch4 / self.atmosphere.co2.max(1.);
@@ -251,6 +287,36 @@ impl World {
 }
 
 impl Star {
+    /// The colour of its light (linear RGB, the Sun's white): from its temperature, with
+    /// Tanner Helland's fit of black-body colours (sRGB), divided by the Sun's.
+    pub fn color(&self) -> [f32; 3] {
+        let black_body = |kelvin: f32| {
+            let t = kelvin.clamp(1000., 40000.) / 100.;
+            let r = if t <= 66. {
+                255.
+            } else {
+                329.699 * (t - 60.).powf(-0.133_205)
+            };
+            let g = if t <= 66. {
+                99.4708 * t.ln() - 161.12
+            } else {
+                288.122 * (t - 60.).powf(-0.075_515)
+            };
+            let b = if t >= 66. {
+                255.
+            } else if t <= 19. {
+                0.
+            } else {
+                138.518 * (t - 10.).ln() - 305.045
+            };
+            [r, g, b].map(|c| (c.clamp(0., 255.) / 255.).powf(2.2))
+        };
+        let (star, sun) = (black_body(self.temperature), black_body(5772.));
+        let ratio = [0, 1, 2].map(|k| star[k] / sun[k].max(1e-3));
+        let brightest = ratio.iter().copied().fold(0., f32::max);
+        ratio.map(|c| c / brightest)
+    }
+
     /// Main-sequence lifetime (Gyr): with mass roughly as temperature², lifetime as
     /// mass^-2.5.
     pub fn lifetime(&self) -> f32 {

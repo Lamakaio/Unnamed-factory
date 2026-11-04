@@ -286,6 +286,10 @@ Each leaves the game runnable.
    - **E1b – Colours**: sunlight from the star; sky from gases and dust; sea from its
      chemistry; ground from O₂ and soil; salinity in sea ice and salt flats; the life switch
      (§2.1) gating vegetation, reefs, limestone, mangroves, marsh, rivers, dunes (§3).
+     *Done 2026-11-04*, except the sky (no atmosphere is drawn yet), wide braided rivers
+     without life and salinity in salt flats: presets `virgin` (grey-beige regolith,
+     iron-green sea, no vegetation, reefs or limestone, more sand seas) and `oxidised`
+     (rusty ground).
    - **E1c – Geology from age**: volcanism, worn ranges, craters (#20), supercontinent
      phase, water amount → land share, soil and erosion.
    - **E1d – Moons and tides**: tidal range per coast, tidal flats and estuaries; moons in

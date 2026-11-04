@@ -30,6 +30,8 @@ use crate::{
 #[derive(Clone)]
 pub struct PlanetSurface {
     pub n: usize,
+    /// Whether there is life on land (`World::life`): without, no vegetation.
+    pub life: bool,
     /// Radius of the sea level (world units).
     pub radius: f32,
     pub heights: FaceField,
@@ -201,6 +203,7 @@ impl PlanetSurface {
             channels: Channels::default(),
             springs: Springs::default(),
             n: planet.grid.n(),
+            life: planet.settings.world.life,
             radius: planet.radius(),
             heights: FaceField::new(planet, &heights),
             lake_depth: FaceField::new(planet, &lake_depth),

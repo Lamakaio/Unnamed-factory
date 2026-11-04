@@ -47,6 +47,8 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 // Prevailing wind direction (in face coordinates).
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> wind: vec4<f32>;
+// The world: life on land (x, 0..1), how oxidised the ground is (y, 0..1).
+@group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> world: vec4<f32>;
 // Gust speed (world units per second).
 const GUST_SPEED: f32 = 3.0;
 // Grass blades: per world unit, height of the grass layer (world units), ray march steps, and
@@ -113,6 +115,13 @@ fn srgb(r: f32, g: f32, b: f32) -> vec3<f32> {
 }
 
 // A crisp step, antialiased over about a pixel (`width` = the value's change per pixel).
+// Ground colours tinted by the air: without oxygen iron stays unrusted, so ochres and reds
+// turn to greys and beiges (the red of deserts and red beds is rust).
+fn weathered(c: vec3<f32>) -> vec3<f32> {
+    let grey = dot(c, vec3(0.2126, 0.7152, 0.0722)) * vec3(1.02, 1.0, 0.95);
+    return mix(mix(grey, c, 0.25), c, world.y);
+}
+
 fn crisp(edge: f32, value: f32, width: f32) -> f32 {
     let w = max(width, 1e-4);
     return smoothstep(edge - w, edge + w, value);
@@ -347,13 +356,29 @@ fn ground(
     let conifer = mix(srgb(0.21, 0.38, 0.22), srgb(0.30, 0.34, 0.20), patches(blotches, 0.1));
     color = mix(color, conifer * floor_shade, border(b.b, medium));
 
+    // Without life: bare regolith (broken rock, grit and dust) instead of all the above, in
+    // patches of coarser and finer ground, darker where it is damp.
+    if world.x < 0.5 {
+        var regolith = mix(srgb(0.56, 0.53, 0.49), srgb(0.47, 0.45, 0.42), patches(blotches, 0.1));
+        regolith = mix(regolith, srgb(0.64, 0.58, 0.50), patches(large, 0.3) * 0.7);
+        let grit = patches(fbm(xz * 0.5 + vec2(3.3, 1.1), 3, footprint * 0.5), 0.6);
+        regolith = mix(regolith, srgb(0.40, 0.38, 0.36), grit * 0.6);
+        regolith = mix(regolith, regolith * 0.82, 1.0 - dry);
+        color = weathered(regolith * vec3(1.0 + 0.25 * world.y, 1.0 - 0.05 * world.y,
+            1.0 - 0.2 * world.y));
+    }
+
     // Marsh: reed beds (dark strokes) around still pools with a muddy rim.
     let pool_noise = fbm(xz * 0.45 + vec2(5.0, 9.0), 3, footprint * 0.45);
     let pools = patches(pool_noise, 0.15);
     let mud = patches(pool_noise, 0.05) - pools;
     let reed_stroke = value_noise(vec2(dot(xz, wind.xy) * 5.0, dot(xz, vec2(-wind.y, wind.x)) * 22.0));
-    let reeds = mix(srgb(0.42, 0.52, 0.26), srgb(0.30, 0.40, 0.20), patches(reed_stroke, 0.3))
+    var reeds = mix(srgb(0.42, 0.52, 0.26), srgb(0.30, 0.40, 0.20), patches(reed_stroke, 0.3))
         * wind_shade;
+    // (Without life: mudflats.)
+    if world.x < 0.5 {
+        reeds = mix(srgb(0.40, 0.37, 0.33), srgb(0.33, 0.31, 0.29), patches(reed_stroke, 0.3));
+    }
     let pool_water = mix(srgb(0.16, 0.30, 0.34), srgb(0.30, 0.46, 0.48),
         patches(fbm(xz * 1.5 + vec2(time * 0.05, 0.0), 2, footprint * 1.5), 0.45) * 0.6);
     var marsh = mix(reeds, srgb(0.36, 0.30, 0.20), mud);
@@ -385,6 +410,7 @@ fn ground(
     desert = mix(desert, clay, flats);
     let sea_of_sand = erg + 0.25 * medium + 0.15 * large;
     desert = mix(desert, dune_sand, crisp(0.5, sea_of_sand, fwidth(sea_of_sand)));
+    desert = weathered(desert);
     let desertness = border(c.r, medium);
     color = mix(color, desert, desertness);
 
@@ -396,7 +422,7 @@ fn ground(
     // Rock: rocky ground, and every steep slope (redder in deserts).
     let steep_value = steep + 0.06 * medium;
     let rock = max(border(a.g, medium), crisp(0.34, steep_value, fwidth(steep_value)));
-    let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness);
+    let rock_tone = mix(vec3(1.0), vec3(1.12, 0.9, 0.78), desertness * world.y);
     // (Badlands: bare wherever the ground slopes a little.)
     let bare = badlands * smoothstep(0.02, 0.1, steep) + 0.2 * medium;
     // (Beaches stay sand where they slope steeply into the water: bars, spits.)
@@ -415,8 +441,9 @@ fn ground(
         let field_edge = geothermal + 0.25 * medium;
         let pool_noise = fbm(xz * 0.9 + vec2(2.0, 6.0), 3, footprint * 0.9);
         var hot = mix(srgb(0.92, 0.90, 0.84), srgb(0.80, 0.78, 0.72), patches(blotches, 0.2));
-        hot = mix(hot, srgb(0.86, 0.52, 0.22), patches(pool_noise, 0.25));
-        hot = mix(hot, srgb(0.94, 0.80, 0.30), patches(pool_noise, 0.38));
+        // (The rust and yellow are microbial mats: none without life.)
+        hot = mix(hot, srgb(0.86, 0.52, 0.22), patches(pool_noise, 0.25) * world.x);
+        hot = mix(hot, srgb(0.94, 0.80, 0.30), patches(pool_noise, 0.38) * world.x);
         hot = mix(hot, srgb(0.10, 0.62, 0.68), patches(pool_noise, 0.48));
         hot = mix(hot, srgb(0.05, 0.40, 0.58), patches(pool_noise, 0.6));
         color = mix(color, hot, crisp(0.5, field_edge, fwidth(field_edge)));

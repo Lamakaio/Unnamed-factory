@@ -1008,6 +1008,7 @@ pub fn sea_textures(planet: &Planet, surface: &PlanetSurface) -> Vec<Vec<u8>> {
 pub fn spawn(
     commands: &mut Commands,
     surface: &PlanetSurface,
+    iron: f32,
     sea: Vec<Vec<u8>>,
     meshes: &mut Assets<Mesh>,
     images: &mut Assets<Image>,
@@ -1024,7 +1025,7 @@ pub fn spawn(
             },
             extension: PlanetWaterShader {
                 tint: LinearRgba::WHITE,
-                planet: Vec4::new(surface.radius, n as f32, sea.is_some() as u32 as f32, 0.),
+                planet: Vec4::new(surface.radius, n as f32, sea.is_some() as u32 as f32, iron),
                 sea,
                 wind: Vec4::new(1., 0., 0., 0.),
             },

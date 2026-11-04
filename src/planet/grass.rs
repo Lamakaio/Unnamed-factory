@@ -154,6 +154,9 @@ fn update_near_grass(
 /// Grass colour (linear) and density at a point, as the terrain shader draws it; `None` where
 /// it draws no grass.
 fn grass_at(surface: &PlanetSurface, face: usize, p: Vec2) -> Option<(Vec3, f32)> {
+    if !surface.life {
+        return None;
+    }
     let srgb = |r: f32, g: f32, b: f32| Vec3::new(r, g, b).powf(2.2);
     let Some(weights) = &surface.weights else {
         return Some((srgb(0.40, 0.66, 0.24), 1.));

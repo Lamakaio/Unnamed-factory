@@ -161,3 +161,8 @@ someone else's work, add it here (and mention it in the code comment where it is
   Kepler's equation for the orbit; fewer, wider circulation cells and more poleward heat
   transport on slowly spinning planets (Hadley width ∝ rotation^-1/3: S. Hill et al. 2019;
   Y. Kaspi and A. Showman, ApJ 804, 2015).
+- **Planets at other stages** (`world.rs`, terrain and water shaders): star colours from
+  T. Helland's fit of black-body colours (*How to Convert Temperature (K) to RGB*, 2012); red
+  beds and grey pre-oxygen ground, iron-rich seas before oxygen (the Great Oxidation Event's
+  record: banded iron formations, red beds); most limestone laid down by life; sea water's
+  freezing point about −0.054 °C per ‰ of salt.

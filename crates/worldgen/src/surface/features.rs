@@ -27,6 +27,10 @@ pub(super) fn riparian(planet: &Planet) -> Vec<f32> {
     let grid = &planet.grid;
     let radius = planet.radius();
     let mut near = vec![0f32; grid.len()];
+    // (Banks are green with plants: none without life.)
+    if !planet.settings.world.life {
+        return near;
+    }
     let mut seen = vec![0u32; grid.len()];
     let mut stamp = 0u32;
     for river in &planet.rivers {
@@ -55,8 +59,13 @@ pub(super) fn riparian(planet: &Planet) -> Vec<f32> {
 }
 
 /// Sea ice: none where the warmest month at sea level reaches the first (°C), pack ice where
-/// it stays below the second.
+/// it stays below the second (for Earth's salinity: shifted with the freezing point).
 const SEA_ICE_WARMEST: (f32, f32) = (4., 0.);
+/// Earth's sea water freezing point (°C).
+const EARTH_SEA_FREEZING: f32 = -1.9;
+/// Without plants to pin it, sand spreads: the sand seas' noise threshold is lowered by this,
+/// and steppes get them too.
+const BARE_ERG: f32 = 0.3;
 
 /// Karst of each cell: towers (positive) where limestone meets the humid tropics and
 /// subtropics, sinkholes (negative) in other wet climates; none in dry or polar ones.
@@ -89,6 +98,8 @@ pub(super) fn deserts(planet: &Planet, koppen: &[crate::climate::Koppen]) -> (Ve
     let grid = &planet.grid;
     let radius = planet.radius();
     let noise = Noise::new(planet.settings.seed as u32 ^ 0xE6C5);
+    let bare = !planet.settings.world.life;
+    let threshold = if bare { -0.05 - BARE_ERG } else { -0.05 };
     let raw: Vec<(f32, f32)> = crate::par::map(grid.len(), |i| {
         let desert = matches!(koppen[i], Koppen::BWh | Koppen::BWk);
         let steppe = matches!(koppen[i], Koppen::BSh | Koppen::BSk);
@@ -100,9 +111,12 @@ pub(super) fn deserts(planet: &Planet, koppen: &[crate::climate::Koppen]) -> (Ve
             .map(|(j, d)| (planet.heights[j] - planet.heights[i]).abs() / d)
             .fold(0., f32::max);
         let world = grid.direction(i) * radius;
-        let erg = if desert {
-            smoothstep(-0.05, 0.25, noise.fbm3(world / ERG_WAVELENGTH, 3))
-                * (1. - smoothstep(ERG_SLOPE.0, ERG_SLOPE.1, slope))
+        let erg = if desert || bare && steppe {
+            smoothstep(
+                threshold,
+                threshold + 0.3,
+                noise.fbm3(world / ERG_WAVELENGTH, 3),
+            ) * (1. - smoothstep(ERG_SLOPE.0, ERG_SLOPE.1, slope))
                 * (1. - smoothstep(ERG_HEIGHT.0, ERG_HEIGHT.1, planet.heights[i]))
         } else {
             0.
@@ -124,7 +138,8 @@ pub(super) fn deserts(planet: &Planet, koppen: &[crate::climate::Koppen]) -> (Ve
 
 /// Sea and lake ice (see [`PlanetSurface::sea_ice`]): from the warmest month at the water's level.
 pub(super) fn sea_ice(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
-    // (Lakes too: at their water's height.)
+    let colder = EARTH_SEA_FREEZING - planet.settings.world.sea_freezing();
+    // (Lakes too: at their water's height. Fresh water: as Earth's sea.)
     let raw = crate::par::map(planet.grid.len(), |i| {
         let lake = planet.lake_depth[i] > 0.02;
         if !planet.sea[i] && !lake {
@@ -137,7 +152,12 @@ pub(super) fn sea_ice(planet: &Planet, climate: &PlanetClimate) -> Vec<f32> {
         };
         let (t, _) = climate.months_at(planet.grid.direction(i), level);
         let warmest = t.iter().copied().fold(f32::MIN, f32::max);
-        smoothstep(SEA_ICE_WARMEST.0, SEA_ICE_WARMEST.1, warmest)
+        let colder = if lake { 0. } else { colder };
+        smoothstep(
+            SEA_ICE_WARMEST.0 - colder,
+            SEA_ICE_WARMEST.1 - colder,
+            warmest,
+        )
     });
     planet.grid.blur(&raw, 2)
 }

@@ -49,6 +49,11 @@ const LAGOON: vec3<f32> = vec3(0.16, 0.80, 0.72);
 const SHALLOW: vec3<f32> = vec3(0.04, 0.56, 0.66);
 const MID: vec3<f32> = vec3(0.04, 0.36, 0.52);
 const DEEP: vec3<f32> = vec3(0.025, 0.15, 0.34);
+// The same in iron-rich seas (no oxygen to rust the iron out): murky greens.
+const LAGOON_IRON: vec3<f32> = vec3(0.36, 0.60, 0.40);
+const SHALLOW_IRON: vec3<f32> = vec3(0.20, 0.44, 0.32);
+const MID_IRON: vec3<f32> = vec3(0.12, 0.30, 0.24);
+const DEEP_IRON: vec3<f32> = vec3(0.06, 0.16, 0.15);
 const BANDS: vec3<f32> = vec3(0.25, 1.2, 4.0);
 const FOAM: vec3<f32> = vec3(1.1, 1.13, 1.15);
 const GLINT: vec3<f32> = vec3(0.85, 0.95, 1.0);
@@ -252,9 +257,12 @@ fn fragment(
 
     // Depth bands, their edges wobbling.
     let wobble = value_noise(xz * 0.6 + vec2(time * 0.05, 0.0));
-    var color = mix(LAGOON, SHALLOW, crisp(BANDS.x, depth * (1.0 + 0.25 * wobble)));
-    color = mix(color, MID, crisp(BANDS.y, depth * (1.0 + 0.2 * wobble)));
-    color = mix(color, DEEP, crisp(BANDS.z, depth * (1.0 + 0.15 * wobble)));
+    // (planet.w: how much iron the sea holds.)
+    let iron = planet.w;
+    var color = mix(mix(LAGOON, LAGOON_IRON, iron), mix(SHALLOW, SHALLOW_IRON, iron),
+        crisp(BANDS.x, depth * (1.0 + 0.25 * wobble)));
+    color = mix(color, mix(MID, MID_IRON, iron), crisp(BANDS.y, depth * (1.0 + 0.2 * wobble)));
+    color = mix(color, mix(DEEP, DEEP_IRON, iron), crisp(BANDS.z, depth * (1.0 + 0.15 * wobble)));
     var alpha = mix(mix(0.5, 0.8, smoothstep(0.0, 0.25, depth)), 0.97, smoothstep(0.25, 1.5, depth));
 
     var crest = 0.0;
