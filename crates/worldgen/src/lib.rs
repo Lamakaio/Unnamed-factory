@@ -17,6 +17,7 @@ pub mod noise;
 pub mod planet;
 pub mod rivers;
 pub mod sea;
+pub mod sky;
 pub mod sphere;
 pub mod springs;
 pub mod surface;

@@ -85,6 +85,8 @@ fn update_near_grass(
                     // Tiles are turned with their x downwind.
                     wind: Vec4::new(1., 0., 0., 0.),
                     foliage: NO_FOLIAGE_TINT,
+                    sky_map: None,
+                    sky: Vec4::ZERO,
                 },
             })
         })

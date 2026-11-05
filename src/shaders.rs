@@ -15,32 +15,50 @@ impl Plugin for ShadersPlugin {
             MaterialPlugin::<LodToonMaterial>::default(),
             MaterialPlugin::<SwayToonMaterial>::default(),
             MaterialPlugin::<GrassBladeMaterial>::default(),
-            MaterialPlugin::<AtmosphereMaterial>::default(),
+            MaterialPlugin::<CloudMaterial>::default(),
         ));
     }
 }
 
 const PLANET_TERRAIN_SHADER_ASSET_PATH: &str = "shaders/planet_terrain.wesl";
-const ATMOSPHERE_SHADER_ASSET_PATH: &str = "shaders/atmosphere.wesl";
+const CLOUDS_SHADER_ASSET_PATH: &str = "shaders/clouds.wesl";
 
-/// The atmosphere's glow seen from outside (`atmosphere.wesl`): `sky` is the sky's colour
-/// (rgb, linear) and the glow's strength (alpha). Added over what is behind it.
+/// The cloud layer (`clouds.wesl`): a shell round the planet showing the sky map's clouds
+/// (`worldgen::sky`), toon-lit. `layer.x` is the shell's radius; `tint` the clouds' colour
+/// (hazy skies yellow them).
 #[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
 #[reflect(PartialEq)]
-pub struct AtmosphereMaterial {
+pub struct CloudMaterial {
     #[uniform(0)]
-    pub sky: LinearRgba,
+    pub layer: Vec4,
+    #[uniform(1)]
+    pub tint: LinearRgba,
+    #[texture(2)]
+    #[sampler(3)]
+    pub sky: Handle<Image>,
 }
 
-impl Material for AtmosphereMaterial {
+impl Material for CloudMaterial {
     fn fragment_shader() -> ShaderRef {
-        ATMOSPHERE_SHADER_ASSET_PATH.into()
+        CLOUDS_SHADER_ASSET_PATH.into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Add
+        AlphaMode::Blend
+    }
+
+    fn specialize(
+        _pipeline: &bevy::pbr::MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _key: bevy::pbr::MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // (Seen from above and from below.)
+        descriptor.primitive.cull_mode = None;
+        Ok(())
     }
 }
+
 const PLANET_WATER_SHADER_ASSET_PATH: &str = "shaders/planet_water.wesl";
 
 /// The planet's water: the flat map's toon water on the sphere (`planet_water.wesl`). Meshes
@@ -63,6 +81,13 @@ pub struct PlanetWaterShader {
     /// Wind direction (in the pattern coordinates) where the mesh doesn't carry its own.
     #[uniform(104)]
     pub wind: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(105)]
+    #[sampler(106)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(107)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for PlanetWaterShader {
@@ -102,6 +127,13 @@ pub struct PlanetTerrainShader {
     /// brightness); (0, 1): as they are.
     #[uniform(110)]
     pub foliage: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(111)]
+    #[sampler(112)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(113)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for PlanetTerrainShader {
@@ -133,6 +165,13 @@ pub struct ToonShader {
     /// brightness); (0, 1): as they are.
     #[uniform(104)]
     pub foliage: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(105)]
+    #[sampler(106)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(107)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for ToonShader {
@@ -163,6 +202,13 @@ pub struct LodToonShader {
     /// brightness); (0, 1): as they are.
     #[uniform(104)]
     pub foliage: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(105)]
+    #[sampler(106)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(107)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for LodToonShader {
@@ -205,6 +251,13 @@ pub struct SwayToonShader {
     /// brightness); (0, 1): as they are.
     #[uniform(104)]
     pub foliage: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(105)]
+    #[sampler(106)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(107)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for SwayToonShader {
@@ -240,6 +293,13 @@ pub struct GrassBladeShader {
     /// brightness); (0, 1): as they are.
     #[uniform(104)]
     pub foliage: Vec4,
+    /// The sky map (`worldgen::sky`: cloud density, convective, haze, dust by direction)
+    /// for cloud shadows and haze, and the cloud layer's radius (x; 0: no clouds).
+    #[texture(105)]
+    #[sampler(106)]
+    pub sky_map: Option<Handle<Image>>,
+    #[uniform(107)]
+    pub sky: Vec4,
 }
 
 impl MaterialExtension for GrassBladeShader {
@@ -267,6 +327,8 @@ pub fn toon(base: &StandardMaterial, snow: Vec4) -> ToonMaterial {
             tint: LinearRgba::WHITE,
             snow,
             foliage: NO_FOLIAGE_TINT,
+            sky_map: None,
+            sky: Vec4::ZERO,
         },
     }
 }

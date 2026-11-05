@@ -77,26 +77,27 @@ impl Plugin for PlanetPlugin {
                 (schedule_chunk_meshes, finish_chunk_meshes)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
-                (
-                    camera::control,
-                    camera::apply,
-                    camera::follow_sun,
-                    sky::sky_behind,
-                )
+                (camera::control, camera::apply, camera::follow_sun)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
-                (moons::orbit_moons, tint_foliage).run_if(in_state(AppState::InGame)),
+                (moons::orbit_moons, dress_materials, sky::drift_clouds)
+                    .run_if(in_state(AppState::InGame)),
             ),
         )
         .add_systems(
             OnEnter(AppState::InGame),
             (
-                spawn_planet,
-                view_planet,
-                color_sunlight,
-                moons::spawn_moons,
-                sky::spawn_atmosphere,
-            ),
+                // (The sky map first: the planet's materials sample it.)
+                sky::init_sky_map,
+                (
+                    spawn_planet,
+                    view_planet,
+                    color_sunlight,
+                    moons::spawn_moons,
+                    sky::spawn_sky,
+                ),
+            )
+                .chain(),
         );
     }
 }
@@ -221,6 +222,7 @@ struct TerrainMaterial(Vec<Handle<PlanetTerrainMaterial>>);
 fn spawn_planet(
     mut commands: Commands,
     mut world: ResMut<PlanetWorld>,
+    sky: Res<sky::SkyMap>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut terrain_materials: ResMut<Assets<PlanetTerrainMaterial>>,
@@ -262,6 +264,8 @@ fn spawn_planet(
                     rock: Some(images.add(image)),
                     wind: Vec4::new(1., 0., 0., 0.),
                     foliage: foliage(&world.world),
+                    sky_map: Some(sky.image.clone()),
+                    sky: Vec4::new(sky.cloud_radius, 0., 0., 0.),
                     world: Vec4::new(
                         world.world.life as u32 as f32,
                         world.world.oxidation(),
@@ -292,10 +296,12 @@ fn spawn_planet(
             }
         }
     }
+    let [r, g, b] = world.world.sky_color();
     water::spawn(
         &mut commands,
         surface,
         world.world.ocean.iron,
+        (sky.image.clone(), Vec4::new(sky.cloud_radius, r, g, b)),
         sea,
         &mut meshes,
         &mut images,
@@ -309,34 +315,39 @@ fn foliage(world: &World) -> Vec4 {
     Vec4::new(turn, brightness, 0., 0.)
 }
 
-/// Plants under the world's star: every object material takes its foliage tint (models load
-/// and grass materials appear after the planet, so any material that has not got it yet).
-fn tint_foliage(
+/// Plants under the world's star, and the sky map for cloud shadows: every object material
+/// takes them (models load and grass materials appear after the planet, so any material that
+/// has not got them yet).
+fn dress_materials(
     world: Res<PlanetWorld>,
+    sky: Res<sky::SkyMap>,
     mut toon: ResMut<Assets<ToonMaterial>>,
     mut lod: ResMut<Assets<LodToonMaterial>>,
     mut sway: ResMut<Assets<SwayToonMaterial>>,
     mut grass: ResMut<Assets<GrassBladeMaterial>>,
 ) {
     let tint = foliage(&world.world);
-    macro_rules! tint {
+    let layer = Vec4::new(sky.cloud_radius, 0., 0., 0.);
+    macro_rules! dress {
         ($assets:expr) => {
             let stale: Vec<_> = $assets
                 .iter()
-                .filter(|(_, m)| m.extension.foliage != tint)
+                .filter(|(_, m)| m.extension.foliage != tint || m.extension.sky != layer)
                 .map(|(id, _)| id)
                 .collect();
             for id in stale {
                 if let Some(mut material) = $assets.get_mut(id) {
                     material.extension.foliage = tint;
+                    material.extension.sky = layer;
+                    material.extension.sky_map = Some(sky.image.clone());
                 }
             }
         };
     }
-    tint!(toon);
-    tint!(lod);
-    tint!(sway);
-    tint!(grass);
+    dress!(toon);
+    dress!(lod);
+    dress!(sway);
+    dress!(grass);
 }
 
 /// Sunlight in the star's colour.

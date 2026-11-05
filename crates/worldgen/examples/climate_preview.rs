@@ -165,6 +165,41 @@ fn main() {
             let c = [0.95 - 0.85 * t, 0.9 - 0.5 * t, 0.7 + 0.25 * t];
             if planet.sea[i] { c.map(|v| v * 0.6) } else { c }
         });
+        // The sky: clouds (white, convective ones warmer) over the ground, haze and dust.
+        let start = Instant::now();
+        let sky = worldgen::sky::SkyField::new(&climate, &planet.settings.world, seed);
+        let built = start.elapsed();
+        let start = Instant::now();
+        let clouds = sky.clouds(0.);
+        println!(
+            "  sky field in {:.2} s, clouds in {:.3} s",
+            built.as_secs_f32(),
+            start.elapsed().as_secs_f32()
+        );
+        write_map(&path("clouds"), |d| {
+            let i = planet.grid.cell_at(d);
+            let lon = d.z.atan2(d.x);
+            let x = (((lon + std::f32::consts::PI) / std::f32::consts::TAU)
+                * worldgen::sky::WIDTH as f32) as usize;
+            let y = ((std::f32::consts::FRAC_PI_2 - d.y.clamp(-1., 1.).asin())
+                / std::f32::consts::PI
+                * worldgen::sky::HEIGHT as f32) as usize;
+            let k = 4
+                * (y.min(worldgen::sky::HEIGHT - 1) * worldgen::sky::WIDTH
+                    + x.min(worldgen::sky::WIDTH - 1));
+            let [density, convective, haze, dust] =
+                [0, 1, 2, 3].map(|c| clouds[k + c] as f32 / 255.);
+            let ground = if planet.sea[i] {
+                [0.10, 0.18, 0.32]
+            } else {
+                [0.35, 0.40, 0.25]
+            };
+            let hazy = ground.map(|g| g + (0.6 - g) * haze * 0.5);
+            let dusty = [0, 1, 2].map(|k| hazy[k] + ([0.8, 0.65, 0.4][k] - hazy[k]) * dust * 0.7);
+            let cloud = [1., 1. - 0.08 * convective, 1. - 0.15 * convective];
+            let c = if density > 0.5 { 1. } else { density * 0.6 };
+            [0, 1, 2].map(|k| dusty[k] + (cloud[k] - dusty[k]) * c)
+        });
         for (name, month) in [("temp_jan", 0), ("temp_jul", 6)] {
             write_map(&path(name), |d| {
                 let i = planet.grid.cell_at(d);

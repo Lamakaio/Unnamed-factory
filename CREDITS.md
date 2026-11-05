@@ -183,3 +183,12 @@ someone else's work, add it here (and mention it in the code comment where it is
   under cooler stars, blue unlikely); greens turned in YIQ hue; braided rivers before land
   plants (M. Gibling and N. Davies, *Palaeozoic landscapes shaped by plant evolution*, Nature
   Geoscience 5, 2012).
+- **Sky** (`src/planet/sky.rs`, `worldgen/src/sky.rs`, `clouds.wesl`, `planet_water.wesl`):
+  Bevy's atmosphere (S. Hillaire, *A Scalable and Production Ready Sky and Atmosphere
+  Rendering Technique*, EGSR 2020) with Earth's scattering coefficients (E. Bruneton and
+  F. Neyret, *Precomputed Atmospheric Scattering*, 2008), whose transmittance table the water
+  reads with Bruneton and Neyret's (height, zenith cosine) mapping; orange organic haze as in
+  studies of the Archean atmosphere and Titan; cloud cover from the climate as climatology
+  describes it (the ITCZ, storm tracks, subtropical highs, marine stratocumulus over cold
+  currents); noise advected with two cross-fading phases (the flow-map technique: e.g.
+  A. Vlachos, *Water Flow in Portal 2*, SIGGRAPH 2010).

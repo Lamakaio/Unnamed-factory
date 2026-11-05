@@ -832,6 +832,8 @@ fn prepare_models(
                                 snow,
                                 wind,
                                 foliage: NO_FOLIAGE_TINT,
+                                sky_map: None,
+                                sky: Vec4::ZERO,
                             },
                         }))
                     } else {
@@ -868,6 +870,8 @@ fn prepare_models(
             lod: Vec4::new(LOD0_DISTANCE - LOD_FADE, LOD0_DISTANCE + LOD_FADE, 0., 0.),
             snow,
             foliage: NO_FOLIAGE_TINT,
+            sky_map: None,
+            sky: Vec4::ZERO,
         },
     });
     commands.insert_resource(Vegetation {

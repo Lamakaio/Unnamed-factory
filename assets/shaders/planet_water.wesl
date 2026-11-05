@@ -34,6 +34,10 @@ import bevy_pbr::render::{
 
 @if(DEPTH_PREPASS)
 import bevy_pbr::prepass::utils::prepass_depth;
+@if(ATMOSPHERE)
+import bevy_pbr::render::mesh_view_bindings::{
+    atmosphere, atmosphere_transmittance_texture, atmosphere_transmittance_sampler,
+};
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
 // x: the sea level radius, y: cells along a face edge, z: 1 with a sea wave field.
@@ -43,6 +47,103 @@ import bevy_pbr::prepass::utils::prepass_depth;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var sea_sampler: sampler;
 // Wind direction where the mesh carries none (in the pattern coordinates).
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var<uniform> wind: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var sky_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var sky_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var<uniform> sky_layer: vec4<f32>;
+
+// The sky map (`worldgen::sky`: cloud density, how convective, humid haze, dust) by direction
+// (longitude = atan2(z, x), latitude = asin(y)); `sky_layer.x` is the cloud layer's radius
+// (0: no clouds).
+// How often the clouds are redrawn (`planet::sky::REDRAW`).
+const SKY_REDRAW: f32 = 0.2;
+
+fn sky_at(d: vec3<f32>) -> vec4<f32> {
+    // (Two snapshots side by side, `SKY_REDRAW` seconds apart, blended by the clock.)
+    let u = (atan2(d.z, d.x) / 6.28318531 + 0.5) * 0.5;
+    let v = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265;
+    let now = textureSampleLevel(sky_map, sky_sampler, vec2(u, v), 0.0);
+    let next = textureSampleLevel(sky_map, sky_sampler, vec2(u + 0.5, v), 0.0);
+    return mix(now, next, fract(globals.time / SKY_REDRAW));
+}
+
+// Sunlight the clouds leave at `p` (world, from the planet's centre) toward the sun `l`: 1 in
+// the clear, `CLOUD_SHADOW` under cloud (where the ray to the sun crosses the cloud layer).
+const CLOUD_SHADOW: f32 = 0.3;
+fn cloud_light(p: vec3<f32>, l: vec3<f32>) -> f32 {
+    let radius = sky_layer.x;
+    let b = dot(p, l);
+    let h = b * b - (dot(p, p) - radius * radius);
+    if radius <= 0.0 || h < 0.0 {
+        return 1.0;
+    }
+    let t = -b + sqrt(h);
+    if t <= 0.0 {
+        return 1.0;
+    }
+    let density = sky_at(normalize(p + l * t)).r;
+    return mix(1.0, CLOUD_SHADOW, smoothstep(0.47, 0.53, density));
+}
+
+// Local haze over the distance (world units) from the camera: humid haze (pale blue-white) and
+// dust (ochre) from the sky map, lit by `light`.
+const HAZE_DISTANCE: f32 = 140.0;
+const HUMID_HAZE: vec3<f32> = vec3(0.70, 0.76, 0.86);
+const DUST_HAZE: vec3<f32> = vec3(0.78, 0.62, 0.42);
+fn local_haze(color: vec3<f32>, p: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
+    let sky = sky_at(normalize(p));
+    let thick = saturate(0.5 * sky.b + sky.a);
+    if thick <= 0.001 {
+        return color;
+    }
+    let far = 1.0 - exp(-length(p - view.world_position.xyz) / HAZE_DISTANCE);
+    let tint = mix(HUMID_HAZE, DUST_HAZE, sky.a / max(0.5 * sky.b + sky.a, 1e-3));
+    return mix(color, tint * light, far * thick * 0.7);
+}
+
+// The air between the camera and the water (the atmosphere's sky pass hazes only opaque
+// ground: the water is drawn after it). The transmittance table of Bevy's atmosphere, read with
+// Bruneton and Neyret's mapping of (height, zenith cosine) (*Precomputed Atmospheric
+// Scattering*, 2008, §4): what of the water's colour gets through, and `airlight` (the sky's
+// light) scattered in.
+@if(ATMOSPHERE)
+fn air_transmittance(r: f32, mu: f32) -> vec3<f32> {
+    let inner = atmosphere.inner_radius;
+    let outer = atmosphere.outer_radius;
+    let top = sqrt(outer * outer - inner * inner);
+    let rho = sqrt(max(r * r - inner * inner, 0.0));
+    let d = max(-r * mu + sqrt(max(r * r * (mu * mu - 1.0) + outer * outer, 0.0)), 0.0);
+    let d_min = outer - r;
+    let d_max = rho + top;
+    let uv = vec2((d - d_min) / max(d_max - d_min, 1e-3), rho / top);
+    return textureSampleLevel(atmosphere_transmittance_texture, atmosphere_transmittance_sampler,
+        uv, 0.0).rgb;
+}
+
+@if(ATMOSPHERE)
+fn through_air(color: vec3<f32>, p: vec3<f32>, airlight: vec3<f32>) -> vec3<f32> {
+    let point = (atmosphere.world_to_atmosphere * vec4(p, 1.0)).xyz;
+    var eye = (atmosphere.world_to_atmosphere * vec4(view.world_position.xyz, 1.0)).xyz;
+    let dir = normalize(point - eye);
+    // (From space: from where the line of sight enters the air.)
+    let outer = atmosphere.outer_radius * 0.9999;
+    let c = dot(eye, eye) - outer * outer;
+    if c > 0.0 {
+        let b = dot(eye, dir);
+        let h = b * b - c;
+        if h < 0.0 {
+            return color;
+        }
+        eye = eye + dir * max(-b - sqrt(h), 0.0);
+    }
+    let r = max(length(eye), atmosphere.inner_radius);
+    let r_p = max(length(point), atmosphere.inner_radius);
+    let mu = dot(normalize(eye), dir);
+    let mu_p = dot(normalize(point), dir);
+    // (Looking down onto the water: the table's upward rays, reversed.)
+    let t = min(air_transmittance(r_p, -mu_p) / max(air_transmittance(r, -mu), vec3(1e-4)),
+        vec3(1.0));
+    return color * t + airlight * (1.0 - t);
+}
 
 // Depth bands (linear colours) and the depths between them (world units).
 const LAGOON: vec3<f32> = vec3(0.16, 0.80, 0.72);
@@ -395,7 +496,7 @@ fn fragment(
         shadow = fetch_directional_shadow(0u, in.world_position, radial, view_z,
             in.position.xy);
     }
-    let lit = crisp(0.5, shadow);
+    let lit = crisp(0.5, shadow) * cloud_light(p, sun.direction_to_light);
     color = mix(color, mix(color, FOAM, 0.35) * 1.1, crest);
     color = mix(color, GLINT, glint * lit * 0.8);
     foam = max(foam, shore * (1.0 - floe));
@@ -403,6 +504,12 @@ fn fragment(
     alpha = max(alpha, max(foam * 0.95, crest * 0.75));
     let hue = sun.color.rgb / max(dot(sun.color.rgb, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
     color *= mix(SHADOW, hue, lit) * sun_level;
+    color = local_haze(color, p, hue * sun_level);
+@if(ATMOSPHERE) {
+    // (`sky_layer.yzw`: the sky's colour, by day.)
+    let day = smoothstep(-0.1, 0.25, dot(radial, sun.direction_to_light));
+    color = through_air(color, p, sky_layer.yzw * hue * sun_level * day);
+}
 
     alpha *= fade;
     pbr_input.material.base_color = vec4(color, alpha);

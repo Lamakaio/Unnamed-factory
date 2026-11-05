@@ -26,7 +26,7 @@ import bevy_pbr::{
 import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::main_pass_post_lighting_processing,
-    mesh_view_bindings::{view, lights},
+    mesh_view_bindings::{view, lights, globals},
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     shadows::fetch_directional_shadow,
 };
@@ -37,6 +37,42 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<uniform> snow: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var<uniform> foliage: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var sky_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var sky_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var<uniform> sky_layer: vec4<f32>;
+
+// The sky map (`worldgen::sky`: cloud density, how convective, humid haze, dust) by direction
+// (longitude = atan2(z, x), latitude = asin(y)); `sky_layer.x` is the cloud layer's radius
+// (0: no clouds).
+// How often the clouds are redrawn (`planet::sky::REDRAW`).
+const SKY_REDRAW: f32 = 0.2;
+
+fn sky_at(d: vec3<f32>) -> vec4<f32> {
+    // (Two snapshots side by side, `SKY_REDRAW` seconds apart, blended by the clock.)
+    let u = (atan2(d.z, d.x) / 6.28318531 + 0.5) * 0.5;
+    let v = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265;
+    let now = textureSampleLevel(sky_map, sky_sampler, vec2(u, v), 0.0);
+    let next = textureSampleLevel(sky_map, sky_sampler, vec2(u + 0.5, v), 0.0);
+    return mix(now, next, fract(globals.time / SKY_REDRAW));
+}
+
+// Sunlight the clouds leave at `p` (world, from the planet's centre) toward the sun `l`: 1 in
+// the clear, `CLOUD_SHADOW` under cloud (where the ray to the sun crosses the cloud layer).
+const CLOUD_SHADOW: f32 = 0.3;
+fn cloud_light(p: vec3<f32>, l: vec3<f32>) -> f32 {
+    let radius = sky_layer.x;
+    let b = dot(p, l);
+    let h = b * b - (dot(p, p) - radius * radius);
+    if radius <= 0.0 || h < 0.0 {
+        return 1.0;
+    }
+    let t = -b + sqrt(h);
+    if t <= 0.0 {
+        return 1.0;
+    }
+    let density = sky_at(normalize(p + l * t)).r;
+    return mix(1.0, CLOUD_SHADOW, smoothstep(0.47, 0.53, density));
+}
 
 // Plants under another star (`foliage.x`: hue turn of the greens in radians, `foliage.y`:
 // brightness; see `worldgen::world::Star::foliage`): green colours turned in YIQ hue, the
@@ -163,7 +199,8 @@ fn fragment(
         shadow = fetch_directional_shadow(0u, in.world_position, pbr_input.world_normal, view_z,
             in.position.xy);
     }
-    let lit = crisp(0.03, facing) * crisp(0.5, shadow);
+    let lit = crisp(0.03, facing) * crisp(0.5, shadow)
+        * cloud_light(in.world_position.xyz, sun.direction_to_light);
     let highlight = crisp(0.55, facing) * lit * HIGHLIGHT;
     let eye = normalize(view.world_position.xyz - in.world_position.xyz);
     let rim = crisp(0.75, 1.0 - saturate(dot(eye, n))) * lit;

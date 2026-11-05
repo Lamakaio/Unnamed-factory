@@ -72,6 +72,8 @@ rust-toolchain.toml     pinned nightly (nightly-2026-10-08). The user prefers ni
 .cargo/config.toml      (git-ignored, local) rust-lld linker + `jobs = -4` to keep the PC usable while compiling
 notes.md                former city-builder design notes (see §1)
 docs/living-world.md    living planet design and decisions (the current direction)
+docs/evolution.md       world age, parameters and life (E milestones)
+docs/polish.md          polish backlog (later improvements: weather-pattern clouds, ...)
 src/main.rs             assembles plugins; `AppState { Loading, InGame }`; `--seed`, `--n`
 src/camera.rs           spawns the 3D camera (HDR, bloom, TAA, ambient light); the planet camera takes it over
 src/environment.rs      the sun (F rotates it)
@@ -316,11 +318,23 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     E2 (part): `Star::foliage()` (hue turn and brightness of greens: Kiang et al. 2007) goes
     to every object material (`foliage` uniform 104, set by `planet::tint_foliage` on any
     material that lacks it) and the terrain (110), applied by `foliage_tint` in `toon.wesl` /
-    `planet_terrain.wesl`; lit sides take the sun's hue (`sun_hue`); `planet/sky.rs`: the
-    atmosphere shell (`AtmosphereMaterial`, `atmosphere.wesl`, additive limb glow) and the
-    clear colour fading from space to `World::sky_color()` as the camera nears the ground;
+    `planet_terrain.wesl`; lit sides take the sun's hue (`sun_hue`);
     `rivers::extract(.., rooted)`: without life rivers are 2× wider, half as deep, meander
     less and split round bars more. `Star::brightness` is the sunlight at the Sun's age.
+  - Sky (`src/planet/sky.rs`): Bevy's `Atmosphere` (Hillaire 2020, `AtmosphereMode::Raymarched`)
+    centred on the planet and scaled to it (`EARTH_RADIUS` → the planet's radius), 0.15 radii
+    thick with the density lowered as much (`with_density_multiplier`); its terms from
+    `worldgen::sky::air(world)` (gas × CO₂, aerosols × dust, desert dust, organic haze, ozone
+    with O₂). The water (transparent: after the sky pass) gets `through_air` (the
+    transmittance table via the `ATMOSPHERE` view bindings, the sky's colour scattered in).
+    Clouds and local haze: `worldgen::sky::SkyField` (climate: rain, storm tracks, cold-sea
+    stratus, convective share, humid haze, dust) → `clouds(time)` (fBm drifting with the
+    zonal wind) as a 2×1024×512 RGBA8 equirectangular texture holding two snapshots `REDRAW`
+    s apart (`sky_at` blends them by `globals.time`), redrawn in the background
+    (`drift_clouds`). Sampled by the cloud shell (`CloudMaterial`, `clouds.wesl`), and by the
+    terrain, water and object materials (`sky_map`, `sky_layer.x` = cloud radius) for cloud
+    shadows (`cloud_light`) and haze (`local_haze`). `climate_preview` writes
+    `<seed>_clouds.png`.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo

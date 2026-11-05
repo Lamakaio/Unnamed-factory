@@ -51,6 +51,58 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // Earth's: thin soil leaves rock showing on gentler slopes, and in outcrops).
 @group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> world: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(110) var<uniform> foliage: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(111) var sky_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(112) var sky_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(113) var<uniform> sky_layer: vec4<f32>;
+
+// The sky map (`worldgen::sky`: cloud density, how convective, humid haze, dust) by direction
+// (longitude = atan2(z, x), latitude = asin(y)); `sky_layer.x` is the cloud layer's radius
+// (0: no clouds).
+// How often the clouds are redrawn (`planet::sky::REDRAW`).
+const SKY_REDRAW: f32 = 0.2;
+
+fn sky_at(d: vec3<f32>) -> vec4<f32> {
+    // (Two snapshots side by side, `SKY_REDRAW` seconds apart, blended by the clock.)
+    let u = (atan2(d.z, d.x) / 6.28318531 + 0.5) * 0.5;
+    let v = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265;
+    let now = textureSampleLevel(sky_map, sky_sampler, vec2(u, v), 0.0);
+    let next = textureSampleLevel(sky_map, sky_sampler, vec2(u + 0.5, v), 0.0);
+    return mix(now, next, fract(globals.time / SKY_REDRAW));
+}
+
+// Sunlight the clouds leave at `p` (world, from the planet's centre) toward the sun `l`: 1 in
+// the clear, `CLOUD_SHADOW` under cloud (where the ray to the sun crosses the cloud layer).
+const CLOUD_SHADOW: f32 = 0.3;
+fn cloud_light(p: vec3<f32>, l: vec3<f32>) -> f32 {
+    let radius = sky_layer.x;
+    let b = dot(p, l);
+    let h = b * b - (dot(p, p) - radius * radius);
+    if radius <= 0.0 || h < 0.0 {
+        return 1.0;
+    }
+    let t = -b + sqrt(h);
+    if t <= 0.0 {
+        return 1.0;
+    }
+    let density = sky_at(normalize(p + l * t)).r;
+    return mix(1.0, CLOUD_SHADOW, smoothstep(0.47, 0.53, density));
+}
+
+// Local haze over the distance (world units) from the camera: humid haze (pale blue-white) and
+// dust (ochre) from the sky map, lit by `light`.
+const HAZE_DISTANCE: f32 = 140.0;
+const HUMID_HAZE: vec3<f32> = vec3(0.70, 0.76, 0.86);
+const DUST_HAZE: vec3<f32> = vec3(0.78, 0.62, 0.42);
+fn local_haze(color: vec3<f32>, p: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
+    let sky = sky_at(normalize(p));
+    let thick = saturate(0.5 * sky.b + sky.a);
+    if thick <= 0.001 {
+        return color;
+    }
+    let far = 1.0 - exp(-length(p - view.world_position.xyz) / HAZE_DISTANCE);
+    let tint = mix(HUMID_HAZE, DUST_HAZE, sky.a / max(0.5 * sky.b + sky.a, 1e-3));
+    return mix(color, tint * light, far * thick * 0.7);
+}
 
 // Plants under another star (`foliage.x`: hue turn of the greens in radians, `foliage.y`:
 // brightness; see `worldgen::world::Star::foliage`): green colours turned in YIQ hue, the
@@ -647,13 +699,14 @@ fn fragment(
         ), in.world_position);
         shadow = fetch_directional_shadow(0u, in.world_position, n, view_z, in.position.xy);
     }
-    let lit = crisp(0.03, facing, fwidth(facing)) * crisp(0.5, shadow, fwidth(shadow));
+    let lit = crisp(0.03, facing, fwidth(facing)) * crisp(0.5, shadow, fwidth(shadow))
+        * cloud_light(p, sun.direction_to_light);
     let highlight = crisp(0.55, facing, fwidth(facing)) * lit * HIGHLIGHT;
     let eye = normalize(view.world_position.xyz - p);
     let rim_value = 1.0 - saturate(dot(eye, n));
     let rim = crisp(0.75, rim_value, fwidth(rim_value)) * lit;
     let light = mix(SHADOW, LIT * sun_hue(sun.color.rgb), lit) + highlight + RIM * rim;
-    let color = albedo * light * sun_level;
+    let color = local_haze(albedo * light * sun_level, p, LIT * sun_hue(sun.color.rgb) * sun_level);
 
     pbr_input.material.base_color = vec4(albedo, 1.0);
     // In-shader post processing (fog, alpha-premultiply, tonemapping if the camera is not HDR).

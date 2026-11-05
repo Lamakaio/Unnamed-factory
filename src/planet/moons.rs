@@ -50,6 +50,8 @@ pub fn spawn_moons(
             tint: LinearRgba::WHITE,
             snow: Vec4::ZERO,
             foliage: crate::shaders::NO_FOLIAGE_TINT,
+            sky_map: None,
+            sky: Vec4::ZERO,
         },
     });
     for (k, moon) in world.world.moons.iter().enumerate() {
