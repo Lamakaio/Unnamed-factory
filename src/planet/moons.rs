@@ -49,6 +49,7 @@ pub fn spawn_moons(
         extension: ToonShader {
             tint: LinearRgba::WHITE,
             snow: Vec4::ZERO,
+            foliage: crate::shaders::NO_FOLIAGE_TINT,
         },
     });
     for (k, moon) in world.world.moons.iter().enumerate() {

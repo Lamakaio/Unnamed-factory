@@ -302,7 +302,11 @@ Each leaves the game runnable.
      star), tidal range from it raised on wide shelves and in bays (Earth: median 1.8 m, up
      to 12 m), tidal flats as salt marsh or mud, moons orbiting in the game's sky.
    Previews and screenshots for each preset.
-2. **E2 – Setting and cover.** Split `Biome` into setting and cover; cover as fractions of
+2. **E2 – Setting and cover.** *Partly done 2026-11-05*: foliage colour from the star
+   (`Star::foliage`, every plant material and the terrain), the sky (`World::sky_color`: an
+   atmosphere glow from orbit, the sky behind the terrain near the ground), the lit side in
+   the star's hue, wide braided rivers without life. The setting/cover split waits for the
+   life parameters (V1: life later). Split `Biome` into setting and cover; cover as fractions of
    the land forms from the state and the cell's climate; foliage palette from the star.
 3. **E3 – Evolving state.** The box model (§4) on the deep-time clock; forms appearing and
    fading; events; the planet re-rendered as the state moves (with living-world

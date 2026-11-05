@@ -401,7 +401,8 @@ fn fragment(
     foam = max(foam, shore * (1.0 - floe));
     color = mix(color, FOAM, foam);
     alpha = max(alpha, max(foam * 0.95, crest * 0.75));
-    color *= mix(SHADOW, vec3(1.0), lit) * sun_level;
+    let hue = sun.color.rgb / max(dot(sun.color.rgb, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+    color *= mix(SHADOW, hue, lit) * sun_level;
 
     alpha *= fade;
     pbr_input.material.base_color = vec4(color, alpha);

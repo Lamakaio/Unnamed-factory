@@ -29,8 +29,9 @@ pub struct Star {
     /// Surface temperature (K): the light's colour (5772 for the Sun), and how long the star
     /// lives (cooler stars are smaller and brighten far more slowly).
     pub temperature: f32,
-    /// Sunlight on the planet (share of Earth's today) when the star is as far through its
-    /// life as the Sun is today; it brightens with age (`Star::irradiance`).
+    /// Sunlight on the planet (share of Earth's today) at the Sun's present age (4.57 Gyr),
+    /// whatever the star; it brightens with age, slower for longer-lived cooler stars
+    /// (`Star::irradiance`).
     pub brightness: f32,
 }
 
@@ -409,6 +410,24 @@ impl World {
         (moons + SOLAR_TIDE / self.orbit.year.max(0.01).powi(2)) / (1. + SOLAR_TIDE)
     }
 
+    /// The sky's colour by day (linear RGB): air scatters blue (more of it the thicker the
+    /// air: CO₂-rich air is paler), organic haze turns it orange, dust pale yellow-grey.
+    pub fn sky_color(&self) -> [f32; 3] {
+        const BLUE: [f32; 3] = [0.16, 0.36, 0.80];
+        const PALE: [f32; 3] = [0.45, 0.55, 0.70];
+        const HAZE: [f32; 3] = [0.75, 0.38, 0.10];
+        const DUST: [f32; 3] = [0.62, 0.52, 0.38];
+        let mix = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+        // (Thick CO₂ air whitens the sky: a bar of it scatters as much as Earth's whole air.)
+        let thick = crate::noise::smoothstep(1e4, 5e5, self.atmosphere.co2);
+        let sky = mix(BLUE, PALE, thick * 0.7);
+        let sky = mix(sky, HAZE, self.haze());
+        let sky = mix(sky, DUST, (self.atmosphere.dust - 0.1).max(0.) * 0.8);
+        // Lit by the star's colour.
+        let light = self.star.color();
+        [0, 1, 2].map(|k| sky[k] * light[k])
+    }
+
     /// Freezing point of the sea (°C): about −0.054 °C per ‰ of salt.
     pub fn sea_freezing(&self) -> f32 {
         -0.054 * self.ocean.salinity
@@ -421,7 +440,31 @@ impl World {
     }
 }
 
+/// Foliage under each star type: (temperature K, hue turn of the greens in degrees, brightness).
+/// Photosynthesis absorbs the light most useful to it, so plants are green under the Sun,
+/// yellower to orange under hotter stars, red under cooler ones, near black under red dwarfs
+/// (little visible light: absorb it all); blue is unlikely (Kiang et al. 2007).
+const FOLIAGE: [(f32, f32, f32); 5] = [
+    (3000., 125., 0.3),
+    (3800., 115., 0.5),
+    (4500., 100., 0.85),
+    (5772., 0., 1.),
+    (7000., 50., 1.),
+];
+
 impl Star {
+    /// How plants look under this star: the hue turn of their greens (radians) and their
+    /// brightness (see `FOLIAGE`).
+    pub fn foliage(&self) -> (f32, f32) {
+        let t = self.temperature.clamp(FOLIAGE[0].0, FOLIAGE[4].0);
+        let k = FOLIAGE
+            .windows(2)
+            .position(|w| t <= w[1].0)
+            .unwrap_or(FOLIAGE.len() - 2);
+        let (a, b) = (FOLIAGE[k], FOLIAGE[k + 1]);
+        let f = (t - a.0) / (b.0 - a.0);
+        ((a.1 + (b.1 - a.1) * f).to_radians(), a.2 + (b.2 - a.2) * f)
+    }
     /// The colour of its light (linear RGB, the Sun's white): from its temperature, with
     /// Tanner Helland's fit of black-body colours (sRGB), divided by the Sun's.
     pub fn color(&self) -> [f32; 3] {
@@ -466,7 +509,7 @@ impl Star {
         // (Only for the main sequence: past about twice the Sun's age the formula runs away.)
         let through =
             |t: f32| 1. / (1. + YOUNG_FAINTNESS * (1. - (t / (SUN_AGE * scale)).min(2.2)));
-        self.brightness * through(age) / through(SUN_AGE * scale)
+        self.brightness * through(age) / through(SUN_AGE)
     }
 }
 
@@ -488,6 +531,7 @@ mod tests {
         assert!((world.land_fraction(0.3) - 0.3).abs() < 1e-5);
         assert!((world.impact_flux(world.age) - 1.).abs() < 1e-3);
         assert!((world.tidal_forcing() - 1.).abs() < 1e-5);
+        assert!(world.star.foliage().0.abs() < 1e-5);
         // The late heavy bombardment: hundreds of times today's rate 4 Gyr ago.
         let early = world.impact_flux(0.57);
         assert!((100.0..2000.0).contains(&early), "{early}");

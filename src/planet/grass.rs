@@ -22,7 +22,7 @@ use worldgen::surface::PlanetSurface;
 use super::PlanetWorld;
 use crate::{
     AppState,
-    shaders::{GrassBladeMaterial, GrassBladeShader},
+    shaders::{GrassBladeMaterial, GrassBladeShader, NO_FOLIAGE_TINT},
 };
 
 /// Blades are shown while the camera is at most this high above the ground...
@@ -84,6 +84,7 @@ fn update_near_grass(
                     snow: Vec4::ZERO,
                     // Tiles are turned with their x downwind.
                     wind: Vec4::new(1., 0., 0., 0.),
+                    foliage: NO_FOLIAGE_TINT,
                 },
             })
         })

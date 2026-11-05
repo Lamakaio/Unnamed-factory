@@ -20,6 +20,14 @@ pub const RIVER_MIN_AREA: f32 = 400.;
 const RIVER_WIDTH: (f32, f32) = (0.25, 0.64);
 const RIVER_DEPTH: (f32, f32) = (0.25, 0.5);
 const MEANDER_AMPLITUDE: f32 = 1.5;
+/// Without plants rooting their banks, rivers spread over wide sandy beds and braid round
+/// bars (before land plants, wide sheet-braided rivers were the rule: Gibling and Davies
+/// 2012): wider and shallower by these, meandering this much less, splitting this much more
+/// readily.
+const BARE_WIDTH: f32 = 2.;
+const BARE_DEPTH: f32 = 0.5;
+const BARE_MEANDERS: f32 = 0.25;
+const BARE_SPLITS: f32 = 1.6;
 const MEANDER_MAX_SLOPE: f32 = 0.05;
 /// Lake depth from which a cell is under a lake (rivers end there).
 const LAKE: f32 = 0.05;
@@ -58,7 +66,8 @@ pub struct PlanetRiver {
 }
 
 /// Extract the rivers from the heights, the depression-filled surface they drain on, the sea
-/// and the lakes (water depth over each cell), and their valley paths.
+/// and the lakes (water depth over each cell), and their valley paths. `rooted`: plants hold
+/// the banks (without: wide, shallow, braided rivers).
 pub fn extract(
     grid: &SphereGrid,
     radius: f32,
@@ -66,7 +75,13 @@ pub fn extract(
     filled: &[f32],
     sea: &[bool],
     lake_depth: &[f32],
+    rooted: bool,
 ) -> (Vec<PlanetRiver>, Vec<ValleyPoint>) {
+    let (wide, deep, meanders) = if rooted {
+        (1., 1., 1.)
+    } else {
+        (BARE_WIDTH, BARE_DEPTH, BARE_MEANDERS)
+    };
     let graph = FlowGraph::new(grid, filled, sea);
     let area = graph.accumulate(|i| grid.area(i));
     let n = heights.len();
@@ -161,11 +176,11 @@ pub fn extract(
         let length = path.len();
         let widths: Vec<f32> = path
             .iter()
-            .map(|p| RIVER_WIDTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_WIDTH.1))
+            .map(|p| wide * RIVER_WIDTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_WIDTH.1))
             .collect();
         let depths: Vec<f32> = path
             .iter()
-            .map(|p| RIVER_DEPTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_DEPTH.1))
+            .map(|p| deep * RIVER_DEPTH.0 * (p.2 / RIVER_MIN_AREA).powf(RIVER_DEPTH.1))
             .collect();
         // Meanders where the valley is flat, about 12 channel widths long.
         let slope: Vec<f32> = (0..length)
@@ -194,7 +209,7 @@ pub fn extract(
                 let from_end = (length - 1 - i) as f32 * SPACING;
                 let taper =
                     smoothstep(0., wavelength, from_start) * smoothstep(0., wavelength, from_end);
-                let amplitude = MEANDER_AMPLITUDE * widths[i] * flatness[i] * taper;
+                let amplitude = MEANDER_AMPLITUDE * meanders * widths[i] * flatness[i] * taper;
                 let tangent = path[(i + 2).min(length - 1)].0 - path[i.saturating_sub(2)].0;
                 let up = position.normalize();
                 let normal = tangent.cross(up).normalize_or_zero();
@@ -245,7 +260,8 @@ pub fn extract(
             };
         }
     }
-    split_on_flats(radius, &flats, &mut rivers);
+    let splits = if rooted { 1. } else { BARE_SPLITS };
+    split_on_flats(radius, &flats, splits, &mut rivers);
     through_lakes(grid, radius, filled, lake_depth, &mut rivers);
     (rivers, valley)
 }
@@ -266,7 +282,7 @@ const SPLIT_CHANCE: f32 = 0.5;
 const SPLIT_SHARE: f32 = 0.6;
 const ISLAND: (f32, f32) = (0.8, 1.6);
 
-fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>) {
+fn split_on_flats(radius: f32, flats: &[Vec<f32>], readily: f32, rivers: &mut Vec<PlanetRiver>) {
     let count = rivers.len();
     // Where tributaries join each river (point indices).
     let mut joins: Vec<Vec<usize>> = vec![Vec::new(); count];
@@ -303,13 +319,13 @@ fn split_on_flats(radius: f32, flats: &[Vec<f32>], rivers: &mut Vec<PlanetRiver>
             let fits = end + 4 < main.len()
                 && k > 4
                 && width >= SPLIT_MIN_WIDTH
-                && (k..=end).all(|j| flat[j] >= SPLIT_FLATNESS)
+                && (k..=end).all(|j| flat[j] >= SPLIT_FLATNESS / readily)
                 && !joins[index].iter().any(|&j| j + 6 >= k && j <= end + 6);
             if !fits {
                 k += 2;
                 continue;
             }
-            if random(index, k, 2) < SPLIT_CHANCE {
+            if random(index, k, 2) < (SPLIT_CHANCE * readily).min(0.95) {
                 let side = if random(index, k, 3) < 0.5 { -1. } else { 1. };
                 let island = (ISLAND.0 + (ISLAND.1 - ISLAND.0) * random(index, k, 4)) * width;
                 let branch_width = width * SPLIT_SHARE;

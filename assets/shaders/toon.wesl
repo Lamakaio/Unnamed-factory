@@ -36,6 +36,32 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tint: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<uniform> snow: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var<uniform> foliage: vec4<f32>;
+
+// Plants under another star (`foliage.x`: hue turn of the greens in radians, `foliage.y`:
+// brightness; see `worldgen::world::Star::foliage`): green colours turned in YIQ hue, the
+// rest (bark, rock, flowers, straw) left alone.
+fn foliage_tint(c: vec3<f32>) -> vec3<f32> {
+    let green = saturate((c.g - max(c.r, c.b)) * 6.0);
+    if green <= 0.0 || (foliage.x == 0.0 && foliage.y == 1.0) {
+        return c;
+    }
+    let y = dot(c, vec3(0.299, 0.587, 0.114));
+    let i = dot(c, vec3(0.596, -0.274, -0.322));
+    let q = dot(c, vec3(0.211, -0.523, 0.312));
+    let ca = cos(foliage.x);
+    let sa = sin(foliage.x);
+    let i2 = i * ca - q * sa;
+    let q2 = i * sa + q * ca;
+    let turned = vec3(y + 0.956 * i2 + 0.621 * q2, y - 0.272 * i2 - 0.647 * q2,
+        y - 1.106 * i2 + 1.703 * q2) * foliage.y;
+    return mix(c, max(turned, vec3(0.0)), green);
+}
+
+// The sun's hue (its colour at unit luminance): the lit side takes it.
+fn sun_hue(color: vec3<f32>) -> vec3<f32> {
+    return color / max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+}
 
 const SNOW: vec3<f32> = vec3(0.92, 0.94, 0.98);
 
@@ -114,7 +140,7 @@ fn fragment(
 @if(PREPASS_PIPELINE) {
     out = deferred_output(in, pbr_input);
 } @else {
-    var albedo = pbr_input.material.base_color.rgb;
+    var albedo = foliage_tint(pbr_input.material.base_color.rgb);
     let n = pbr_input.N;
     if snow.y > snow.x {
         let world = in.world_position.xyz;
@@ -141,7 +167,7 @@ fn fragment(
     let highlight = crisp(0.55, facing) * lit * HIGHLIGHT;
     let eye = normalize(view.world_position.xyz - in.world_position.xyz);
     let rim = crisp(0.75, 1.0 - saturate(dot(eye, n))) * lit;
-    let light = mix(SHADOW, LIT, lit) + highlight + RIM * rim;
+    let light = mix(SHADOW, LIT * sun_hue(sun.color.rgb), lit) + highlight + RIM * rim;
     // In-shader post processing (fog, alpha-premultiply, tonemapping if the camera is not HDR).
     out.color = main_pass_post_lighting_processing(
         pbr_input,

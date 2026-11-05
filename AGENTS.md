@@ -313,6 +313,14 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     `PlanetSurface::tide` (range in m on the coasts: shelf width and bays, `surface/features.rs`
     `tides`), tidal flats added to `marsh`; the game's `planet/moons.rs` (toon spheres at
     5–30 radii; the camera's far plane reaches them); tide in click reports.
+    E2 (part): `Star::foliage()` (hue turn and brightness of greens: Kiang et al. 2007) goes
+    to every object material (`foliage` uniform 104, set by `planet::tint_foliage` on any
+    material that lacks it) and the terrain (110), applied by `foliage_tint` in `toon.wesl` /
+    `planet_terrain.wesl`; lit sides take the sun's hue (`sun_hue`); `planet/sky.rs`: the
+    atmosphere shell (`AtmosphereMaterial`, `atmosphere.wesl`, additive limb glow) and the
+    clear colour fading from space to `World::sky_color()` as the camera nears the ground;
+    `rivers::extract(.., rooted)`: without life rivers are 2× wider, half as deep, meander
+    less and split round bars more. `Star::brightness` is the sunlight at the Sun's age.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo

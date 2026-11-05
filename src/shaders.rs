@@ -15,11 +15,32 @@ impl Plugin for ShadersPlugin {
             MaterialPlugin::<LodToonMaterial>::default(),
             MaterialPlugin::<SwayToonMaterial>::default(),
             MaterialPlugin::<GrassBladeMaterial>::default(),
+            MaterialPlugin::<AtmosphereMaterial>::default(),
         ));
     }
 }
 
 const PLANET_TERRAIN_SHADER_ASSET_PATH: &str = "shaders/planet_terrain.wesl";
+const ATMOSPHERE_SHADER_ASSET_PATH: &str = "shaders/atmosphere.wesl";
+
+/// The atmosphere's glow seen from outside (`atmosphere.wesl`): `sky` is the sky's colour
+/// (rgb, linear) and the glow's strength (alpha). Added over what is behind it.
+#[derive(Asset, AsBindGroup, PartialEq, Debug, Clone, Reflect)]
+#[reflect(PartialEq)]
+pub struct AtmosphereMaterial {
+    #[uniform(0)]
+    pub sky: LinearRgba,
+}
+
+impl Material for AtmosphereMaterial {
+    fn fragment_shader() -> ShaderRef {
+        ATMOSPHERE_SHADER_ASSET_PATH.into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Add
+    }
+}
 const PLANET_WATER_SHADER_ASSET_PATH: &str = "shaders/planet_water.wesl";
 
 /// The planet's water: the flat map's toon water on the sphere (`planet_water.wesl`). Meshes
@@ -77,6 +98,10 @@ pub struct PlanetTerrainShader {
     /// depth (1: Earth's; thin soil shows more rock).
     #[uniform(109)]
     pub world: Vec4,
+    /// Plants under the star (`worldgen::world::Star::foliage`: hue turn of the greens,
+    /// brightness); (0, 1): as they are.
+    #[uniform(110)]
+    pub foliage: Vec4,
 }
 
 impl MaterialExtension for PlanetTerrainShader {
@@ -104,6 +129,10 @@ pub struct ToonShader {
     pub tint: LinearRgba,
     #[uniform(102)]
     pub snow: Vec4,
+    /// Plants under the star (`worldgen::world::Star::foliage`: hue turn of the greens,
+    /// brightness); (0, 1): as they are.
+    #[uniform(104)]
+    pub foliage: Vec4,
 }
 
 impl MaterialExtension for ToonShader {
@@ -113,6 +142,9 @@ impl MaterialExtension for ToonShader {
 }
 
 pub type ToonMaterial = ExtendedMaterial<StandardMaterial, ToonShader>;
+
+/// Plants as they are (see `ToonShader::foliage`).
+pub const NO_FOLIAGE_TINT: Vec4 = Vec4::new(0., 1., 0., 0.);
 
 /// [`ToonShader`] for merged stand-ins of many objects (far levels of detail), each fading out
 /// where its detailed model fades in: vertices carry their object's origin (UV0 = x, z;
@@ -127,6 +159,10 @@ pub struct LodToonShader {
     pub lod: Vec4,
     #[uniform(102)]
     pub snow: Vec4,
+    /// Plants under the star (`worldgen::world::Star::foliage`: hue turn of the greens,
+    /// brightness); (0, 1): as they are.
+    #[uniform(104)]
+    pub foliage: Vec4,
 }
 
 impl MaterialExtension for LodToonShader {
@@ -165,6 +201,10 @@ pub struct SwayToonShader {
     /// Prevailing wind direction (x, z).
     #[uniform(103)]
     pub wind: Vec4,
+    /// Plants under the star (`worldgen::world::Star::foliage`: hue turn of the greens,
+    /// brightness); (0, 1): as they are.
+    #[uniform(104)]
+    pub foliage: Vec4,
 }
 
 impl MaterialExtension for SwayToonShader {
@@ -196,6 +236,10 @@ pub struct GrassBladeShader {
     /// Prevailing wind direction (x, z).
     #[uniform(103)]
     pub wind: Vec4,
+    /// Plants under the star (`worldgen::world::Star::foliage`: hue turn of the greens,
+    /// brightness); (0, 1): as they are.
+    #[uniform(104)]
+    pub foliage: Vec4,
 }
 
 impl MaterialExtension for GrassBladeShader {
@@ -222,6 +266,7 @@ pub fn toon(base: &StandardMaterial, snow: Vec4) -> ToonMaterial {
         extension: ToonShader {
             tint: LinearRgba::WHITE,
             snow,
+            foliage: NO_FOLIAGE_TINT,
         },
     }
 }

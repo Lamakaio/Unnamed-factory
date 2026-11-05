@@ -177,3 +177,9 @@ someone else's work, add it here (and mention it in the code comment where it is
 - **Moons and tides** (`world.rs`, `surface/features.rs`): tide-raising force as mass /
   distance³, the star's through Kepler's third law; tides amplified on wide shelves and in
   funnelling bays, as described in D. Pugh and P. Woodworth, *Sea-Level Science*, 2014.
+- **Plants and skies under other stars** (`world.rs`, `toon.wesl`, `planet_terrain.wesl`,
+  `atmosphere.wesl`): foliage colours from the star's light (N. Kiang et al., *Spectral
+  signatures of photosynthesis*, Astrobiology 7, 2007: green under the Sun, red to near black
+  under cooler stars, blue unlikely); greens turned in YIQ hue; braided rivers before land
+  plants (M. Gibling and N. Davies, *Palaeozoic landscapes shaped by plant evolution*, Nature
+  Geoscience 5, 2012).

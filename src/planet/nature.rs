@@ -27,7 +27,8 @@ use worldgen::{Biome, geology::Rock};
 use crate::{
     AppState,
     shaders::{
-        LodToonMaterial, LodToonShader, SwayToonMaterial, SwayToonShader, ToonMaterial, toon,
+        LodToonMaterial, LodToonShader, NO_FOLIAGE_TINT, SwayToonMaterial, SwayToonShader,
+        ToonMaterial, toon,
     },
 };
 
@@ -830,6 +831,7 @@ fn prepare_models(
                                 tint: LinearRgba::WHITE,
                                 snow,
                                 wind,
+                                foliage: NO_FOLIAGE_TINT,
                             },
                         }))
                     } else {
@@ -865,6 +867,7 @@ fn prepare_models(
             tint: LinearRgba::WHITE,
             lod: Vec4::new(LOD0_DISTANCE - LOD_FADE, LOD0_DISTANCE + LOD_FADE, 0., 0.),
             snow,
+            foliage: NO_FOLIAGE_TINT,
         },
     });
     commands.insert_resource(Vegetation {

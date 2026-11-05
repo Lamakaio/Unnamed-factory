@@ -11,6 +11,7 @@ mod mesh;
 pub mod moons;
 mod nature;
 mod river_profile;
+mod sky;
 mod vegetation;
 mod water;
 
@@ -34,7 +35,10 @@ use worldgen::{
 use crate::{
     AppState,
     environment::Sun,
-    shaders::{PlanetTerrainMaterial, PlanetTerrainShader, PlanetWaterMaterial},
+    shaders::{
+        GrassBladeMaterial, LodToonMaterial, PlanetTerrainMaterial, PlanetTerrainShader,
+        PlanetWaterMaterial, SwayToonMaterial, ToonMaterial,
+    },
 };
 
 /// Chunk side, in cells of the planet's grid.
@@ -62,7 +66,7 @@ impl Plugin for PlanetPlugin {
             grass::PlanetGrassPlugin,
             inspect::InspectPlugin,
         ))
-        .insert_resource(ClearColor(Color::srgb(0.01, 0.012, 0.02)))
+        .insert_resource(ClearColor(sky::SPACE))
         .add_systems(Startup, move |commands: Commands| {
             start_generation(commands, seed, n)
         })
@@ -73,10 +77,15 @@ impl Plugin for PlanetPlugin {
                 (schedule_chunk_meshes, finish_chunk_meshes)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
-                (camera::control, camera::apply, camera::follow_sun)
+                (
+                    camera::control,
+                    camera::apply,
+                    camera::follow_sun,
+                    sky::sky_behind,
+                )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
-                moons::orbit_moons.run_if(in_state(AppState::InGame)),
+                (moons::orbit_moons, tint_foliage).run_if(in_state(AppState::InGame)),
             ),
         )
         .add_systems(
@@ -86,6 +95,7 @@ impl Plugin for PlanetPlugin {
                 view_planet,
                 color_sunlight,
                 moons::spawn_moons,
+                sky::spawn_atmosphere,
             ),
         );
     }
@@ -251,6 +261,7 @@ fn spawn_planet(
                     planet: Vec4::new(surface.radius, n as f32, world.strata_scale, 1.),
                     rock: Some(images.add(image)),
                     wind: Vec4::new(1., 0., 0., 0.),
+                    foliage: foliage(&world.world),
                     world: Vec4::new(
                         world.world.life as u32 as f32,
                         world.world.oxidation(),
@@ -290,6 +301,42 @@ fn spawn_planet(
         &mut images,
         &mut water_materials,
     );
+}
+
+/// The foliage tint for the world's star (see `ToonShader::foliage`).
+fn foliage(world: &World) -> Vec4 {
+    let (turn, brightness) = world.star.foliage();
+    Vec4::new(turn, brightness, 0., 0.)
+}
+
+/// Plants under the world's star: every object material takes its foliage tint (models load
+/// and grass materials appear after the planet, so any material that has not got it yet).
+fn tint_foliage(
+    world: Res<PlanetWorld>,
+    mut toon: ResMut<Assets<ToonMaterial>>,
+    mut lod: ResMut<Assets<LodToonMaterial>>,
+    mut sway: ResMut<Assets<SwayToonMaterial>>,
+    mut grass: ResMut<Assets<GrassBladeMaterial>>,
+) {
+    let tint = foliage(&world.world);
+    macro_rules! tint {
+        ($assets:expr) => {
+            let stale: Vec<_> = $assets
+                .iter()
+                .filter(|(_, m)| m.extension.foliage != tint)
+                .map(|(id, _)| id)
+                .collect();
+            for id in stale {
+                if let Some(mut material) = $assets.get_mut(id) {
+                    material.extension.foliage = tint;
+                }
+            }
+        };
+    }
+    tint!(toon);
+    tint!(lod);
+    tint!(sway);
+    tint!(grass);
 }
 
 /// Sunlight in the star's colour.

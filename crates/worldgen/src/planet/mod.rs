@@ -259,6 +259,7 @@ pub fn generate_planet(requested: &PlanetSettings) -> Planet {
         &shore,
         &mut heights,
         &mut sea,
+        settings.world.life,
         &mut laps,
     );
 

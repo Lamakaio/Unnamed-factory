@@ -35,6 +35,7 @@ pub(super) fn shape_water(
     shore: &[f32],
     heights: &mut [f32],
     sea: &mut [bool],
+    rooted: bool,
     laps: &mut Laps,
 ) -> Water {
     let cells = grid.len();
@@ -49,7 +50,7 @@ pub(super) fn shape_water(
     } = crate::lakes::shape_lakes(grid, heights, sea);
     laps.lap("  lakes");
     let (mut rivers, valley) =
-        crate::rivers::extract(grid, radius, heights, &filled, &base, &lake_depth);
+        crate::rivers::extract(grid, radius, heights, &filled, &base, &lake_depth, rooted);
     // Floodplains: flat valley floors where rivers meander.
     laps.lap("  rivers");
     let floodplain = flatten_floodplains(grid, radius, heights, &lake_depth, &valley);
