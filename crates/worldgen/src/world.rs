@@ -246,17 +246,26 @@ impl World {
     }
 
     /// A world from a description: a preset, then parameters changed, separated by commas
-    /// (`virgin,day=240,eccentricity=0.2`; parameter names as in `World::set`).
+    /// (`virgin,day=240,eccentricity=0.2`; parameter names as in `World::set`). `evolve=<age>`
+    /// (Gyr) then evolves it to that age (`history::evolve`: CO₂, snowballs).
     pub fn parse(description: &str) -> Result<Self, String> {
         let mut parts = description.split(',').map(str::trim);
         let name = parts.next().unwrap_or("earth");
         let mut world = Self::preset(name).ok_or(format!("no world preset {name}"))?;
+        let mut evolve = None;
         for part in parts {
             let (key, value) = part
                 .split_once('=')
                 .ok_or(format!("{part}: expected name=value"))?;
             let value: f32 = value.parse().map_err(|_| format!("{part}: not a number"))?;
-            world.set(key, value)?;
+            if key == "evolve" {
+                evolve = Some(value);
+            } else {
+                world.set(key, value)?;
+            }
+        }
+        if let Some(age) = evolve {
+            world = crate::history::evolve(&world, age, 0).world;
         }
         Ok(world)
     }

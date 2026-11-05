@@ -309,6 +309,14 @@ Each leaves the game runnable.
    life parameters (V1: life later). Split `Biome` into setting and cover; cover as fractions of
    the land forms from the state and the cell's climate; foliage palette from the star.
 3. **E3 – Evolving state.** The box model (§4) on the deep-time clock; forms appearing and
+   *Started 2026-11-06, without life* (`history.rs`): a 1-D energy balance by latitude
+   (Budyko–Sellers, ice-albedo feedback: snowballs with hysteresis) and the carbon cycle
+   (outgassing from the interior's heat, silicate weathering: the thermostat), large igneous
+   provinces and big impacts as dated events; `history_preview` charts it, `evolve=<age>` in
+   world descriptions generates the evolved world. A virgin planet's CO₂ falls from 0.3 bar to
+   a few thousand ppm by 4.6 Gyr at about 20 °C; Earth aged on runs out of CO₂ by ~6 Gyr and
+   overheats; a dim star gives a snowball that thaws after ~60 Myr into a hothouse. Not yet:
+   life's gases and weathering, the planet re-rendered continuously as the state moves.
    fading; events; the planet re-rendered as the state moves (with living-world
    milestone 5, deep-time mode).
 4. **E4 – Feedbacks into the terrain.** Cover in erosion (slopes, banks, dunes), carbonate

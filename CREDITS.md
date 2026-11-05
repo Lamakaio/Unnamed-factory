@@ -192,3 +192,10 @@ someone else's work, add it here (and mention it in the code comment where it is
   describes it (the ITCZ, storm tracks, subtropical highs, marine stratocumulus over cold
   currents); noise advected with two cross-fading phases (the flow-map technique: e.g.
   A. Vlachos, *Water Flow in Portal 2*, SIGGRAPH 2010).
+- **Deep-time history** (`history.rs`): the latitude energy balance with ice-albedo feedback
+  (M. Budyko, *The effect of solar radiation variations on the climate of the Earth*, Tellus
+  21, 1969; W. Sellers, *A global climatic model based on the energy balance of the
+  Earth–atmosphere system*, J. Appl. Meteor. 8, 1969), annual insolation by latitude for the
+  obliquity (G. North, *Theory of energy-balance climate models*, J. Atmos. Sci. 32, 1975);
+  the silicate-weathering thermostat (Walker, Hays and Kasting 1981); snowballs thawed by
+  volcanic CO₂ (P. Hoffman et al., *A Neoproterozoic Snowball Earth*, Science 281, 1998).

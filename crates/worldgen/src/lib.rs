@@ -13,6 +13,7 @@ pub mod craters;
 pub mod geology;
 pub mod glaciers;
 pub mod grid;
+pub mod history;
 pub mod noise;
 pub mod planet;
 pub mod rivers;

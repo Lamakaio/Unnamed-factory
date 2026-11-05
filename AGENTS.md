@@ -93,7 +93,7 @@ crates/worldgen/        world generation (no Bevy ECS), in pipeline order:
                         shared: sphere.rs + grid.rs (cube-sphere grid), flow.rs (routing, filling), par.rs
                         (all parallelism), noise.rs, geology.rs (rock types), detail.rs (gullies), world.rs
                         (`World`: age, star, orbit, atmosphere, ocean, albedos, life; presets; `docs/evolution.md`)
-crates/worldgen/examples planet_preview, planet_probe, climate_preview, tectonics_preview, tectonics_stats, timings
+crates/worldgen/examples planet_preview, planet_probe, climate_preview, history_preview, tectonics_preview, tectonics_stats, timings
 tools/nature/           asset pipeline for the nature models (CC0 Kenney + Quaternius packs → Blender LOD builder, see its README)
 assets/models/nature/   generated nature models <name>_lod{0,1,2}.glb (git-ignored)
 assets/shaders/         planet_terrain.wesl, planet_water.wesl, toon.wesl, toon_sway.wesl, grass_blades.wesl
@@ -335,6 +335,11 @@ generated in a background task, "Generating world..." text, ~30 s at `--n 1024`)
     terrain, water and object materials (`sky_map`, `sky_layer.x` = cloud radius) for cloud
     shadows (`cloud_light`) and haze (`local_haze`). `climate_preview` writes
     `<seed>_clouds.png`.
+  - `history.rs` (E3, no life yet): `evolve(world, to_age, seed) -> History` (snapshots every
+    10 Myr: CO₂, mean temperature, ice line, outgassing, weathering; events: snowball, thaw,
+    eruption, impact; the final `World`), 0.1 Myr steps: a 90-band Budyko–Sellers energy
+    balance kept from step to step (hysteresis), CO₂ moved toward outgassing = weathering.
+    `World::parse` takes `evolve=<age>`; `history_preview` prints and charts it.
   - `climate.rs` (milestone 3, v1): `simulate(&Planet, &ClimateSettings) ->
     PlanetClimate`, (orbit: Kepler with eccentricity and perihelion, year length; day length
     sets the circulation cells per hemisphere, Coriolis turning and heat transport; albedo
