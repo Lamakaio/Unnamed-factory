@@ -74,6 +74,7 @@ notes.md                former city-builder design notes (see §1)
 docs/living-world.md    living planet design and decisions (the current direction)
 docs/evolution.md       world age, parameters and life (E milestones)
 docs/polish.md          polish backlog (later improvements: weather-pattern clouds, ...)
+docs/continuous-world.md plan: the planet changing continuously in deep time (state / look, keyframes)
 src/main.rs             assembles plugins; `AppState { Loading, InGame }`; `--seed`, `--n`
 src/camera.rs           spawns the 3D camera (HDR, bloom, TAA, ambient light); the planet camera takes it over
 src/environment.rs      the sun (F rotates it)
